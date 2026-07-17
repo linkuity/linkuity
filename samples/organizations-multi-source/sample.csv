@@ -1,0 +1,29 @@
+id,source,organization_name,domain_name,email,phone,address_line,postal_code,legal_form,industry,employee_count,account_owner,lifecycle_stage,founded_year
+crm-001,CRM,Northbridge Capital Inc.,northbridgecap.com,contact@northbridgecap.com,(212) 555-0101,100 Wall Street,10005,Inc.,Financial Services,250,Sarah Chen,,1998
+mkt-002,Marketing,Sycamore Press Group,sycamorepress.com,info@sycamorepress.com,(415) 555-0202,250 Mission Street,94105,Group,Publishing,75,,MQL,2015
+crm-010,CRM,Carbon Labs Corp,carbonlabs.io,sales@carbonlabs.io,(415) 555-1010,500 Oak Street,94102,Corp,Technology,120,Marcus Wei,,2018
+mkt-011,Marketing,Carbon Labs,carbonlabs.io,marketing@carbonlabs.io,(415) 555-1011,500 Oak Street,94102,Corp,Technology,115,,Customer,2018
+sup-020,Support,The Globex Corporation,globex.com,support@globex.com,(617) 555-2020,800 Beacon Street,02115,Corporation,Manufacturing,5000,,,1972
+fin-021,Finance,Globex Corporation,globex.com,ap@globex.com,(617) 555-2021,800 Beacon Street,02115,Corporation,Manufacturing,5200,,,1972
+crm-030,CRM,Bluestone Logistics Inc,bluestonelog.com,sales@bluestonelog.com,(303) 555-3030,1500 Mountain View Dr,80014,Inc.,Logistics,800,Diana Park,,2005
+sup-031,Support,Bluestone Logistics Inc,bluestonelog.com,support@bluestonelog.com,(303) 555-3031,1500 Mountain View Dr,80014,Inc.,Logistics,820,,,2005
+fin-032,Finance,Bluestone Logistics Inc.,bluestonelog.com,ap@bluestonelog.com,(303) 555-3032,1500 Mountain View Drive Suite 200,80014,Inc.,Logistics,790,,,2005
+crm-040,CRM,Quantum Robotics LLC,quantumrobotics.ai,sales@quantumrobotics.ai,(206) 555-4040,2000 Tech Park Way,98101,LLC,Robotics,300,Alex Rivera,,2014
+crm-041,CRM,Quantum Robotics LLC,quantumrobotics.ai,sales@quantumrobotics.ai,(206) 555-4040,2000 Tech Park Way,98101,Limited Liability Co.,Robotics,300,Alex Rivera,,2014
+mkt-042,Marketing,Quantum Robotics,quantumrobotics.ai,info@quantumrobotics.ai,(206) 555-4041,2000 Tech Park Way Suite 5,98101,Limited Liability Co.,Robotics,310,,Customer,2014
+crm-050,CRM,Pinnacle Holdings,pinnacleholdings.com,sales@pinnacleholdings.com,(312) 555-5050,1100 Lake Shore Drive,60611,LLC,Real Estate,450,Priya Singh,,2008
+mkt-051,Marketing,Pinnacle Holdings LLC,pinnacleholdings.com,info@pinnacleholdings.com,(312) 555-5051,1100 Lake Shore Drive,60611,LLC,Real Estate,460,,SQL,2008
+sup-052,Support,Pinnacle Holdings LLC,pinnacleholdings.com,support@pinnacleholdings.com,(312) 555-5052,1100 Lake Shore Drive,60611,LLC,Real Estate,455,,,2008
+fin-053,Finance,"Pinnacle Holdings, LLC",pinnacleholdings.com,ap@pinnacleholdings.com,(312) 555-5053,1100 Lake Shore Drive Suite 1500,60611,LLC,Real Estate,470,,,2008
+crm-060,CRM,Meridian Diagnostics,meridiandx.com,,(919) 555-6060,400 Research Park Way,27713,Inc.,Healthcare,1200,James Okafor,,2001
+mkt-061,Marketing,Meridian Diagnostics,meridiandx.com,info@meridiandx.com,(919) 555-6061,400 Research Park Way,27713,Inc.,Healthcare,1180,,Customer,2001
+sup-062,Support,Meridian Diagnostics,meridiandx.com,support@meridiandx.com,(919) 555-6062,400 Research Park Way,27713,Inc.,Healthcare,1220,,,2001
+fin-063,Finance,Meridian Diagnostics Inc.,meridiandx.com,ap@meridiandx.com,(919) 555-6063,400 Research Park Way,27713,Inc.,Healthcare,1190,,,2001
+mkt-070,Marketing,Driftwood Networks,driftwoodnet.com,hello@driftwoodnet.com,(503) 555-7070,77 Pearl District Loop,97209,LLC,Telecommunications,90,,Lead,2019
+mkt-071,Marketing,Driftwood Networks,driftwoodnet.com,hello+1@driftwoodnet.com,(503) 555-7071,77 Pearl District Loop,97209,LLC,Telecommunications,90,,Lead,2019
+mkt-072,Marketing,Driftwood Networks,driftwoodnet.com,hello+2@driftwoodnet.com,(503) 555-7072,77 Pearl District Loop Suite 4,97209,LLC,Telecommunications,90,,Lead,2019
+crm-080,CRM,Arcadia Software,arcadiasoft.com,sales@arcadiasoft.com,(650) 555-8080,3000 Hanover Street,94304,Inc,Technology,2200,Olivia Park,,1995
+crm-081,CRM,Arcadia Software,arcadiasoft.com,sales@arcadiasoft.com,(650) 555-8080,3000 Hanover Street,94304,Inc,Technology,2200,Olivia Park,,1995
+sup-082,Support,Arcadia Software,arcadiasoft.com,support@arcadiasoft.com,(650) 555-8081,3000 Hanover Street,94304,Incorporated,Technology,2250,,,1995
+mkt-083,Marketing,Arcadia Software Inc.,arcadiasoft.com,marketing@arcadiasoft.com,(650) 555-8082,3000 Hanover Street,94304,Incorporated,Technology,2300,,Customer,1995
+mkt-084,Marketing,Arcadia Software,arcadiasoft.com,marketing+2@arcadiasoft.com,(650) 555-8083,3000 Hanover Street,94304,Inc.,Technology,2280,,Customer,1995

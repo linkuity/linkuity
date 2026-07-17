@@ -1,0 +1,2 @@
+cluster_id,record_count,member_ids,email,name
+00000000-0000-0000-0000-0000000000c1,2,crm-001|mkt-001,alice@example.com,Alice

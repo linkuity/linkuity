@@ -1,0 +1,31 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Linkuity.Api.Tests/Linkuity.Api.Tests.csproj" />
+    <Project Path="src/Linkuity.Api/Linkuity.Api.csproj" />
+    <Project Path="src/Linkuity.AppHost/Linkuity.AppHost.csproj" />
+    <Project Path="src/Linkuity.Cli.Tests/Linkuity.Cli.Tests.csproj" />
+    <Project Path="src/Linkuity.Cli/Linkuity.Cli.csproj" />
+    <Project Path="src/Linkuity.Core.Tests/Linkuity.Core.Tests.csproj" />
+    <Project Path="src/Linkuity.Core/Linkuity.Core.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Azure/Linkuity.Infrastructure.Azure.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Postgres/Linkuity.Infrastructure.Postgres.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Postgres.Tests/Linkuity.Infrastructure.Postgres.Tests.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Local.Tests/Linkuity.Infrastructure.Local.Tests.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Lucene.Tests/Linkuity.Infrastructure.Lucene.Tests.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Lucene/Linkuity.Infrastructure.Lucene.csproj" />
+    <Project Path="src/Linkuity.Infrastructure.Local/Linkuity.Infrastructure.Local.csproj" />
+    <Project Path="src/Linkuity.Matching.Tests/Linkuity.Matching.Tests.csproj" />
+    <Project Path="src/Linkuity.Matching/Linkuity.Matching.csproj" />
+    <Project Path="src/Linkuity.Mdm/Linkuity.Mdm.csproj" />
+    <Project Path="src/Linkuity.Mdm.Tests/Linkuity.Mdm.Tests.csproj" />
+    <Project Path="src/Linkuity.Mdm.ConformanceTests/Linkuity.Mdm.ConformanceTests.csproj" />
+    <Project Path="src/Linkuity.Mdm.Benchmarks.Tests/Linkuity.Mdm.Benchmarks.Tests.csproj" />
+    <Project Path="src/Linkuity.Mdm.Benchmarks/Linkuity.Mdm.Benchmarks.csproj" />
+    <Project Path="src/Linkuity.Pipeline.Tests/Linkuity.Pipeline.Tests.csproj" />
+    <Project Path="src/Linkuity.Pipeline/Linkuity.Pipeline.csproj" />
+    <Project Path="src/Linkuity.ServiceDefaults/Linkuity.ServiceDefaults.csproj" />
+    <Project Path="src/Linkuity.TestSupport/Linkuity.TestSupport.csproj" />
+    <Project Path="src/Linkuity.Worker.Tests/Linkuity.Worker.Tests.csproj" />
+    <Project Path="src/Linkuity.Worker/Linkuity.Worker.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,29 @@
+{
+  "name": "review-queue",
+  "description": "One incremental batch produces one auto-match, one review task, and one singleton.",
+  "steps": [
+    { "command": "project create",
+      "args": { "name": "Review Queue", "content-type": "person", "merge-policy": "data/merge-policy.json" },
+      "capture": "projectId" },
+    { "command": "source create",
+      "args": { "project-id": "{projectId}", "name": "Import" },
+      "capture": "sourceId" },
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "1" },
+      "capture": "seedBatchId" },
+    { "command": "persist-batch",
+      "args": { "artifact-root": "data/artifacts", "job-id": "00000000-0000-0000-0000-000000000801",
+                "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{seedBatchId}" } },
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "3" },
+      "capture": "incBatchId" },
+    { "command": "ingest-incremental",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{incBatchId}",
+                "input": "data/incremental.csv" },
+      "assert": { "stdout": { "Records added": "3", "Auto matches": "1", "Review tasks": "1", "Singleton clusters": "2" } } },
+    { "command": "review list",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "reason": "review_threshold" },
+                              "expect": { "status": "open" } } ] } }
+  ]
+}

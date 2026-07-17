@@ -1,0 +1,19 @@
+<Project>
+
+  <!--
+    Solution-wide MSBuild defaults. Applied to every project under the
+    repository root unless a project overrides them.
+  -->
+  <PropertyGroup>
+    <!-- Product version. Bump for each release; see CHANGELOG.md. -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <!-- Pre-release label while Linkuity is in beta. Clear for a stable release. -->
+    <VersionSuffix>beta.1</VersionSuffix>
+
+    <Product>Linkuity</Product>
+    <Company>Linkuity</Company>
+    <Copyright>Copyright 2026 Linkuity</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>

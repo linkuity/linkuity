@@ -1,0 +1,11 @@
+id,source,first_name,last_name,email,phone,date_of_birth,address_line,postal_code
+crm-001,CRM,James,Smith,james@example.com,(212) 555-9999,1980-03-15,100 Main Street Apartment 4B,10001
+crm-002,CRM,Marcus,Smith,marcus@example.com,(212) 555-9999,1982-11-30,100 Main Street Apartment 4B,10001
+crm-010,CRM,Emma,Edwards,emma.edwards@example.com,(212) 555-0300,1995-05-05,500 Birch Ln,02105
+mkt-011,Marketing,Emma,Edwards,emma.edwards+m@example.com,(212) 555-9999,1995-05-05,500 Birch Ln,02105
+crm-020,CRM,Frank,Foster,frank.foster@example.com,(212) 555-0400,1976-06-06,600 Cedar Ct,02106
+mkt-021,Marketing,Frank,Foster,frank.foster+m@example.com,(212) 555-0400,1976-06-06,600 Cedar Ct,02106
+crm-030,CRM,Iris,Ito,iris.ito@example.com,(212) 555-0700,1991-09-09,900 Sycamore Way,02109
+mkt-031,Marketing,Iris,Ito,iris.ito+m@example.com,(212) 555-0701,1991-09-09,900 Sycamore Way,02109
+crm-040,CRM,Greg,Green,greg.green@example.com,(212) 555-0500,1982-07-07,700 Walnut St,02107
+mkt-041,Marketing,Henry,Hill,henry.hill@example.com,(212) 555-0600,1978-08-08,800 Aspen Way,02108

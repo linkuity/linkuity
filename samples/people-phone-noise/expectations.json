@@ -1,0 +1,69 @@
+{
+  "goldenRecordCount": 7,
+  "neo4jExports": {
+    "nonEmpty": ["phones.csv", "has-phone.csv"]
+  },
+  "clusters": [
+    {
+      "name": "twin_james_stays_separate_because_phone_is_non_matching",
+      "members": ["crm-001"],
+      "expectedFields": {
+        "email": "james@example.com",
+        "phone": "+12125559999",
+        "first_name": "James"
+      }
+    },
+    {
+      "name": "twin_marcus_stays_separate_because_phone_is_non_matching",
+      "members": ["crm-002"],
+      "expectedFields": {
+        "email": "marcus@example.com",
+        "phone": "+12125559999",
+        "first_name": "Marcus"
+      }
+    },
+    {
+      "name": "emma_clusters_despite_phone_disagreement",
+      "members": ["crm-010", "mkt-011"],
+      "expectedFields": {
+        "email": "emma.edwards@example.com",
+        "phone": "+12125550300",
+        "address_line": "500 Birch Ln"
+      }
+    },
+    {
+      "name": "frank_clusters_phones_agree",
+      "members": ["crm-020", "mkt-021"],
+      "expectedFields": {
+        "email": "frank.foster@example.com",
+        "phone": "+12125550400",
+        "address_line": "600 Cedar Ct"
+      }
+    },
+    {
+      "name": "iris_clusters_despite_one_digit_phone_difference",
+      "members": ["crm-030", "mkt-031"],
+      "expectedFields": {
+        "email": "iris.ito@example.com",
+        "phone": "+12125550700",
+        "address_line": "900 Sycamore Way"
+      }
+    },
+    {
+      "name": "greg_singleton_crm",
+      "members": ["crm-040"],
+      "expectedFields": {
+        "email": "greg.green@example.com",
+        "phone": "+12125550500"
+      }
+    },
+    {
+      "name": "henry_singleton_marketing",
+      "members": ["mkt-041"],
+      "expectedFields": {
+        "email": "henry.hill@example.com",
+        "phone": "+12125550600"
+      }
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Exercise the PostgreSQL metadata-store conformance suite against the
+      # service container above instead of letting those facts Skip. The
+      # fixture creates a dedicated `linkuity_conformance` database from this
+      # admin connection string.
+      LINKUITY_CONFORMANCE_POSTGRES: "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Linkuity.slnx
+
+      - name: Build (warnings as errors)
+        run: dotnet build Linkuity.slnx -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test Linkuity.slnx -c Release --no-build --verbosity normal

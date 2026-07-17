@@ -1,0 +1,53 @@
+{
+  "goldenRecordCount": 5,
+  "neo4jExports": {
+    "nonEmpty": ["entities.csv", "emails.csv", "has-email.csv"]
+  },
+  "clusters": [
+    {
+      "name": "acme_corp_singleton_disambiguated_by_domain",
+      "members": ["crm-001"],
+      "expectedFields": {
+        "organization_name": "Acme Corp",
+        "domain_name": "acmecorp.com",
+        "email": "info@acmecorp.com"
+      }
+    },
+    {
+      "name": "acme_corporation_singleton_disambiguated_by_domain",
+      "members": ["mkt-002"],
+      "expectedFields": {
+        "organization_name": "Acme Corporation",
+        "domain_name": "acmecorporation.com",
+        "email": "info@acmecorporation.com"
+      }
+    },
+    {
+      "name": "smith_jones_clusters_despite_ampersand_variants",
+      "members": ["crm-010", "mkt-011", "sup-012"],
+      "expectedFields": {
+        "organization_name": "Smith & Jones LLP",
+        "domain_name": "smithjoneslaw.com",
+        "email": "clients@smithjoneslaw.com",
+        "address_line": "500 Market Street Suite 800"
+      }
+    },
+    {
+      "name": "northbridge_clean_control_cluster",
+      "members": ["crm-020", "mkt-021"],
+      "expectedFields": {
+        "organization_name": "Northbridge Capital",
+        "domain_name": "northbridgecap.com",
+        "email": "sales@northbridgecap.com"
+      }
+    },
+    {
+      "name": "quartz_singleton_control",
+      "members": ["crm-030"],
+      "expectedFields": {
+        "organization_name": "Quartz Analytics",
+        "domain_name": "quartzanalytics.io"
+      }
+    }
+  ]
+}

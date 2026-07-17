@@ -1,0 +1,9 @@
+id,source,organization_name,domain_name,email,phone,address_line,postal_code
+crm-001,CRM,Acme Corp,acmecorp.com,info@acmecorp.com,(212) 555-0101,100 Wall Street Suite 500,10005
+mkt-002,Marketing,Acme Corporation,acmecorporation.com,info@acmecorporation.com,(212) 555-0202,100 Wall Street Suite 500,10005
+crm-010,CRM,Smith & Jones LLP,smithjoneslaw.com,clients@smithjoneslaw.com,(415) 555-0301,500 Market Street Suite 800,94105
+mkt-011,Marketing,Smith and Jones,smithjoneslaw.com,info@smithjoneslaw.com,(415) 555-0302,500 Market Street Suite 800,94105
+sup-012,Support,Smith Jones,smithjoneslaw.com,support@smithjoneslaw.com,(415) 555-0303,500 Market Street Suite 800,94105
+crm-020,CRM,Northbridge Capital,northbridgecap.com,sales@northbridgecap.com,(617) 555-0401,100 Federal Street,02110
+mkt-021,Marketing,Northbridge Capital,northbridgecap.com,info@northbridgecap.com,(617) 555-0402,100 Federal Street,02110
+crm-030,CRM,Quartz Analytics,quartzanalytics.io,sales@quartzanalytics.io,(206) 555-0501,2200 First Avenue,98121

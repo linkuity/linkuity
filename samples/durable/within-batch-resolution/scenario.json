@@ -1,0 +1,48 @@
+{
+  "name": "within-batch-resolution",
+  "description": "Person MDM demonstrating (1) net-new within-batch dedup: two records sharing an email auto-merge into one cluster in a single batch; and (2) bridge-merge: a third record that auto-matches two pre-existing singletons via distinct identifiers causes those clusters to merge, producing a cluster-merge event readable via 'cluster merges'.",
+  "steps": [
+    { "command": "project create",
+      "args": { "name": "Within-Batch Resolution", "content-type": "person" },
+      "capture": "projectId" },
+    { "command": "source create",
+      "args": { "project-id": "{projectId}", "name": "CRM" },
+      "capture": "sourceId" },
+
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "2" },
+      "capture": "dedupBatchId" },
+    { "command": "ingest-incremental",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{dedupBatchId}",
+                "input": "data/dedup-pair.csv" },
+      "assert": { "stdout": { "Records added": "2", "Auto matches": "1", "Singleton clusters": "0" } } },
+    { "command": "cluster list",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "member_ids~": "p-001" },
+                              "expect": { "record_count": "2" } } ] } },
+
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "2" },
+      "capture": "seedBatchId" },
+    { "command": "ingest-incremental",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{seedBatchId}",
+                "input": "data/seed.csv" },
+      "assert": { "stdout": { "Records added": "2", "Auto matches": "0", "Singleton clusters": "2" } } },
+
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "1" },
+      "capture": "bridgeBatchId" },
+    { "command": "ingest-incremental",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{bridgeBatchId}",
+                "input": "data/bridge.csv" },
+      "assert": { "stdout": { "Records added": "1", "Auto matches": "2", "Singleton clusters": "0" } } },
+    { "command": "cluster list",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "member_ids~": "p-005" },
+                              "expect": { "record_count": "3" } } ] } },
+    { "command": "cluster merges",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "trigger_record_ids~": "-" },
+                              "expect": { "score": "0.98" } } ] } }
+  ]
+}

@@ -1,0 +1,168 @@
+using System.Text;
+using Linkuity.Api.Services;
+using Linkuity.Api.Tests.TestDoubles;
+using Linkuity.Core.Models;
+
+namespace Linkuity.Api.Tests.Services;
+
+public class CsvNormalizationServiceTests
+{
+    private static (CsvNormalizationService service, InMemoryBlobStore blobs) Build()
+    {
+        var blobs = new InMemoryBlobStore();
+        return (new CsvNormalizationService(blobs), blobs);
+    }
+
+    private static async Task WriteCsvAsync(InMemoryBlobStore blobs, Guid jobId, string csv)
+    {
+        var bytes = Encoding.UTF8.GetBytes(csv);
+        await blobs.UploadAsync($"{jobId}/input.csv", new MemoryStream(bytes), "text/csv");
+    }
+
+    private static async Task<string> ReadNormalizedAsync(InMemoryBlobStore blobs, Guid jobId)
+    {
+        using var stream = await blobs.DownloadAsync($"{jobId}/normalized.csv");
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_WritesNormalizedCsvBlob()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "email\nuser@EXAMPLE.COM");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        Assert.True(await blobs.ExistsAsync($"{jobId}/normalized.csv"));
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_PreservesHeaderRow()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "email,notes\nuser@EXAMPLE.COM,some note");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.StartsWith("email,notes", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_NormalizesColumnsInFields()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "email\nUser@EXAMPLE.COM");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("user@example.com", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_PassesThroughColumnsNotInFields()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "email,notes\nuser@example.com,Some Note Value");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("Some Note Value", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_ValidPhoneNormalized_InvalidPhonePassesThrough()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "phone\n(800) 555-0100\nnot-a-phone");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "phone", SemanticType = SemanticFieldType.Phone }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("+18005550100", output);
+        Assert.Contains("not-a-phone", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_ColumnNameMatchIsCaseInsensitive()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "Email\nUser@EXAMPLE.COM");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("user@example.com", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_ReturnsDataRowCount()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "email\na@b.com\nc@d.com\ne@f.com");
+
+        var count = await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
+        });
+
+        Assert.Equal(3, count);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_FieldWithParticipatesInMatchingFalse_StillNormalized()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "phone\n(800) 555-0100");
+
+        await service.NormalizeAsync(jobId, new MatchConfiguration
+        {
+            ContentType = "person",
+            Fields = [new Field
+            {
+                Name = "phone",
+                SemanticType = SemanticFieldType.Phone,
+                ParticipatesInMatching = false
+            }]
+        });
+
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("+18005550100", output);
+    }
+}

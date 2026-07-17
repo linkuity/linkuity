@@ -1,0 +1,89 @@
+{
+  "goldenRecordCount": 10,
+  "clusters": [
+    {
+      "name": "cluster_1_alice_singleton",
+      "members": ["crm-001"],
+      "expectedFields": {
+        "email": "alice.anderson@example.com",
+        "first_name": "Alice"
+      }
+    },
+    {
+      "name": "cluster_2_bob_singleton",
+      "members": ["mkt-002"],
+      "expectedFields": {
+        "email": "bob.baker@example.com"
+      }
+    },
+    {
+      "name": "cluster_3_carol_chen_crm_mkt",
+      "members": ["crm-010", "mkt-011"],
+      "expectedFields": {
+        "email": "carol.chen@example.com",
+        "phone": "+12125551000",
+        "address_line": "300 Elm Rd"
+      }
+    },
+    {
+      "name": "cluster_4_david_diaz_sup_bil",
+      "members": ["sup-020", "bil-021"],
+      "expectedFields": {
+        "email": "david.diaz@example.com",
+        "phone": "+12125552000",
+        "address_line": "400 Maple Ln Suite 5"
+      }
+    },
+    {
+      "name": "cluster_5_emma_edwards_crm_sup_bil",
+      "members": ["crm-030", "sup-031", "bil-032"],
+      "expectedFields": {
+        "email": "emma.edwards@example.com",
+        "phone": "+12125553001",
+        "address_line": "500 Birch St Apt 3B"
+      }
+    },
+    {
+      "name": "cluster_6_frank_foster_crm2_mkt",
+      "members": ["crm-040", "crm-041", "mkt-042"],
+      "expectedFields": {
+        "email": "frank.foster@example.com",
+        "phone": "+12125554000",
+        "address_line": "600 Cedar Ave",
+        "first_name": "Franklin"
+      }
+    },
+    {
+      "name": "cluster_7_grace_garcia_all_four",
+      "members": ["crm-050", "mkt-051", "sup-052", "bil-053"],
+      "expectedFields": {
+        "email": "grace.garcia@example.com",
+        "phone": "+12125555002",
+        "address_line": "700 Walnut Dr Suite 100"
+      }
+    },
+    {
+      "name": "cluster_8_henry_hill_with_gaps",
+      "members": ["crm-060", "mkt-061", "sup-062", "bil-063"],
+      "expectedFields": {
+        "email": "henry.hill+m@example.com",
+        "phone": "+12125556002",
+        "address_line": "800 Aspen Way"
+      }
+    },
+    {
+      "name": "cluster_9_iris_ito_marketing_only",
+      "members": ["mkt-070", "mkt-071", "mkt-072"]
+    },
+    {
+      "name": "cluster_10_jonathan_jackson_consensus_tiebreak",
+      "members": ["crm-080", "crm-081", "sup-082", "mkt-083", "mkt-084"],
+      "expectedFields": {
+        "email": "jonathan.jackson@example.com",
+        "phone": "+12125558001",
+        "address_line": "1000 Spruce Blvd",
+        "first_name": "Jonathan"
+      }
+    }
+  ]
+}

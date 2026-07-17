@@ -1,0 +1,28 @@
+services:
+  linkuity-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    volumes:
+      - type: bind
+        source: ${LINKUITY_INPUT}
+        target: /linkuity/input/input.csv
+        read_only: true
+      - type: bind
+        source: ${LINKUITY_CONFIG}
+        target: /linkuity/config/match-config.json
+        read_only: true
+      - type: bind
+        source: ${LINKUITY_OUTPUT}
+        target: /linkuity/output
+      - type: bind
+        source: ${LINKUITY_ARTIFACTS}
+        target: /linkuity/output/artifacts
+    command:
+      - run
+      - --input
+      - /linkuity/input/input.csv
+      - --config
+      - /linkuity/config/match-config.json
+      - --output
+      - /linkuity/output

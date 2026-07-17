@@ -1,0 +1,6 @@
+id,source,sku,gtin,product_name,brand,category,price,availability,warranty_months,image_url,description
+cat-001,Catalog,ANK-20W-WHT,00810012345001,Anker 20W USB-C Charger,Anker,Chargers,19.99,In stock,18,,Compact wall charger for phones and tablets
+cat-002,Catalog,LOG-K380-BLK,00978551609628,Logitech K380 Bluetooth Keyboard,Logitech,Keyboards,39.99,In stock,12,,Compact Bluetooth keyboard for laptops and tablets
+cat-003,Catalog,SNY-WH1000XM5-BLK,00272429239863,Sony WH-1000XM5 Wireless Headphones,Sony,Headphones,399.99,Limited,24,,Noise canceling wireless over-ear headphones
+cat-004,Catalog,DEL-U2724DE,00884116398011,Dell UltraSharp 27 USB-C Monitor,Dell,Monitors,529.99,Backorder,36,,27 inch USB-C hub monitor
+cat-005,Catalog,BEL-CAB-100W-2M,00745883799331,Belkin 100W USB-C Cable 2m,Belkin,Cables,24.99,In stock,24,,Braided USB-C charging cable

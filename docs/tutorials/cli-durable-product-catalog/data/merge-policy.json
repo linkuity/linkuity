@@ -1,0 +1,12 @@
+{
+  "mergeFields": [
+    { "fieldName": "product_name", "sourcePriority": ["Catalog", "Supplier", "Marketplace"] },
+    { "fieldName": "brand", "sourcePriority": ["Catalog", "Supplier", "Marketplace"] },
+    { "fieldName": "category", "sourcePriority": ["Catalog", "Marketplace", "Supplier"] },
+    { "fieldName": "price", "sourcePriority": ["Supplier", "Catalog", "Marketplace"] },
+    { "fieldName": "availability", "sourcePriority": ["Supplier", "Marketplace", "Catalog"] },
+    { "fieldName": "warranty_months", "sourcePriority": ["Supplier", "Catalog", "Marketplace"] },
+    { "fieldName": "image_url", "sourcePriority": ["Marketplace", "Catalog", "Supplier"] },
+    { "fieldName": "description", "sourcePriority": ["Marketplace", "Catalog", "Supplier"] }
+  ]
+}

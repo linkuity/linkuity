@@ -1,0 +1,29 @@
+id,source,first_name,last_name,email,phone,date_of_birth,address_line,postal_code,company
+crm-001,CRM,Alice,Anderson,alice.anderson@example.com,(212) 555-0001,1985-03-12,100 Oak St,02101,Acme Corp
+mkt-002,Marketing,Bob,Baker,bob.baker@example.com,(212) 555-0002,1990-07-22,200 Pine Ave,02102,BetaCo
+crm-010,CRM,Carol,Chen,carol.chen@example.com,(212) 555-1000,1988-11-05,300 Elm Rd,02103,Gamma LLC
+mkt-011,Marketing,Carol,Chen,carol.chen+m@example.com,(212) 555-1001,1988-11-05,300 Elm Rd Apt 2,02103,Gamma LLC
+sup-020,Support,David,Diaz,david.diaz@example.com,(212) 555-2000,1979-02-14,400 Maple Ln,02104,Delta Inc
+bil-021,Billing,David,Diaz,david.diaz+b@example.com,(212) 555-2001,1979-02-14,400 Maple Ln Suite 5,02104,Delta Inc
+crm-030,CRM,Emma,Edwards,emma.edwards@example.com,(212) 555-3000,1992-05-30,500 Birch St,02105,Epsilon Co
+sup-031,Support,Emma,Edwards,emma.edwards+s@example.com,(212) 555-3001,1992-05-30,500 Birch St,02105,Epsilon Co
+bil-032,Billing,Emma,Edwards,emma.edwards+b@example.com,(212) 555-3002,1992-05-30,500 Birch St Apt 3B,02105,Epsilon Co
+crm-040,CRM,Frank,Foster,frank.foster@example.com,(212) 555-4000,1983-08-19,600 Cedar Ave,02106,Foxtrot LLC
+crm-041,CRM,Franklin,Foster,frank.foster@example.com,(212) 555-4000,1983-08-19,600 Cedar Ave,02106,Foxtrot LLC
+mkt-042,Marketing,Franklin,Foster,frank.foster+m@example.com,(212) 555-4001,1983-08-19,600 Cedar Ave Apt 1,02106,Foxtrot LLC
+crm-050,CRM,Grace,Garcia,grace.garcia@example.com,(212) 555-5000,1995-12-01,700 Walnut Dr,02107,Gamma Co
+mkt-051,Marketing,Grace,Garcia,grace.garcia+m@example.com,(212) 555-5001,1995-12-01,700 Walnut Dr,02107,Gamma Co
+sup-052,Support,Grace,Garcia,grace.garcia+s@example.com,(212) 555-5002,1995-12-01,700 Walnut Dr Apt 1,02107,Gamma Co
+bil-053,Billing,Grace,Garcia,grace.garcia+b@example.com,(212) 555-5003,1995-12-01,700 Walnut Dr Suite 100,02107,Gamma Co
+crm-060,CRM,Henry,Hill,,(212) 555-6000,1981-04-25,800 Aspen Way,02108,Hotel Corp
+mkt-061,Marketing,Henry,Hill,henry.hill+m@example.com,(212) 555-6001,1981-04-25,800 Aspen Way,02108,Hotel Corp
+sup-062,Support,Henry,Hill,henry.hill+s@example.com,(212) 555-6002,1981-04-25,800 Aspen Way,02108,Hotel Corp
+bil-063,Billing,Henry,Hill,henry.hill+b@example.com,(212) 555-6003,1981-04-25,,02108,Hotel Corp
+mkt-070,Marketing,Iris,Ito,iris.ito@example.com,(212) 555-7000,1989-09-09,900 Sycamore Ln,02109,India Inc
+mkt-071,Marketing,Iris,Ito,iris.ito+1@example.com,(212) 555-7001,1989-09-09,900 Sycamore Ln,02109,India Inc
+mkt-072,Marketing,Iris,Ito,iris.ito+2@example.com,(212) 555-7002,1989-09-09,900 Sycamore Ln Apt 2,02109,India Inc
+crm-080,CRM,Jonathan,Jackson,jonathan.jackson@example.com,(212) 555-8000,1976-06-15,1000 Spruce Blvd,02110,Juliet Co
+crm-081,CRM,Jon,Jackson,jonathan.jackson@example.com,(212) 555-8000,1976-06-15,1000 Spruce Blvd,02110,Juliet Co
+sup-082,Support,Jonathan,Jackson,jonathan.jackson+s@example.com,(212) 555-8001,1976-06-15,1000 Spruce Blvd,02110,Juliet Co
+mkt-083,Marketing,Jon,Jackson,jonathan.jackson+m1@example.com,(212) 555-8002,1976-06-15,1000 Spruce Blvd,02110,Juliet Co
+mkt-084,Marketing,Jonny,Jackson,jonathan.jackson+m2@example.com,(212) 555-8003,1976-06-15,1000 Spruce Blvd Apt 1,02110,Juliet Co

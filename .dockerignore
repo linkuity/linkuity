@@ -1,0 +1,15 @@
+bin/
+obj/
+TestResults/
+nupkgs/
+*.nupkg
+
+.git/
+.vs/
+.idea/
+
+data/
+samples/**/output/
+
+.env
+*.local.json

@@ -1,0 +1,52 @@
+# Build outputs
+bin/
+obj/
+TestResults/
+*.nupkg
+nupkgs/
+
+# Test sample outputs
+samples/people-multi-source/output
+samples/people-phone-noise/output
+samples/organizations-multi-source/output
+samples/organizations-name-noise/output
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# JetBrains Rider
+.idea/
+*.DotSettings.user
+
+# Local settings / secrets
+.env
+appsettings.*.local.json
+launchSettings.*.local.json
+
+# Private server local data
+data/
+# ...but durable sample fixtures live in per-scenario data/ folders and must be tracked
+!samples/durable/**/data/
+!samples/durable/**/data/**
+# ...and product catalog tutorial fixture data is tracked under docs/tutorials
+!docs/tutorials/cli-durable-product-catalog/data/
+!docs/tutorials/cli-durable-product-catalog/data/**
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal / non-public working files (kept local, excluded from the public repo)
+.claude/
+.superpowers/
+.agents/
+.github/copilot-instructions.md
+docs/superpowers/
+docs/roadmap/
+docs/marketing/
+docs/architecture-decisions/
+

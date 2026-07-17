@@ -1,0 +1,6 @@
+id,source,sku,gtin,product_name,brand,category,price,availability,warranty_months,image_url,description
+sup-101,Supplier,ANK-20W-WHT,00810012345002,Anker PowerPort 20W USB C Wall Adapter,Anker,Mobile Power,17.49,In stock,24,,Supplier listing for 20W Anker wall charger
+sup-102,Supplier,LOG-K380-BLK-US,00978551609628,K380 Multi-Device Bluetooth Keyboard,Logitech,Computer Accessories,34.99,In stock,12,,Supplier listing for Logitech K380 keyboard
+sup-103,Supplier,SNY-XM5-BLACK,00272429239863,Sony XM5 Noise Canceling Headphones,Sony,Audio,349.99,In stock,24,,Supplier listing for Sony XM5 headphones
+sup-104,Supplier,SAM-T7-1TB-BLU,08872764107925,Samsung T7 Portable SSD 1TB Blue,Samsung,Storage,89.99,In stock,36,,Portable solid state drive
+sup-105,Supplier,UBQ-U6-LITE,08100100732926,Ubiquiti UniFi 6 Lite Access Point,Ubiquiti,Networking,99.00,Limited,12,,WiFi 6 ceiling access point

@@ -1,0 +1,26 @@
+{
+  "name": "smoke",
+  "description": "Minimal scenario that exercises the runner: seed via persist-batch, then read back.",
+  "steps": [
+    { "command": "project create",
+      "args": { "name": "Smoke", "content-type": "person", "merge-policy": "data/policy.json" },
+      "capture": "projectId" },
+    { "command": "source create",
+      "args": { "project-id": "{projectId}", "name": "Import" },
+      "capture": "sourceId" },
+    { "command": "batch create",
+      "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "2" },
+      "capture": "batchId" },
+    { "command": "persist-batch",
+      "args": { "artifact-root": "data/artifacts", "job-id": "00000000-0000-0000-0000-0000000000aa",
+                "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{batchId}" } },
+    { "command": "cluster list",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "member_ids~": "crm-001" },
+                              "expect": { "record_count": "2" } } ] } },
+    { "command": "golden list",
+      "args": { "project-id": "{projectId}" },
+      "assert": { "rows": [ { "where": { "member_ids~": "crm-001" },
+                              "expect": { "version": "1", "email": "alice@example.com" } } ] } }
+  ]
+}

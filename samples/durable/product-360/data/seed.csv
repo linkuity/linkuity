@@ -1,0 +1,4 @@
+id,source,sku,gtin,product_name,brand
+cat-001,Catalog,ALPHA-100,00012345600012,Widget Alpha,Acme
+cat-002,Catalog,BETA-200,00012345600029,Gadget Beta,Globex
+cat-003,Catalog,GAMMA-300,00012345600036,Sprocket Gamma,Initech

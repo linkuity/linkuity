@@ -1,0 +1,5 @@
+{
+  "mergeFields": [
+    { "fieldName": "email", "sourcePriority": ["CRM", "Marketing"] }
+  ]
+}

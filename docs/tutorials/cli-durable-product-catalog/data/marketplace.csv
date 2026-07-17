@@ -1,0 +1,5 @@
+id,source,sku,gtin,product_name,brand,category,price,availability,warranty_months,image_url,description
+mkt-201,Marketplace,ANK-20W-MP,00810012345001,Anker USB C Fast Charger 20W White,Anker,Phone Accessories,18.99,In stock,18,https://example.com/images/anker-20w-white.jpg,Fast compact charger with foldable plug
+mkt-202,Marketplace,DELL-U2724DE-MKT,00884116398011,Dell 27 USB C Hub Monitor U2724DE,Dell,Computer Monitors,519.99,In stock,36,https://example.com/images/dell-u2724de.jpg,Sharp 27 inch productivity monitor with USB C hub
+mkt-203,Marketplace,VLT-20W-WHT,00699900002001,20W USB-C Fast Wall Charger,VoltEdge,Phone Accessories,12.99,In stock,6,https://example.com/images/voltedge-20w.jpg,Budget 20W USB-C wall charger
+mkt-204,Marketplace,LOG-BRIO-500-GRY,00978551763399,Logitech Brio 500 Full HD Webcam,Logitech,Webcams,129.99,In stock,12,https://example.com/images/logitech-brio-500.jpg,Full HD webcam with auto framing

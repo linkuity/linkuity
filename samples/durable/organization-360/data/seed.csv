@@ -1,0 +1,4 @@
+id,source,organization_name,domain_name,email,phone,address_line,postal_code
+crm-001,CRM,Acme Industries,acme.com,info@acme.com,+1-415-555-0100,100 Market St,94103
+fin-002,Finance,Globex LLC,globex.com,ap@globex.com,+1-212-555-0144,55 Wall St,10005
+crm-003,CRM,Initech Inc,initech.io,contact@initech.io,+1-512-555-0170,9 Lavaca St,78701

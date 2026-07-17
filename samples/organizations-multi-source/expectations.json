@@ -1,0 +1,115 @@
+{
+  "goldenRecordCount": 10,
+  "neo4jExports": {
+    "nonEmpty": ["entities.csv", "golden-records.csv", "from-source.csv", "emails.csv", "has-email.csv", "phones.csv", "has-phone.csv"]
+  },
+  "clusters": [
+    {
+      "name": "cluster_1_northbridge_singleton",
+      "members": ["crm-001"],
+      "expectedFields": {
+        "organization_name": "Northbridge Capital Inc.",
+        "domain_name": "northbridgecap.com",
+        "email": "contact@northbridgecap.com",
+        "phone": "+12125550101"
+      }
+    },
+    {
+      "name": "cluster_2_sycamore_singleton",
+      "members": ["mkt-002"],
+      "expectedFields": {
+        "organization_name": "Sycamore Press Group",
+        "domain_name": "sycamorepress.com",
+        "email": "info@sycamorepress.com",
+        "phone": "+14155550202"
+      }
+    },
+    {
+      "name": "cluster_3_carbon_labs_crm_mkt",
+      "members": ["crm-010", "mkt-011"],
+      "expectedFields": {
+        "organization_name": "Carbon Labs Corp",
+        "domain_name": "carbonlabs.io",
+        "email": "sales@carbonlabs.io",
+        "phone": "+14155551010",
+        "address_line": "500 Oak Street"
+      }
+    },
+    {
+      "name": "cluster_4_globex_sup_fin_stopword",
+      "members": ["sup-020", "fin-021"],
+      "expectedFields": {
+        "organization_name": "Globex Corporation",
+        "domain_name": "globex.com",
+        "email": "support@globex.com",
+        "phone": "+16175552020",
+        "address_line": "800 Beacon Street"
+      }
+    },
+    {
+      "name": "cluster_5_bluestone_crm_sup_fin",
+      "members": ["crm-030", "sup-031", "fin-032"],
+      "expectedFields": {
+        "organization_name": "Bluestone Logistics Inc.",
+        "domain_name": "bluestonelog.com",
+        "email": "sales@bluestonelog.com",
+        "phone": "+13035553031",
+        "address_line": "1500 Mountain View Drive Suite 200"
+      }
+    },
+    {
+      "name": "cluster_6_quantum_crm2_mkt_legal_form_majority",
+      "members": ["crm-040", "crm-041", "mkt-042"],
+      "expectedFields": {
+        "organization_name": "Quantum Robotics LLC",
+        "domain_name": "quantumrobotics.ai",
+        "email": "sales@quantumrobotics.ai",
+        "phone": "+12065554040",
+        "legal_form": "Limited Liability Co."
+      }
+    },
+    {
+      "name": "cluster_7_pinnacle_all_four",
+      "members": ["crm-050", "mkt-051", "sup-052", "fin-053"],
+      "expectedFields": {
+        "organization_name": "Pinnacle Holdings, LLC",
+        "domain_name": "pinnacleholdings.com",
+        "email": "sales@pinnacleholdings.com",
+        "phone": "+13125555052",
+        "address_line": "1100 Lake Shore Drive Suite 1500"
+      }
+    },
+    {
+      "name": "cluster_8_meridian_with_gaps",
+      "members": ["crm-060", "mkt-061", "sup-062", "fin-063"],
+      "expectedFields": {
+        "organization_name": "Meridian Diagnostics Inc.",
+        "domain_name": "meridiandx.com",
+        "email": "info@meridiandx.com",
+        "phone": "+19195556062",
+        "address_line": "400 Research Park Way"
+      }
+    },
+    {
+      "name": "cluster_9_driftwood_marketing_only",
+      "members": ["mkt-070", "mkt-071", "mkt-072"],
+      "expectedFields": {
+        "organization_name": "Driftwood Networks",
+        "domain_name": "driftwoodnet.com",
+        "phone": "+15035557070"
+      }
+    },
+    {
+      "name": "cluster_10_arcadia_legal_form_length_tiebreak",
+      "members": ["crm-080", "crm-081", "sup-082", "mkt-083", "mkt-084"],
+      "expectedFields": {
+        "organization_name": "Arcadia Software",
+        "domain_name": "arcadiasoft.com",
+        "email": "sales@arcadiasoft.com",
+        "phone": "+16505558081",
+        "address_line": "3000 Hanover Street",
+        "legal_form": "Incorporated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "contentType": "product",
+  "fields": [
+    { "name": "source", "semanticType": "SourceIdentifier", "roles": [] },
+    { "name": "sku", "semanticType": "Sku", "roles": ["Searchable", "Matchable", "Blocking", "Identifier"], "similarityEvaluator": "exact", "weight": 3.0 },
+    { "name": "gtin", "semanticType": "Gtin", "roles": ["Searchable", "Matchable", "Blocking", "Identifier"], "similarityEvaluator": "exact", "weight": 3.0 },
+    { "name": "product_name", "semanticType": "ProductName", "roles": ["Searchable", "Matchable", "Blocking"], "similarityEvaluator": "fuzzy", "weight": 2.0 },
+    { "name": "brand", "semanticType": "OrganizationName", "roles": ["Searchable", "Matchable"], "similarityEvaluator": "fuzzy", "weight": 1.0 }
+  ],
+  "normalizationStrategy": "identity",
+  "blockingStrategies": ["exact-value", "token-name"],
+  "candidateRetrievalStrategy": "linear",
+  "similarityStrategy": "field-weighted",
+  "scoringStrategy": "identifier-weighted",
+  "decisionStrategy": "threshold",
+  "clusteringStrategy": "union-find",
+  "autoMatchThreshold": 0.90,
+  "reviewThreshold": 0.75
+}
