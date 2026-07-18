@@ -1,5 +1,7 @@
 # Linkuity
 
+[![CI](https://github.com/linkuity/linkuity/actions/workflows/ci.yml/badge.svg)](https://github.com/linkuity/linkuity/actions/workflows/ci.yml)
+
 Linkuity is an open-source private-runtime golden-record engine for data and MDM teams. It deduplicates people or organization records, links matching source records into clusters, and produces golden records that can stay inside your environment.
 
 The codebase includes a local CLI batch runner, durable MDM projects with incremental matching, a Docker Compose private-server batch path, and an HTTP batch API. Azure Blob Storage and Azure Service Bus are optional adapter infrastructure selected with `Linkuity:RuntimeMode=Azure`, not the default runtime.
