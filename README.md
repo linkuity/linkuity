@@ -202,3 +202,9 @@ Set `Linkuity__RuntimeMode=Azure` for the .NET API and .NET worker to use the Az
 | Linkuity.Worker | `Linkuity__RuntimeMode=Azure`, `BlobStorage__ConnectionString`, `BlobStorage__ContainerName`, `AzureServiceBus__ConnectionString`, `AzureServiceBus__PostProcessingQueueName` |
 
 This deployment path remains documented for teams that want Azure infrastructure. Local CLI and private-server batch execution remain the default paths.
+
+## License
+
+Linkuity is licensed under the [Apache License 2.0](LICENSE). Contributions are
+welcome — see [CONTRIBUTING.md](CONTRIBUTING.md), which requires signing the
+[Contributor License Agreement](CLA.md).
