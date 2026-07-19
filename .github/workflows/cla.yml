@@ -32,11 +32,13 @@ jobs:
           # the signatures file to the branch below. See CONTRIBUTING.md.
           PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
-          # Where signatures are recorded (committed to `branch` in this repo).
+          # Where signatures are recorded. Stored on a dedicated, UNPROTECTED
+          # branch so the bot's signature commits are not blocked by the branch
+          # protection ruleset on `main`.
           path-to-signatures: signatures/version1/cla.json
           # The document contributors are agreeing to.
           path-to-document: https://github.com/linkuity/linkuity/blob/main/CLA.md
-          branch: main
+          branch: cla-signatures
           # Exact phrases contributors comment on the PR.
           custom-notsigned-prcomment: >-
             Thank you for your contribution. Before we can merge it, we need you to

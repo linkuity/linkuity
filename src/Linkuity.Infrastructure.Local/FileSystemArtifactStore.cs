@@ -76,7 +76,11 @@ public sealed class FileSystemArtifactStore : IBlobStore
             throw new ArgumentException("Artifact path is required.", nameof(path));
 
         var normalizedPath = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
-        if (Path.IsPathRooted(normalizedPath) || Path.IsPathFullyQualified(normalizedPath))
+        // Reject rooted paths. Path.IsPathRooted / IsPathFullyQualified only recognize
+        // Windows drive-letter and UNC forms when running on Windows, so check for a
+        // Windows-style root explicitly to reject e.g. "C:/escape.csv" on every OS —
+        // otherwise on Linux it would be treated as a relative "C:" subdirectory.
+        if (Path.IsPathRooted(normalizedPath) || Path.IsPathFullyQualified(normalizedPath) || IsWindowsStyleRooted(path))
             throw new ArgumentException("Artifact path must be relative.", nameof(path));
 
         var fullPath = Path.GetFullPath(Path.Combine(_rootPath, normalizedPath));
@@ -90,4 +94,12 @@ public sealed class FileSystemArtifactStore : IBlobStore
 
         return fullPath;
     }
+
+    // Detects Windows-style rooted paths (drive-letter "C:\"/"C:/" or leading
+    // separator / UNC) regardless of the host OS, so such keys are rejected on Linux
+    // too, where the framework's rooted-path checks would not flag them.
+    private static bool IsWindowsStyleRooted(string path)
+        => (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':')
+            || path.StartsWith('\\')
+            || path.StartsWith('/');
 }

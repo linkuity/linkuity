@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # NuGet dependencies across the solution.
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      # Batch routine version bumps into a single PR to reduce noise; security
+      # updates are still opened promptly on their own.
+      nuget-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep the GitHub Actions used in CI/CLA workflows up to date.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
