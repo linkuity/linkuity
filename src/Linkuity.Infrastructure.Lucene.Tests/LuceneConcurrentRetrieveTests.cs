@@ -26,20 +26,37 @@ public sealed class LuceneConcurrentRetrieveTests
         var expected = index.Retrieve(probe, NoCorpus, Profile).Select(r => r.SourceRecordId).OrderBy(x => x).ToList();
         var reopensAfterWarm = index.ReopenCount;
 
-        const int dop = 16;
+        // Drive concurrency with a fixed set of dedicated threads (not thread-pool threads) and a
+        // barrier, so every worker is inside Retrieve simultaneously. This makes the reopen count
+        // deterministic and independent of the host's core count or thread-pool injection
+        // heuristics — the earlier Parallel.For version could run entirely on the calling thread on
+        // low-core CI, leaving zero extra reopens and flaking.
+        const int workers = 8;
+        const int callsPerWorker = 20;
+        using var barrier = new Barrier(workers);
         var results = new ConcurrentBag<List<string>>();
-        Parallel.For(0, 500, new ParallelOptions { MaxDegreeOfParallelism = dop }, _ =>
-            results.Add(index.Retrieve(probe, NoCorpus, Profile).Select(r => r.SourceRecordId).OrderBy(x => x).ToList()));
+        var threads = new List<Thread>(workers);
+        for (var t = 0; t < workers; t++)
+        {
+            var thread = new Thread(() =>
+            {
+                barrier.SignalAndWait();
+                for (var k = 0; k < callsPerWorker; k++)
+                    results.Add(index.Retrieve(probe, NoCorpus, Profile).Select(r => r.SourceRecordId).OrderBy(x => x).ToList());
+            });
+            thread.Start();
+            threads.Add(thread);
+        }
+        foreach (var thread in threads)
+            thread.Join();
 
-        Assert.Equal(500, results.Count);
+        Assert.Equal(workers * callsPerWorker, results.Count);
         Assert.All(results, r => Assert.Equal(expected, r));          // no torn reads / corruption — outcome-neutral
 
         var extraReopens = index.ReopenCount - reopensAfterWarm;
-        // Per-thread readers: each worker thread opens its own committed reader at most once for the
-        // unchanged index — so reopens grow, but stay bounded (no per-call reopen storm). A single
-        // shared reader would leave this at 0. The upper bound is a generous sanity cap, not an
-        // exact bound on `dop` — the thread pool may use more than `dop` distinct threads over the
-        // life of the loop, so we cap well above that instead of asserting exact thread reuse.
-        Assert.InRange(extraReopens, 1, Environment.ProcessorCount * 4);
+        // Per-thread readers: each of the `workers` distinct worker threads opens its own committed
+        // reader once for the unchanged index. A single shared reader would leave this at 0, so the
+        // count tracks the worker-thread count — deterministic because we control the threads.
+        Assert.InRange(extraReopens, 1, workers);
     }
 }
