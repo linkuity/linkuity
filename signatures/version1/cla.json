@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "jebright",
+      "id": 2845932,
+      "comment_id": 5016069360,
+      "created_at": "2026-07-19T14:22:42Z",
+      "repoId": 1304300893,
+      "pullRequestNo": 4
+    }
+  ]
 }
