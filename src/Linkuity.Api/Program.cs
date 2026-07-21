@@ -24,6 +24,7 @@ var app = builder.Build();
 app.MapGet("/health", () => Results.Ok());
 app.MapJobEndpoints();
 app.MapProjectEndpoints();
+app.MapRunEndpoints();
 
 app.Run();
 
