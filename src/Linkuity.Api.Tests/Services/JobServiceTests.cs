@@ -2,6 +2,7 @@ using System.Text;
 using Linkuity.Api.Services;
 using Linkuity.Api.Tests.TestDoubles;
 using Linkuity.Core.Models;
+using Linkuity.Pipeline;
 
 namespace Linkuity.Api.Tests.Services;
 

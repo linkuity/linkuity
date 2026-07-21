@@ -1,5 +1,6 @@
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
+using Linkuity.Pipeline;
 
 namespace Linkuity.Api.Services;
 

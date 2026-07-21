@@ -5,7 +5,7 @@ using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Core.Normalization;
 
-namespace Linkuity.Api.Services;
+namespace Linkuity.Pipeline;
 
 public class CsvNormalizationService
 {

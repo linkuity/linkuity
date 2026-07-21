@@ -1,25 +1,32 @@
 using System.Text;
-using Linkuity.Api.Services;
-using Linkuity.Api.Tests.TestDoubles;
 using Linkuity.Core.Models;
+using Linkuity.Infrastructure.Local;
 
-namespace Linkuity.Api.Tests.Services;
+namespace Linkuity.Pipeline.Tests;
 
-public class CsvNormalizationServiceTests
+public class CsvNormalizationServiceTests : IDisposable
 {
-    private static (CsvNormalizationService service, InMemoryBlobStore blobs) Build()
+    private readonly string _rootPath = Path.Combine(Path.GetTempPath(), $"linkuity-csvnorm-{Guid.NewGuid():N}");
+
+    public void Dispose()
     {
-        var blobs = new InMemoryBlobStore();
+        if (Directory.Exists(_rootPath))
+            Directory.Delete(_rootPath, recursive: true);
+    }
+
+    private (CsvNormalizationService service, FileSystemArtifactStore blobs) Build()
+    {
+        var blobs = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _rootPath });
         return (new CsvNormalizationService(blobs), blobs);
     }
 
-    private static async Task WriteCsvAsync(InMemoryBlobStore blobs, Guid jobId, string csv)
+    private static async Task WriteCsvAsync(FileSystemArtifactStore blobs, Guid jobId, string csv)
     {
         var bytes = Encoding.UTF8.GetBytes(csv);
         await blobs.UploadAsync($"{jobId}/input.csv", new MemoryStream(bytes), "text/csv");
     }
 
-    private static async Task<string> ReadNormalizedAsync(InMemoryBlobStore blobs, Guid jobId)
+    private static async Task<string> ReadNormalizedAsync(FileSystemArtifactStore blobs, Guid jobId)
     {
         using var stream = await blobs.DownloadAsync($"{jobId}/normalized.csv");
         using var reader = new StreamReader(stream);

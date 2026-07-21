@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Linkuity.Api.Endpoints;
 using Linkuity.Api.Infrastructure;
 using Linkuity.Api.Services;
+using Linkuity.Pipeline;
 
 var builder = WebApplication.CreateBuilder(args);
 
