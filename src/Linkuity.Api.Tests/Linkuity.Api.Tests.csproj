@@ -23,7 +23,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Linkuity.Api\Linkuity.Api.csproj" />
     <ProjectReference Include="..\Linkuity.Core\Linkuity.Core.csproj" />
-    <ProjectReference Include="..\Linkuity.Infrastructure.Azure\Linkuity.Infrastructure.Azure.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Local\Linkuity.Infrastructure.Local.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Postgres\Linkuity.Infrastructure.Postgres.csproj" />
   </ItemGroup>

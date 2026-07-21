@@ -24,11 +24,7 @@ public sealed class RuntimeModeStartupTests
         {
             ["Linkuity:RuntimeMode"] = "Azure",
             ["BlobStorage:ConnectionString"] = "UseDevelopmentStorage=true",
-            ["BlobStorage:ContainerName"] = "linkuity-jobs",
-            ["AzureServiceBus:ConnectionString"] = "Endpoint=sb://localhost/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=fake",
-            ["AzureServiceBus:SmallJobQueueName"] = "linkuity-jobs-small",
-            ["AzureServiceBus:LargeJobQueueName"] = "linkuity-jobs-large",
-            ["AzureServiceBus:LargeJobThreshold"] = "10000"
+            ["BlobStorage:ContainerName"] = "linkuity-jobs"
         });
 
         var blobs = services.GetRequiredService<IBlobStore>();
