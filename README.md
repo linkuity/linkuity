@@ -4,14 +4,14 @@
 
 Linkuity is an open-source private-runtime golden-record engine for data and MDM teams. It deduplicates people or organization records, links matching source records into clusters, and produces golden records that can stay inside your environment.
 
-The codebase includes a local CLI batch runner, durable MDM projects with incremental matching, a Docker Compose private-server batch path, and an HTTP batch API. Azure Blob Storage and Azure Service Bus are optional adapter infrastructure selected with `Linkuity:RuntimeMode=Azure`, not the default runtime.
+The codebase includes a local CLI batch runner, durable MDM projects with incremental matching, a Docker Compose private-server batch path, and an HTTP batch API that completes a match synchronously. Azure Blob Storage is optional adapter infrastructure selected with `Linkuity:RuntimeMode=Azure`, not the default runtime.
 
 ## Product Direction
 
 - Linkuity is open source.
 - Customer data does not need to leave the customer's environment.
 - The target runtime is local-first, private-server friendly, and suitable for customer-managed cloud accounts.
-- Azure Blob Storage and Azure Service Bus remain useful deployment adapters, but they are not the default architecture.
+- Azure Blob Storage remains a useful deployment adapter, but it is not the default architecture.
 - The durable MDM model will support projects, sources, ingest batches, entity relationships, clusters, golden records, and incremental matching over time.
 
 See:
@@ -30,7 +30,7 @@ Linkuity currently supports batch deduplication:
 2. Normalize configured fields such as names, emails, phone numbers, dates, postal codes, and source identifiers.
 3. Block records to avoid full pairwise comparison.
 4. Score likely matches with the .NET matching engine.
-5. Cluster linked records with the .NET post-processing worker.
+5. Cluster linked records with the .NET post-processing pipeline.
 6. Merge each cluster into a golden record.
 7. Optionally export a Neo4j-ready graph bundle.
 
@@ -38,58 +38,36 @@ The target private runtime keeps this pipeline but removes the assumption that e
 
 ## Current Batch API
 
-The existing application exposes an HTTP batch-job workflow:
+The HTTP API completes a batch match end to end, synchronously:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/jobs` | Create a new job |
-| POST | `/jobs/{id}/upload` | Upload a CSV file (`text/csv`, max 50 MB) |
-| POST | `/jobs/{id}/upload-complete` | Signal that upload is done |
-| POST | `/jobs/{id}/start` | Dispatch the job for processing |
-| GET | `/jobs/{id}` | Poll job status |
-| GET | `/jobs/{id}/golden-records` | Download merged golden records as CSV after state is `Complete` |
-| GET | `/jobs/{id}/neo4j-export` | Download Neo4j-ready CSVs plus a `load.cypher` import script |
+| POST | `/run` | Run a batch match synchronously: multipart `config` (JSON) + `file` (`text/csv`); returns merged golden records as `text/csv`. Max input 400 KiB (synchronous limit; use the CLI for larger sets). |
 | GET | `/health` | Health check |
 
-Job states:
+`POST /run` shares the same normalize -> match -> cluster -> merge pipeline as the
+CLI (`BatchRunService`), so a request that fits under the size cap completes with the
+golden-records CSV in the response body — no polling, no job state machine. The 400 KiB
+cap exists because within-batch matching is O(n^2)-ish, so larger inputs risk exceeding a
+synchronous request's time budget; use `linkuity run` (or the durable/incremental CLI
+path) for larger inputs. An asynchronous variant of this endpoint (for larger inputs,
+polled to completion) is a planned, additive future addition — it does not exist today.
 
-```text
-Open -> Ingesting -> UploadComplete -> Processing -> MatchingComplete -> Complete
-                                                        \-> Failed
-```
+Linkuity also exposes durable project/source/batch metadata endpoints (`/projects`,
+`/projects/{id}/sources`, `/projects/{id}/batches`, etc.) used by the durable MDM CLI
+path — see `docs/architecture.md` for the full list.
 
 This API is one interface to Linkuity. The local CLI (`linkuity run` and
-`linkuity ingest-incremental`) is the default end-to-end path and drives durable MDM
-project persistence today. Planned work will make the server API infrastructure-neutral.
-
-## Azure-Compatible Batch Pipeline
-
-```text
-POST /jobs/upload -> Normalize -> Azure Service Bus queue
-  -> matching stage (no Azure matching consumer)
-  -> .NET worker (graph clustering + golden record merge)
-  -> GET /jobs/{id} -> download results
-```
-
-This is the optional Azure-compatible API path. It is selected for the .NET services with `Linkuity__RuntimeMode=Azure`.
-
-Azure-compatible infrastructure:
-
-- Azure Blob Storage stores job artifacts.
-- Azure Service Bus carries job IDs between processing stages.
-- .NET Aspire starts local Azure emulators for development.
-- Azure Container Apps is the documented Azure deployment option.
-
-These are compatibility targets for teams that want Azure infrastructure. Local CLI and Docker Compose private-server batch execution are the default private-runtime paths.
+`linkuity ingest-incremental`) remains the default end-to-end path and drives durable MDM
+project persistence today.
 
 ## Project Structure
 
 ```text
 src/
   Linkuity.Cli/             Local CLI batch runner and durable MDM commands (default path)
-  Linkuity.Api/             ASP.NET Core Web API
-  Linkuity.Worker/          Optional .NET background worker host for Azure post-processing
-  Linkuity.AppHost/         Optional .NET Aspire host for Azure-emulator development
+  Linkuity.Api/             ASP.NET Core Web API (synchronous POST /run plus durable metadata endpoints)
+  Linkuity.AppHost/         Optional .NET Aspire host for API + Azurite blob-emulator development
   Linkuity.ServiceDefaults/ Shared telemetry and health check defaults
   Linkuity.Core/            Shared domain models and interfaces
   Linkuity.Matching/        Native .NET matching engine (blocking, scoring, retrieval)
@@ -102,7 +80,7 @@ src/
   Linkuity.Infrastructure.Lucene/
                             Lucene.NET incremental candidate-retrieval index
   Linkuity.Infrastructure.Azure/
-                            Optional Azure Blob and Azure Service Bus adapters
+                            Optional Azure Blob Storage artifact-store adapter
 docs/
   architecture.md           Current and target architecture
   how-matching-works.md     How matching, blocking, scoring, and merging work
@@ -130,9 +108,9 @@ See `docs/private-server-deployment.md` for server directory layout, health chec
 
 ## Running The Current Azure-Compatible Stack Locally
 
-Local development for the current Azure-compatible API path can use .NET Aspire to orchestrate the API, the .NET worker, and Azure emulators.
+Local development for the current Azure-compatible API path can use .NET Aspire to orchestrate the API and the Azurite blob emulator.
 
-This setup does not require an Azure account, but it opts the .NET services into `Linkuity:RuntimeMode=Azure` and mirrors the Azure-backed batch architecture through Azurite and the Azure Service Bus emulator. It is optional developer tooling, not the default private-server deployment path.
+This setup does not require an Azure account, but it opts the API into `Linkuity:RuntimeMode=Azure` and mirrors the Azure Blob Storage artifact-store adapter through Azurite. It is optional developer tooling, not the default private-server deployment path.
 
 ### Prerequisites
 
@@ -145,9 +123,9 @@ This setup does not require an Azure account, but it opts the .NET services into
 dotnet run --project src/Linkuity.AppHost
 ```
 
-Aspire starts the Azure Storage emulator and Service Bus emulator in Docker, waits for them to be healthy, then launches the API and .NET worker. The Aspire dashboard opens at `http://localhost:15888`.
+Aspire starts the Azure Storage (blob) emulator in Docker, waits for it to be healthy, then launches the API. The Aspire dashboard opens at `http://localhost:15888`.
 
-The Azure-compatible path has no matching consumer (see "Azure-Compatible Batch Pipeline" above): jobs dispatched with `Linkuity:RuntimeMode=Azure` are normalized and queued, but nothing scores matches, so they will not progress past `Processing`. Use `linkuity run` or `linkuity ingest-incremental` for an end-to-end match.
+In this mode the API still completes matches synchronously through `POST /run` — Azure mode only changes where job artifacts are stored (Azure Blob Storage / Azurite instead of the local filesystem).
 
 ### Verify The API
 
@@ -181,25 +159,20 @@ dotnet test
 
 ## Optional Azure Deployment Path
 
-The Azure deployment option uses independent service containers and Azure-managed infrastructure:
+The Azure deployment option runs `Linkuity.Api` against Azure-managed infrastructure:
 
 - `Linkuity.Api`
-- `Linkuity.Worker`
 - Azure Blob Storage
-- Azure Service Bus
 - Azure Container Apps
 
-The Azure path has no matching consumer (see "Azure-Compatible Batch Pipeline" above);
-`Linkuity.Worker` performs Azure-mode post-processing once a job reaches
-`MatchingComplete`, but nothing currently produces that transition. Use `linkuity run` or
-`linkuity ingest-incremental` for an end-to-end match.
+In this mode `POST /run` still completes matches synchronously, in-process; Azure mode
+only changes the artifact-store backend from the local filesystem to Azure Blob Storage.
 
-Set `Linkuity__RuntimeMode=Azure` for the .NET API and .NET worker to use the Azure adapters. Current environment variables:
+Set `Linkuity__RuntimeMode=Azure` for the API to use the Azure Blob Storage adapter. Current environment variables:
 
 | Service | Required Variables |
 |---------|--------------------|
-| Linkuity.Api | `Linkuity__RuntimeMode=Azure`, `BlobStorage__ConnectionString`, `BlobStorage__ContainerName`, `AzureServiceBus__ConnectionString` |
-| Linkuity.Worker | `Linkuity__RuntimeMode=Azure`, `BlobStorage__ConnectionString`, `BlobStorage__ContainerName`, `AzureServiceBus__ConnectionString`, `AzureServiceBus__PostProcessingQueueName` |
+| Linkuity.Api | `Linkuity__RuntimeMode=Azure`, `BlobStorage__ConnectionString`, `BlobStorage__ContainerName` |
 
 This deployment path remains documented for teams that want Azure infrastructure. Local CLI and private-server batch execution remain the default paths.
 

@@ -10,11 +10,12 @@ The current codebase has three supported execution shapes:
 - A local CLI batch runner that processes CSV files from the local filesystem.
 - A private-server batch path that packages the same CLI runner in Docker
   Compose with bind-mounted data directories.
-- An HTTP batch API that defaults to local filesystem artifacts and can opt into
-  the Azure-compatible adapter path with `Linkuity:RuntimeMode=Azure`.
+- An HTTP batch API (`POST /run`) that completes a match synchronously, sharing
+  the same batch pipeline as the CLI, and defaults to local filesystem
+  artifacts; it can opt into the Azure Blob Storage artifact-store adapter with
+  `Linkuity:RuntimeMode=Azure`.
 
-Azure Blob Storage and Azure Service Bus are adapter infrastructure, not the
-default architecture.
+Azure Blob Storage is adapter infrastructure, not the default architecture.
 
 ## Runtime Overview
 
@@ -26,37 +27,35 @@ flowchart LR
         CLI[Linkuity.Cli]
         LocalArtifacts[FileSystemArtifactStore]
         LocalMetadata[FileMetadataStore]
+        BatchRun[BatchRunService]
         NativeMatching[NativeMatchingProcess]
         PostProcessing[PostProcessingService]
     end
 
     subgraph ApiLocal["Local API mode"]
-        API[Linkuity.Api]
-        NoOpDispatch[NoOpJobDispatcher]
+        API[Linkuity.Api: POST /run]
     end
 
     subgraph Azure["Optional Azure adapter mode"]
         AzureBlob[Azure Blob Storage]
-        ServiceBus[Azure Service Bus]
-        DotnetWorker[Linkuity.Worker]
     end
 
     User --> CLI
-    CLI --> LocalArtifacts
-    CLI --> NativeMatching
-    CLI --> PostProcessing
+    CLI --> BatchRun
+    User --> API
+    API --> BatchRun
+
+    BatchRun --> LocalArtifacts
+    BatchRun --> NativeMatching
+    BatchRun --> PostProcessing
     CLI --> LocalMetadata
 
-    User --> API
-    API --> LocalArtifacts
-    API --> LocalMetadata
-    API --> NoOpDispatch
-
     API -. RuntimeMode=Azure .-> AzureBlob
-    API -. RuntimeMode=Azure .-> ServiceBus
-    ServiceBus -. "no matching consumer" .-> DotnetWorker
-    DotnetWorker --> AzureBlob
 ```
+
+Both the CLI and the API are thin adapters over the shared `BatchRunService`
+pipeline (normalize -> match -> cluster -> merge); neither a dispatcher nor a
+background worker sits between the API request and the match running.
 
 ## Project Structure
 
@@ -65,35 +64,34 @@ flowchart LR
 | `src/Linkuity.Core` | Shared domain models, runtime enum, interfaces, validation, normalization, and vocabulary |
 | `src/Linkuity.Pipeline` | Reusable graph clustering, golden-record merge, and post-processing service |
 | `src/Linkuity.Cli` | Local batch runner plus durable metadata commands |
-| `src/Linkuity.Api` | HTTP batch job API, project/source/batch metadata API, health endpoint, and runtime infrastructure selection |
-| `src/Linkuity.Worker` | Optional .NET background host; in Azure mode consumes post-processing queue messages |
+| `src/Linkuity.Api` | HTTP synchronous batch-match API (`POST /run`), project/source/batch metadata API, health endpoint, and runtime infrastructure selection |
 | `src/Linkuity.Infrastructure.Local` | Filesystem artifact store and JSON-backed metadata store |
-| `src/Linkuity.Infrastructure.Azure` | Optional Azure Blob Storage and Azure Service Bus adapters |
+| `src/Linkuity.Infrastructure.Azure` | Optional Azure Blob Storage artifact-store adapter |
 | `src/Linkuity.Infrastructure.Postgres` | PostgreSQL durable metadata store adapter (Npgsql + Dapper + DbUp, no EF Core) |
 | `src/Linkuity.Mdm` | Shared MDM resolution core: `IncrementalResolver`, working-set and mutation ports, golden-record, merge-event, review-task, and cluster-merge logic; consumed by both metadata store adapters |
 | `src/Linkuity.Mdm.Benchmarks` | Measurement harness for durable store performance: synthetic dataset generation and batched-ingest wall-clock + peak-memory measurement (CSV/markdown output) |
-| `src/Linkuity.AppHost` | Optional Aspire host for Azure-emulator development |
+| `src/Linkuity.AppHost` | Optional Aspire host for API + Azurite blob-emulator development |
 
 ## Core Boundaries
 
 | Boundary | Implementation |
 |---|---|
-| Artifact storage | `IArtifactStore` with `FileSystemArtifactStore` and `AzureBlobArtifactStore` implementations |
-| API batch artifact compatibility | `IBlobStore`, currently an `IArtifactStore` subtype used by older API services |
+| Artifact storage | `IArtifactStore`, implemented by `FileSystemArtifactStore` (local) and `AzureBlobStore` (Azure adapter) |
+| API batch artifact compatibility | `IBlobStore`, an `IArtifactStore` subtype used by API services |
 | Metadata storage | `IMetadataStore`, implemented by `FileMetadataStore` (JSON-backed, small/dev default) and `PostgresMetadataStore` (scalable tier, Npgsql + Dapper + DbUp); backend selected by `Linkuity:MetadataStore` configuration |
-| Dispatch | `IJobDispatcher`, implemented by `NoOpJobDispatcher` in local API mode and `AzureServiceBusJobDispatcher` in Azure mode |
+| Batch run orchestration | `BatchRunService`, shared by the CLI and `POST /run`: normalize -> match -> cluster -> merge, in-process, synchronously |
 | Normalization | `CsvNormalizationService` plus `FieldNormalizer` |
-| Matching (standalone batch) | .NET native matcher (`NativeMatchingProcess`) reusing `Linkuity.Matching` — see Batch matching (`linkuity run`) |
+| Matching (standalone batch) | .NET native matcher (`NativeMatchingProcess`, wrapped by `BatchMatchingService`) reusing `Linkuity.Matching` — see Batch matching (`linkuity run`) |
 | Matching (durable incremental) | .NET matching engine (`Linkuity.Matching`) with Lucene.NET candidate retrieval; the strategic matcher |
 | Post-processing | `PostProcessingService`, `GraphService`, and `GoldenRecordService` |
-| Delivery | CLI output files, API download endpoints, Neo4j export ZIP, and durable metadata reads |
+| Delivery | CLI output files, API streamed CSV response (`POST /run`), Neo4j export ZIP (CLI only), and durable metadata reads |
 
-The batch pipeline is transport-neutral only after normalization. The CLI calls
-`NativeMatchingProcess` in-process — no subprocess, no external service — reusing the
-same `Linkuity.Matching` engine that drives the durable incremental path (see Batch
-matching (`linkuity run`)). The Azure adapter path has no matching consumer; the supported
-match paths are `linkuity run` (native, standalone) and `linkuity ingest-incremental`
-(native, durable).
+The batch pipeline is transport-neutral after normalization: both the CLI and the API
+call the same `BatchRunService`, which runs `NativeMatchingProcess` in-process — no
+subprocess, no external service, no dispatcher or background worker — reusing the same
+`Linkuity.Matching` engine that drives the durable incremental path (see Batch matching
+(`linkuity run`)). The supported match paths are `linkuity run` / `POST /run` (native,
+standalone) and `linkuity ingest-incremental` (native, durable).
 
 ## Runtime Modes
 
@@ -101,8 +99,8 @@ match paths are `linkuity run` (native, standalone) and `linkuity ingest-increme
 |---|---|---|
 | Local CLI | Runs a complete batch job locally and optionally writes Neo4j export | Local filesystem artifacts; matching runs in-process (`NativeMatchingProcess`) |
 | Private server batch | Runs the CLI pipeline inside Docker Compose with bind-mounted directories | Customer-managed server filesystem |
-| Local API | Creates/uploads/normalizes batch jobs and stores artifacts locally; dispatch is currently a placeholder | Local filesystem artifacts and local JSON metadata |
-| Azure adapter | Normalizes and dispatches over the queue-backed pipeline; there is no matching consumer, so jobs do not reach `MatchingComplete` | Azure Blob Storage and Azure Service Bus |
+| Local API | `POST /run` completes a full batch match synchronously (normalize -> match -> cluster -> merge) and streams golden records back in the response | Local filesystem artifacts and local JSON metadata |
+| Azure adapter | Same synchronous `POST /run` match path; only the artifact-store backend changes | Azure Blob Storage |
 
 The first production target is a private runtime that customers run where their
 data already lives. Linkuity does not require a Linkuity-hosted data plane.
@@ -160,17 +158,11 @@ project.
 
 `Linkuity.Api` exposes two groups of endpoints.
 
-Batch job endpoints:
+Synchronous batch-match endpoint:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/jobs` | Create a batch job |
-| `POST` | `/jobs/{id}/upload` | Upload CSV input, maximum 50 MB |
-| `POST` | `/jobs/{id}/upload-complete` | Mark upload complete and optionally auto-start |
-| `POST` | `/jobs/{id}/start` | Normalize and dispatch processing |
-| `GET` | `/jobs/{id}` | Read job metadata |
-| `GET` | `/jobs/{id}/golden-records` | Download `golden_records.csv` after completion |
-| `GET` | `/jobs/{id}/neo4j-export` | Download a Neo4j import ZIP after completion |
+| `POST` | `/run` | Run a batch match synchronously: multipart `config` (JSON) + `file` (`text/csv`); streams merged golden records back as `text/csv`. Max input 400 KiB (`RunEndpoints.MaxInputBytes`) — larger inputs get a 400 with guidance to use the CLI. |
 | `GET` | `/health` | Health check |
 
 Durable project metadata endpoints:
@@ -192,38 +184,15 @@ In default local API mode, `RuntimeInfrastructureRegistration` wires:
   `.linkuity/metadata/linkuity.json`.
 - `FileSystemArtifactStore` at `ArtifactStorage:RootPath`, default
   `.linkuity/jobs`.
-- `NoOpJobDispatcher`.
+- The shared `BatchRunService` (`CsvNormalizationService` -> `BatchMatchingService`
+  -> `PostProcessingService`), the same pipeline the CLI uses.
 
-That means local API mode can create, upload, normalize, and store jobs, but it
-does not yet run server-side local matching and post-processing after
-`POST /jobs/{id}/start`. Use the CLI or Docker Compose batch path for the
-current local end-to-end private runtime.
-
-## Batch Job State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> Open
-    Open --> Ingesting: upload starts
-    Ingesting --> UploadComplete: upload complete
-    UploadComplete --> Processing: start or auto-start
-    Processing --> Complete: CLI run path completes (native match + post-processing)
-    Processing --> MatchingComplete: queue-based matching worker completes
-    MatchingComplete --> Complete: post-processing completes
-    Processing --> Failed: failure
-    MatchingComplete --> Failed: failure
-    UploadComplete --> Failed: failure
-```
-
-| From | To | Trigger |
-|---|---|---|
-| `Open` | `Ingesting` | `POST /jobs/{id}/upload` starts storing input |
-| `Ingesting` | `UploadComplete` | `POST /jobs/{id}/upload-complete` |
-| `UploadComplete` | `Processing` | `POST /jobs/{id}/start` or `AutoStart = true` |
-| `Processing` | `Complete` | `NativeMatchingProcess` writes `matches.csv`, then `PostProcessingService` writes golden records and sets `Complete` directly (CLI `run` path; no `MatchingComplete` stop) |
-| `Processing` | `MatchingComplete` | Would be written by a queue-based matching worker; the Azure adapter has no matching consumer, so nothing currently produces this transition |
-| `MatchingComplete` | `Complete` | `PostProcessingService` writes golden records (only applicable if a matching-worker path reaches `MatchingComplete`) |
-| Any processing state | `Failed` | Stage failure updates job metadata where possible |
+That means local API mode can accept a `POST /run` request and run a complete
+local match — normalize, match, cluster, merge — synchronously, returning the
+golden-records CSV in the response. There is no separate dispatch step and no
+job-status polling. An asynchronous variant (for inputs larger than the 400 KiB
+synchronous cap) is a planned, additive future endpoint; it does not exist
+today. Use the CLI for larger inputs in the meantime.
 
 ## Normalization
 
@@ -750,58 +719,51 @@ source-priority fields do not drift between full imports and later updates.
 Merge-policy validation rejects empty field names, duplicate fields, missing
 source-priority lists, and empty source names.
 
-## Optional Azure-Compatible Batch Architecture
+## Optional Azure Artifact-Store Adapter
 
-Azure mode offers a queue-backed batch pipeline for teams that want Azure
-infrastructure. **This pipeline has no matching consumer**: jobs dispatched to the
-small/large queues are normalized and enqueued, but nothing consumes the queue to score
-matches, so Azure-mode jobs do not progress past `Processing`. The post-processing leg
-(`Linkuity.Worker`) is implemented and would work if something produced a
-`MatchingComplete` message. Use `linkuity run` (native, standalone) or
-`linkuity ingest-incremental` (native, durable) for an end-to-end match.
+Azure mode (`Linkuity:RuntimeMode=Azure`) swaps the artifact-store backend from the
+local filesystem to Azure Blob Storage; it does not change how matching runs. The
+same synchronous `POST /run` request completes the same normalize -> match ->
+cluster -> merge pipeline in-process — only where job artifacts are read and
+written changes.
 
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant API as Linkuity.Api
+    participant API as Linkuity.Api: POST /run
     participant Blob as Azure Blob Storage
-    participant Jobs as jobs-small/jobs-large queues
-    participant PostQ as post-processing queue
-    participant Worker as Linkuity.Worker
+    participant Run as BatchRunService
 
-    Caller->>API: POST /jobs and upload CSV
-    API->>Blob: metadata.json and input.csv
-    Caller->>API: POST /jobs/{id}/start
-    API->>Blob: normalized.csv and Processing metadata
-    API->>Jobs: job ID
-    Note over Jobs: no matching consumer;<br/>jobs stay in Processing
-    PostQ->>Worker: receive job ID (if enqueued by another means)
-    Worker->>Blob: read normalized.csv and matches.csv
-    Worker->>Blob: write golden_records.csv and Complete metadata
-    Caller->>API: GET golden records or Neo4j export
+    Caller->>API: POST /run (multipart config + CSV)
+    API->>Run: RunAsync(request, csv)
+    Run->>Blob: write metadata.json, input.csv, normalized.csv
+    Run->>Run: NativeMatchingProcess (in-process)
+    Run->>Blob: write matches.csv
+    Run->>Run: PostProcessingService (in-process)
+    Run->>Blob: write golden_records.csv
+    API-->>Caller: 200 text/csv (golden records)
 ```
 
 Azure mode wiring:
 
 | Service | Runtime setting | Adapter wiring |
 |---|---|---|
-| `Linkuity.Api` | `Linkuity__RuntimeMode=Azure` | `AzureBlobStore`, `AzureServiceBusJobDispatcher`, `FileMetadataStore` |
-| `Linkuity.Worker` | `Linkuity__RuntimeMode=Azure` | `AzureBlobArtifactStore`, `AzurePostProcessingWorkerService` |
+| `Linkuity.Api` | `Linkuity__RuntimeMode=Azure` | `AzureBlobStore` (artifact store), `FileMetadataStore` |
 
-Queue routing is handled by `JobQueueSelector`: jobs with fewer than the
-configured threshold go to the small queue, and jobs at or above the threshold
-go to the large queue. The default threshold is `10,000` rows and is configured
-with `AzureServiceBus:LargeJobThreshold`.
+An asynchronous batch-match endpoint (for inputs larger than the synchronous
+400 KiB cap) is a planned, additive future addition — it is not implemented
+today; the CLI is the path for larger inputs in the meantime.
 
 ## Neo4j Export
 
 Neo4j export is available from completed batch artifacts:
 
 - CLI: `linkuity run ... --neo4j-export` writes `neo4j-export.zip`.
-- API: `GET /jobs/{id}/neo4j-export` returns the same ZIP bundle.
 
 The export reads `metadata.json`, `normalized.csv`, `matches.csv`, and
-`golden_records.csv`. It is available only after the batch reaches `Complete`.
+`golden_records.csv`. It is available only through the CLI; there is no HTTP
+Neo4j-export endpoint today (the retired `/jobs/{id}/neo4j-export` endpoint was
+removed along with the rest of the multi-step job API).
 
 Bundle entries:
 
@@ -837,12 +799,6 @@ Linkuity:Postgres
 BlobStorage
   ConnectionString
   ContainerName
-AzureServiceBus
-  ConnectionString
-  SmallJobQueueName
-  LargeJobQueueName
-  LargeJobThreshold
-  PostProcessingQueueName
 ```
 
 Azure adapter environment variables for .NET services:
@@ -854,11 +810,6 @@ Linkuity__Postgres__ConnectionString
 Linkuity__Postgres__IndexDirectory            # optional
 BlobStorage__ConnectionString
 BlobStorage__ContainerName
-AzureServiceBus__ConnectionString
-AzureServiceBus__SmallJobQueueName
-AzureServiceBus__LargeJobQueueName
-AzureServiceBus__LargeJobThreshold
-AzureServiceBus__PostProcessingQueueName
 MetadataStorage__DatabasePath
 ```
 
@@ -866,8 +817,11 @@ MetadataStorage__DatabasePath
 
 - Local CLI and Docker Compose private-server batch execution are the current
   end-to-end private-runtime paths.
-- Local API mode stores artifacts and metadata locally, but server-side local
-  dispatch is still a placeholder.
+- The HTTP API completes a batch match synchronously via `POST /run`, but is
+  capped at 400 KiB of input (`RunEndpoints.MaxInputBytes`) because within-batch
+  matching is O(n^2)-ish and a synchronous request must stay well under typical
+  gateway/request timeouts. Use the CLI for larger inputs; an asynchronous
+  variant of the endpoint is planned but not implemented.
 - Durable metadata storage supports two backends: `FileMetadataStore` (JSON,
   default, suitable for small/dev projects) and `PostgresMetadataStore` (Npgsql +
   Dapper + DbUp, scalable tier with bounded-memory incremental ingest). See
@@ -878,7 +832,5 @@ MetadataStorage__DatabasePath
   read-back/export path for large projects is planned.
 - Review tasks can be exported, but there is no review UI or resolution workflow
   yet.
-- Azure is supported as an optional adapter path for artifact storage and
-  post-processing dispatch, but it is not required for the default runtime. The
-  Azure path has no matching consumer, so Azure-mode jobs do not progress past
-  `Processing`; use `linkuity run` or `linkuity ingest-incremental` instead.
+- Azure is supported as an optional artifact-store adapter path (Azure Blob
+  Storage), but it is not required for the default runtime.
