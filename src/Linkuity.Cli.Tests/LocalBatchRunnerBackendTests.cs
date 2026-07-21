@@ -43,7 +43,7 @@ public sealed class LocalBatchRunnerBackendTests : IAsyncLifetime
     public async Task FileDefault_NoMetadataStoreFlag_ProjectRoundTrips()
     {
         var metadataPath = Path.Combine(_root, "file-default", "metadata.json");
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         // project create — no --metadata-store, so uses file path as before
         var exit = await runner.RunAsync(
@@ -96,7 +96,7 @@ public sealed class LocalBatchRunnerBackendTests : IAsyncLifetime
 
         var connectionString = _pg!.GetConnectionString();
         var indexDir = Path.Combine(_root, "pg-lucene-index");
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         // ── project create ──────────────────────────────────────────────────────
         // DbUpMigrator.EnsureSchema uses LogToNowhere (silent), so stdout contains
@@ -185,10 +185,5 @@ public sealed class LocalBatchRunnerBackendTests : IAsyncLifetime
         }
 
         return output.ToString();
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

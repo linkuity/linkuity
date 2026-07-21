@@ -15,7 +15,7 @@ public sealed class LocalBatchRunnerGuardrailTests : IDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private static LocalBatchRunner NewRunner() => new(new NoOpMatchingProcess());
+    private static LocalBatchRunner NewRunner() => new();
 
     /// <summary>Captures stdout, stderr, and exit code without throwing on non-zero exits.</summary>
     private static async Task<(int ExitCode, string Stdout, string Stderr)> CaptureAllAsync(
@@ -238,10 +238,5 @@ public sealed class LocalBatchRunnerGuardrailTests : IDisposable
     {
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

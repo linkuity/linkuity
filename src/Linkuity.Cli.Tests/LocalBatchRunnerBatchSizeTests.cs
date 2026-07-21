@@ -13,11 +13,6 @@ public sealed class LocalBatchRunnerBatchSizeTests : IDisposable
     public LocalBatchRunnerBatchSizeTests() => Directory.CreateDirectory(_dir);
     public void Dispose() { try { if (Directory.Exists(_dir)) Directory.Delete(_dir, true); } catch { } }
 
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
-    }
-
     // Six rows: two duplicate pairs by email plus two singletons.
     // Row order is deliberately interleaved so each duplicate pair (r1/r2, r3/r4)
     // straddles a chunk boundary under --batch-size 2 (chunks: [r1,r3] [r2,r4] [r5,r6]).
@@ -55,7 +50,7 @@ public sealed class LocalBatchRunnerBatchSizeTests : IDisposable
         var input = WriteInputCsv();
 
         // --- Single-batch ingest (reference) ---
-        var runnerA = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runnerA = new LocalBatchRunner();
         var metaA = Path.Combine(_dir, "single.json");
         var (projA, srcA) = await SeedProjectAsync(runnerA, metaA);
         var storeA = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metaA });
@@ -66,7 +61,7 @@ public sealed class LocalBatchRunnerBatchSizeTests : IDisposable
             CancellationToken.None));
 
         // --- Chunked ingest (batch-size 2, no --batch-id) ---
-        var runnerB = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runnerB = new LocalBatchRunner();
         var metaB = Path.Combine(_dir, "chunked.json");
         var (projB, srcB) = await SeedProjectAsync(runnerB, metaB);
         Assert.Equal(0, await runnerB.RunAsync(
@@ -88,7 +83,7 @@ public sealed class LocalBatchRunnerBatchSizeTests : IDisposable
     public async Task DefaultIngest_WithoutBatchSize_StillRequiresBatchId()
     {
         var input = WriteInputCsv();
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         var meta = Path.Combine(_dir, "default.json");
         var (proj, src) = await SeedProjectAsync(runner, meta);
 
@@ -104,7 +99,7 @@ public sealed class LocalBatchRunnerBatchSizeTests : IDisposable
     public async Task ChunkedIngest_WithInvalidBatchSize_ExitsTwo()
     {
         var input = WriteInputCsv();
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         var meta = Path.Combine(_dir, "invalid-bs.json");
         var (proj, src) = await SeedProjectAsync(runner, meta);
 

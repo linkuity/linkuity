@@ -29,7 +29,7 @@ public sealed class SampleScenarioTests : IDisposable
         var config = configOverridePath ?? Path.Combine(root, "samples", sampleDir, "match-config.json");
         var output = Path.Combine(_work, sampleDir);
 
-        var runner = new LocalBatchRunner(new NativeMatchingProcess());
+        var runner = new LocalBatchRunner();
         var exit = await runner.RunAsync(
             ["run", "--input", input, "--config", config, "--output", output],
             CancellationToken.None);

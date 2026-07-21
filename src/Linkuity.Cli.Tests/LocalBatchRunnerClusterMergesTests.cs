@@ -5,7 +5,7 @@ namespace Linkuity.Cli.Tests;
 
 public class LocalBatchRunnerClusterMergesTests
 {
-    private static LocalBatchRunner NewRunner() => new(new NoOpMatchingProcess());
+    private static LocalBatchRunner NewRunner() => new();
 
     private static async Task<string> CaptureAsync(LocalBatchRunner runner, string[] args)
     {
@@ -96,10 +96,5 @@ public class LocalBatchRunnerClusterMergesTests
         Assert.Equal(2, lines.Length);
         // The data row leads with the survivor cluster id.
         Assert.StartsWith(survivorClusterId.ToString(), lines[1]);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

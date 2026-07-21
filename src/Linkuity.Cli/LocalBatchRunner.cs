@@ -26,10 +26,6 @@ public sealed class LocalBatchRunner
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) }
     };
 
-    private readonly IMatchingProcess _matchingProcess;
-
-    public LocalBatchRunner(IMatchingProcess matchingProcess) => _matchingProcess = matchingProcess;
-
     public async Task<int> RunAsync(string[] args, CancellationToken ct)
     {
         if (args.Length > 0 && !string.Equals(args[0], "run", StringComparison.OrdinalIgnoreCase))
@@ -65,45 +61,21 @@ public sealed class LocalBatchRunner
         Directory.CreateDirectory(outputPath);
 
         var store = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = artifactRoot });
-        var blobs = new LocalBlobStoreAdapter(store);
+        var runService = new BatchRunService(
+            new CsvNormalizationService(store),
+            new BatchMatchingService(store),
+            new PostProcessingService(store, new GraphService(), new GoldenRecordService(), NullLogger<PostProcessingService>.Instance),
+            store);
 
-        var jobId = Guid.NewGuid();
-        var job = new Job
-        {
-            Id = jobId,
-            State = JobState.Ingesting,
-            CreatedAt = DateTimeOffset.UtcNow,
-            Configuration = request.Configuration,
-            AutoStart = request.AutoStart,
-            MergeConfiguration = request.MergeConfiguration
-        };
-
-        await store.WriteJsonAsync($"{jobId}/metadata.json", job, ct);
+        BatchRunResult result;
         await using (var input = File.OpenRead(options.InputPath))
-        {
-            await store.UploadAsync($"{jobId}/input.csv", input, "text/csv", ct);
-        }
-
-        job.State = JobState.Processing;
-        await store.WriteJsonAsync($"{jobId}/metadata.json", job, ct);
-
-        var normalizer = new CsvNormalizationService(blobs);
-        job.RecordCount = await normalizer.NormalizeAsync(jobId, job.Configuration, ct);
-        await store.WriteJsonAsync($"{jobId}/metadata.json", job, ct);
-
-        await _matchingProcess.RunAsync(artifactRoot, jobId.ToString(), ct);
-
-        var postProcessing = new PostProcessingService(
-            store,
-            new GraphService(),
-            new GoldenRecordService(),
-            NullLogger<PostProcessingService>.Instance);
-        await postProcessing.ProcessAsync(jobId.ToString(), ct);
+            result = await runService.RunAsync(request, input, ct);
+        var jobId = result.JobId;
 
         await CopyArtifactAsync(store, $"{jobId}/golden_records.csv", Path.Combine(outputPath, "golden-records.csv"), ct);
 
         if (options.WriteNeo4jExport)
-            await WriteNeo4jExportAsync(blobs, jobId, Path.Combine(outputPath, "neo4j-export.zip"), ct);
+            await WriteNeo4jExportAsync(store, jobId, Path.Combine(outputPath, "neo4j-export.zip"), ct);
 
         Console.WriteLine($"Job {jobId} completed.");
         Console.WriteLine($"Golden records: {Path.Combine(outputPath, "golden-records.csv")}");
@@ -754,9 +726,9 @@ public sealed class LocalBatchRunner
         await source.CopyToAsync(destination, ct);
     }
 
-    private static async Task WriteNeo4jExportAsync(LocalBlobStoreAdapter blobs, Guid jobId, string destinationPath, CancellationToken ct)
+    private static async Task WriteNeo4jExportAsync(FileSystemArtifactStore store, Guid jobId, string destinationPath, CancellationToken ct)
     {
-        var service = new Neo4jExportService(blobs);
+        var service = new Neo4jExportService(store);
         var result = await service.OpenZipAsync(jobId, ct);
         if (result is not Neo4jExportResult.Ready ready)
             throw new InvalidOperationException($"Neo4j export was not ready for job {jobId}.");

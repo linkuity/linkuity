@@ -16,15 +16,10 @@ public sealed class LocalBatchRunnerIngestParallelismTests : IDisposable
         try { if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
-    }
-
     [Fact]
     public async Task Metadata_WithNonNumericIngestParallelism_ExitsTwo()
     {
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         var metadataPath = Path.Combine(_dir, "meta.json");
 
         Assert.Equal(0, await runner.RunAsync(

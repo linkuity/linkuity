@@ -46,7 +46,7 @@ public sealed class LocalBatchRunnerProfilesTests : IDisposable
             "id,source,organization_name,domain_name,email,phone\n" +
             "mkt-010,Marketing,Acme Industries,acme.com,hello@acme.com,+1-415-555-0100\n");
 
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         Assert.Equal(0, await runner.RunAsync(
             ["project", "create", "--metadata", metadataPath, "--name", "Org MDM", "--content-type", "organization"],
@@ -121,7 +121,7 @@ public sealed class LocalBatchRunnerProfilesTests : IDisposable
             "id,source,organization_name,domain_name,email,phone\n" +
             "mkt-010,Marketing,Acme Industries,acme.com,hello@acme.com,+1-415-555-0100\n");
 
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         var (project, source) = await CreateProjectAndSourceAsync(runner, metadataPath, "organization");
 
         await IngestAsync(runner, metadataPath, project, source, seedCsv, profilesPath: null);
@@ -155,7 +155,7 @@ public sealed class LocalBatchRunnerProfilesTests : IDisposable
             "id,source,organization_name,domain_name,email,phone\n" +
             "web-020,Web,Acme Industries,acme.io,team@acme.io,+1-650-555-0199\n");
 
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         var (project, source) = await CreateProjectAndSourceAsync(runner, metadataPath, "organization");
 
         await IngestAsync(runner, metadataPath, project, source, seedCsv, overridePath);
@@ -207,10 +207,5 @@ public sealed class LocalBatchRunnerProfilesTests : IDisposable
     {
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }
