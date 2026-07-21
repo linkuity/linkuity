@@ -15,7 +15,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Linkuity.Api\Linkuity.Api.csproj" />
-    <ProjectReference Include="..\Linkuity.Worker\Linkuity.Worker.csproj" />
   </ItemGroup>
 
 </Project>
