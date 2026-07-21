@@ -36,7 +36,7 @@ public static class RunEndpoints
         Linkuity.Core.Interfaces.IArtifactStore store,
         CancellationToken ct)
     {
-        if (file.ContentType is not "text/csv")
+        if (file.ContentType is null || !file.ContentType.StartsWith("text/csv", StringComparison.OrdinalIgnoreCase))
             return Results.BadRequest("File must be text/csv.");
         if (file.Length > MaxInputBytes)
             return Results.BadRequest(
@@ -57,8 +57,15 @@ public static class RunEndpoints
             return Results.BadRequest($"contentType must be one of: {string.Join(", ", invalid.Accepted)}");
 
         BatchRunResult result;
-        await using (var input = file.OpenReadStream())
+        try
+        {
+            await using var input = file.OpenReadStream();
             result = await runService.RunAsync(request, input, ct);
+        }
+        catch (Exception ex) when (ex is CsvHelper.CsvHelperException or FormatException or InvalidOperationException)
+        {
+            return Results.BadRequest($"Could not process input: {ex.Message}");
+        }
 
         var golden = await store.DownloadAsync($"{result.JobId}/golden_records.csv", ct);
         return Results.Stream(golden, "text/csv", "golden-records.csv");
