@@ -88,7 +88,7 @@ public sealed class LocalBatchRunnerReadBackTests : IDisposable
         var metadataPath = Path.Combine(_root, "metadata.json");
         var artifactRoot = Path.Combine(_root, "artifacts");
         var jobId = Guid.NewGuid();
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Readback MDM", "--content-type", "person"], CancellationToken.None);
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
@@ -158,10 +158,5 @@ public sealed class LocalBatchRunnerReadBackTests : IDisposable
             00000000-0000-0000-0000-000000000001,2,crm-001|mkt-001,alice@example.com,Alice
             """,
             Encoding.UTF8);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

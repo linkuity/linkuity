@@ -5,9 +5,8 @@ namespace Linkuity.Cli.Tests;
 
 public class LocalBatchRunnerExplainTests
 {
-    // Private-nested NoOpMatchingProcess per the existing per-test-file pattern.
     private static LocalBatchRunner NewRunner()
-        => new(new NoOpMatchingProcess());
+        => new();
 
     private static async Task<string> CaptureAsync(LocalBatchRunner runner, string[] args)
     {
@@ -134,10 +133,5 @@ public class LocalBatchRunnerExplainTests
         // The review-band pair now appears with decision "review".
         Assert.Contains("ERP-9", output);
         Assert.Contains("review", output);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

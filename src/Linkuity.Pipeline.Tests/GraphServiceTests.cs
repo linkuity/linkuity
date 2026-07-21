@@ -1,6 +1,6 @@
 using Linkuity.Pipeline;
 
-namespace Linkuity.Worker.Tests;
+namespace Linkuity.Pipeline.Tests;
 
 public class GraphServiceTests
 {

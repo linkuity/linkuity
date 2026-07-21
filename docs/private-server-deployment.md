@@ -1,8 +1,11 @@
 # Private Server Deployment
 
-This guide runs Linkuity's first private-server mode on a VM or internal server with Docker Compose. It uses the local batch runner, local filesystem artifacts, and bind-mounted data directories. It does not require Azure, Azurite, Azure Service Bus, Azure Storage, or .NET Aspire.
+This guide runs Linkuity's first private-server mode on a VM or internal server with Docker Compose. It uses the local batch runner, local filesystem artifacts, and bind-mounted data directories. It does not require Azure, Azurite, Azure Storage, or .NET Aspire.
 
-The current private-server path is a one-shot batch job runner. The HTTP API now defaults to local filesystem artifacts, but server-side local dispatch is still a placeholder; the Azure-backed API and queue workers remain an opt-in compatibility and deployment path.
+The current private-server path is a one-shot batch job runner. The HTTP API also
+completes a batch match synchronously via `POST /run` (capped at 400 KiB of input; use
+the CLI for larger inputs) and defaults to local filesystem artifacts; the Azure Blob
+Storage artifact-store adapter remains an opt-in compatibility and deployment path.
 
 ## Prerequisites
 
@@ -120,6 +123,6 @@ If job artifacts are temporary in your environment, you may delete old `LINKUITY
 
 ## Aspire And Azure Emulators
 
-.NET Aspire remains optional developer tooling for the current Azure-emulator compatibility stack. It is useful when working on the existing API, Azure Blob, and Azure Service Bus flow, but it is not part of the default private-server deployment described here.
+.NET Aspire remains optional developer tooling for the current Azure Blob Storage compatibility path: it orchestrates the API plus an Azurite blob emulator. It is not part of the default private-server deployment described here.
 
-The Aspire profile sets `Linkuity__RuntimeMode=Azure` for the .NET API and worker. The default private-server Compose file starts no Azurite container, no Azure Service Bus emulator, and no Azure worker services.
+The Aspire profile sets `Linkuity__RuntimeMode=Azure` for the API. The default private-server Compose file starts no Azurite container.

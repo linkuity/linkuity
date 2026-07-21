@@ -12,7 +12,7 @@ public sealed class LocalBatchRunnerTests : IDisposable
     {
         var configPath = WriteConfig();
         var outputPath = Path.Combine(_root, "output");
-        var runner = new LocalBatchRunner(new FakeMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         var exitCode = await runner.RunAsync(
             [
@@ -39,7 +39,7 @@ public sealed class LocalBatchRunnerTests : IDisposable
             ]
             """);
         var outputPath = Path.Combine(_root, "invalid-output");
-        var runner = new LocalBatchRunner(new FakeMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         var exitCode = await runner.RunAsync(
             [
@@ -60,7 +60,7 @@ public sealed class LocalBatchRunnerTests : IDisposable
         var inputPath = WriteInputCsv();
         var configPath = WriteConfig(contentType: "unsupported");
         var outputPath = Path.Combine(_root, "invalid-content-type-output");
-        var runner = new LocalBatchRunner(new FakeMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         var exitCode = await runner.RunAsync(
             [
@@ -81,7 +81,7 @@ public sealed class LocalBatchRunnerTests : IDisposable
         var inputPath = WriteInputCsv();
         var configPath = WriteConfig();
         var outputPath = Path.Combine(_root, "output");
-        var runner = new LocalBatchRunner(new FakeMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         var exitCode = await runner.RunAsync(
             [
@@ -115,7 +115,7 @@ public sealed class LocalBatchRunnerTests : IDisposable
         var inputPath = WriteInputCsv();
         var configPath = WriteConfig();
         var outputPath = Path.Combine(_root, "neo4j-output");
-        var runner = new LocalBatchRunner(new FakeMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         var exitCode = await runner.RunAsync(
             [
@@ -208,21 +208,5 @@ public sealed class LocalBatchRunnerTests : IDisposable
         }
 
         throw new FileNotFoundException($"Could not find repository file {Path.Combine(pathParts)}.");
-    }
-
-    private sealed class FakeMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct)
-        {
-            var matchesPath = Path.Combine(artifactRoot, jobId, "matches.csv");
-            Directory.CreateDirectory(Path.GetDirectoryName(matchesPath)!);
-            return File.WriteAllTextAsync(
-                matchesPath,
-                """
-                left_id,right_id,similarity,fuzzy_similarity
-                1,2,0.99,0.99
-                """,
-                ct);
-        }
     }
 }

@@ -14,7 +14,7 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
         var metadataPath = Path.Combine(_root, "metadata.json");
         var artifactRoot = Path.Combine(_root, "artifacts");
         var jobId = Guid.NewGuid();
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Customer MDM", "--content-type", "person"], CancellationToken.None);
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
@@ -56,7 +56,7 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
         var metadataPath = Path.Combine(_root, "metadata-policy.json");
         var policyPath = Path.Combine(_root, "policy.json");
         var updatedPolicyPath = Path.Combine(_root, "updated-policy.json");
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
         Directory.CreateDirectory(_root);
         await File.WriteAllTextAsync(
             policyPath,
@@ -140,7 +140,7 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
         var inputPath = Path.Combine(_root, "incremental.csv");
         var reviewPath = Path.Combine(_root, "review.csv");
         var jobId = Guid.NewGuid();
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Customer MDM", "--content-type", "person"], CancellationToken.None);
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
@@ -250,10 +250,5 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
             00000000-0000-0000-0000-000000000001,2,crm-001|mkt-001,alice@example.com,Alice
             """,
             Encoding.UTF8);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

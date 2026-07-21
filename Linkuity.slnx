@@ -25,7 +25,5 @@
     <Project Path="src/Linkuity.Pipeline/Linkuity.Pipeline.csproj" />
     <Project Path="src/Linkuity.ServiceDefaults/Linkuity.ServiceDefaults.csproj" />
     <Project Path="src/Linkuity.TestSupport/Linkuity.TestSupport.csproj" />
-    <Project Path="src/Linkuity.Worker.Tests/Linkuity.Worker.Tests.csproj" />
-    <Project Path="src/Linkuity.Worker/Linkuity.Worker.csproj" />
   </Folder>
 </Solution>

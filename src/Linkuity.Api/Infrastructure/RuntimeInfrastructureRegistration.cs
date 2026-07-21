@@ -42,8 +42,17 @@ public static class RuntimeInfrastructureRegistration
                 {
                     RootPath = artifactRoot
                 }));
-            services.AddSingleton<IJobDispatcher, NoOpJobDispatcher>();
         }
+
+        // Forward IArtifactStore to the same instance registered for IBlobStore
+        // (MS DI does not up-cast IBlobStore -> IArtifactStore).
+        services.AddSingleton<IArtifactStore>(sp => sp.GetRequiredService<IBlobStore>());
+        services.AddSingleton<Linkuity.Pipeline.CsvNormalizationService>();
+        services.AddSingleton<Linkuity.Pipeline.GraphService>();
+        services.AddSingleton<Linkuity.Pipeline.GoldenRecordService>();
+        services.AddSingleton<Linkuity.Pipeline.PostProcessingService>();
+        services.AddSingleton<Linkuity.Pipeline.BatchMatchingService>();
+        services.AddSingleton<Linkuity.Pipeline.BatchRunService>();
 
         return services;
     }

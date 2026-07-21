@@ -9,13 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Azure.ServiceBus" Version="13.2.4" />
     <PackageReference Include="Aspire.Hosting.Azure.Storage" Version="13.2.4" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Linkuity.Api\Linkuity.Api.csproj" />
-    <ProjectReference Include="..\Linkuity.Worker\Linkuity.Worker.csproj" />
   </ItemGroup>
 
 </Project>

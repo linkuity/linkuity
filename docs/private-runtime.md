@@ -61,13 +61,17 @@ On top of that, the current codebase supports durable local MDM metadata (JSON-b
 first-class **PostgreSQL** backend), incremental ingest (`linkuity ingest-incremental`),
 durable project merge policy, and a Docker Compose private-server batch path.
 
-An Azure-compatible batch API is also available when `Linkuity:RuntimeMode=Azure`
-(`POST /jobs`, `/upload`, `/upload-complete`, `/start`, then `GET /jobs/{id}`). **Note:**
-this Azure API path does not currently score matches — jobs dispatched in Azure mode are
-normalized and queued but do not progress past `Processing`, because there is no matching
-consumer on that path. Use `linkuity run` or `linkuity ingest-incremental` for an
-end-to-end match. Local development can still exercise the Azure adapter wiring with .NET
-Aspire, Azurite, and the Azure Service Bus emulator, without an Azure account.
+The HTTP API also completes a batch match end to end today, synchronously: `POST /run`
+takes a multipart request (a `config` JSON part plus a `file` CSV part) and streams back
+the merged golden records as `text/csv`, sharing the same normalize -> match -> cluster ->
+merge pipeline (`BatchRunService`) that the CLI uses — no polling, no separate dispatch
+step. Because within-batch matching is O(n^2)-ish, synchronous input is capped at 400 KiB;
+larger inputs get a 400 response with guidance to use the CLI instead. An asynchronous
+variant of this endpoint (for larger inputs) is planned as an additive future addition —
+it does not exist today. Azure Blob Storage remains available as an artifact-store adapter
+when `Linkuity:RuntimeMode=Azure` — it changes only where job artifacts are read and
+written, not how matching runs. Local development can still exercise the Azure Blob
+adapter wiring with .NET Aspire and Azurite, without an Azure account.
 
 ## Scale And Performance
 
@@ -103,9 +107,9 @@ Planned work:
 Current limits:
 
 - The local CLI and Docker Compose private-server batch path are the default private-runtime paths.
-- The HTTP API defaults to local filesystem artifacts, but local server-side dispatch is still a placeholder, and the Azure-mode path has no matching consumer — so the HTTP API has no working end-to-end match path today. Use the CLI for end-to-end runs.
-- Azure Blob Storage and Azure Service Bus are available through `Linkuity.Infrastructure.Azure` when `Linkuity:RuntimeMode=Azure`.
-- Aspire remains optional Azure-emulator tooling for adapter compatibility work.
+- The HTTP API completes a batch match end to end via synchronous `POST /run`, but is capped at 400 KiB of input because within-batch matching is O(n^2)-ish; larger inputs need the CLI. An asynchronous variant for larger inputs is planned, not yet implemented.
+- Azure Blob Storage is available as an artifact-store adapter through `Linkuity.Infrastructure.Azure` when `Linkuity:RuntimeMode=Azure`.
+- Aspire remains optional tooling for API + Azurite blob-emulator development.
 - Durable MDM metadata runs on either a JSON-backed local store (best for samples, evaluation, and small projects) or the PostgreSQL backend (recommended beyond a few tens of thousands of records; `--metadata-store postgres`).
 
 ## Azure Compatibility
@@ -113,7 +117,6 @@ Current limits:
 Azure support is useful for teams that want it. Azure is optional infrastructure:
 
 - Azure Blob Storage is one artifact-store adapter in `Linkuity.Infrastructure.Azure`.
-- Azure Service Bus is one dispatch and worker-transport adapter in `Linkuity.Infrastructure.Azure`.
 - Azure Container Apps is one deployment option.
 
 The private runtime does not require Azure connection strings, Azure emulators, or Azure deployment resources for the default path.

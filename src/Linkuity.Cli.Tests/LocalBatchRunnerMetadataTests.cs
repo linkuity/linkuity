@@ -12,7 +12,7 @@ public sealed class LocalBatchRunnerMetadataTests : IDisposable
     public async Task MetadataCommands_CreateProjectSourceAndBatchWithoutChangingRunCommand()
     {
         var metadataPath = Path.Combine(_root, "metadata.json");
-        var runner = new LocalBatchRunner(new NoOpMatchingProcess());
+        var runner = new LocalBatchRunner();
 
         Assert.Equal(0, await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Customer MDM", "--content-type", "person"], CancellationToken.None));
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
@@ -33,10 +33,5 @@ public sealed class LocalBatchRunnerMetadataTests : IDisposable
     {
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
-    }
-
-    private sealed class NoOpMatchingProcess : IMatchingProcess
-    {
-        public Task RunAsync(string artifactRoot, string jobId, CancellationToken ct) => Task.CompletedTask;
     }
 }

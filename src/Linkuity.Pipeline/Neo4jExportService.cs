@@ -7,7 +7,7 @@ using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Core.Vocabulary;
 
-namespace Linkuity.Api.Services;
+namespace Linkuity.Pipeline;
 
 public class Neo4jExportService
 {

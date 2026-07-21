@@ -13,10 +13,8 @@ public sealed class RuntimeModeStartupTests
         var services = BuildServices(new Dictionary<string, string?>());
 
         var blobs = services.GetRequiredService<IBlobStore>();
-        var dispatcher = services.GetRequiredService<IJobDispatcher>();
 
         Assert.DoesNotContain("Azure", blobs.GetType().FullName, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Azure", dispatcher.GetType().FullName, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -26,18 +24,12 @@ public sealed class RuntimeModeStartupTests
         {
             ["Linkuity:RuntimeMode"] = "Azure",
             ["BlobStorage:ConnectionString"] = "UseDevelopmentStorage=true",
-            ["BlobStorage:ContainerName"] = "linkuity-jobs",
-            ["AzureServiceBus:ConnectionString"] = "Endpoint=sb://localhost/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=fake",
-            ["AzureServiceBus:SmallJobQueueName"] = "linkuity-jobs-small",
-            ["AzureServiceBus:LargeJobQueueName"] = "linkuity-jobs-large",
-            ["AzureServiceBus:LargeJobThreshold"] = "10000"
+            ["BlobStorage:ContainerName"] = "linkuity-jobs"
         });
 
         var blobs = services.GetRequiredService<IBlobStore>();
-        var dispatcher = services.GetRequiredService<IJobDispatcher>();
 
         Assert.Contains("Azure", blobs.GetType().FullName, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Azure", dispatcher.GetType().FullName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static ServiceProvider BuildServices(Dictionary<string, string?> settings)

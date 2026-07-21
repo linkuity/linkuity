@@ -2,12 +2,12 @@ using System.Globalization;
 using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
+using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
-using Linkuity.Infrastructure.Local;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 
-namespace Linkuity.Cli;
+namespace Linkuity.Pipeline;
 
 /// <summary>
 /// Native replacement for the Python batch matcher. Reads a job's normalized records,
@@ -16,24 +16,28 @@ namespace Linkuity.Cli;
 /// records; it reads only left_id/right_id and applies no threshold, so the match cut
 /// lives here.
 /// </summary>
-public sealed class NativeMatchingProcess : IMatchingProcess
+public sealed class BatchMatchingService
 {
-    public async Task RunAsync(string artifactRoot, string jobId, CancellationToken ct)
-    {
-        var store = new FileSystemArtifactStore(
-            new FileSystemArtifactStoreOptions { RootPath = artifactRoot });
+    private readonly IArtifactStore _store;
 
-        var job = await store.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct)
+    public BatchMatchingService(IArtifactStore store)
+    {
+        _store = store;
+    }
+
+    public async Task RunAsync(string jobId, CancellationToken ct)
+    {
+        var job = await _store.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct)
             ?? throw new InvalidOperationException($"metadata.json for job {jobId} is empty.");
 
         List<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows;
-        await using (var normalized = await store.DownloadAsync($"{jobId}/normalized.csv", ct))
+        await using (var normalized = await _store.DownloadAsync($"{jobId}/normalized.csv", ct))
             rows = ReadRows(normalized);
 
         var matchesCsv = BuildMatchesCsv(rows, job.Configuration);
 
         using var outStream = new MemoryStream(Encoding.UTF8.GetBytes(matchesCsv));
-        await store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);
+        await _store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);
     }
 
     public static string BuildMatchesCsv(
