@@ -17,7 +17,6 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddRuntimeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JobService>();
-builder.Services.AddScoped<CsvNormalizationService>();
 builder.Services.AddScoped<Neo4jExportService>();
 
 var app = builder.Build();

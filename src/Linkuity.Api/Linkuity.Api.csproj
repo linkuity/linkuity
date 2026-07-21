@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Linkuity.Infrastructure.Azure\Linkuity.Infrastructure.Azure.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Local\Linkuity.Infrastructure.Local.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Postgres\Linkuity.Infrastructure.Postgres.csproj" />
+    <ProjectReference Include="..\Linkuity.Pipeline\Linkuity.Pipeline.csproj" />
     <ProjectReference Include="..\Linkuity.ServiceDefaults\Linkuity.ServiceDefaults.csproj" />
   </ItemGroup>
 
