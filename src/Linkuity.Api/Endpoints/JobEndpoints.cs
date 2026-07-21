@@ -1,6 +1,7 @@
 using Linkuity.Api.Services;
 using Linkuity.Core.Models;
 using Linkuity.Core.Validation;
+using Linkuity.Pipeline;
 
 namespace Linkuity.Api.Endpoints;
 

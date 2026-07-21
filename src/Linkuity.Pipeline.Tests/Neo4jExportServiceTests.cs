@@ -1,25 +1,32 @@
 using System.IO.Compression;
-using Linkuity.Api.Services;
-using Linkuity.Api.Tests.TestDoubles;
 using Linkuity.Core.Models;
+using Linkuity.Infrastructure.Local;
 
-namespace Linkuity.Api.Tests.Services;
+namespace Linkuity.Pipeline.Tests;
 
-public class Neo4jExportServiceTests
+public class Neo4jExportServiceTests : IDisposable
 {
+    private readonly string _rootPath = Path.Combine(Path.GetTempPath(), $"linkuity-neo4jexport-{Guid.NewGuid():N}");
+
     private static readonly MatchConfiguration DefaultConfig = new()
     {
         ContentType = "person",
         Fields = new[] { new Field { Name = "email", SemanticType = SemanticFieldType.Email } }
     };
 
-    private static (Neo4jExportService service, InMemoryBlobStore blobs) Build()
+    public void Dispose()
     {
-        var blobs = new InMemoryBlobStore();
+        if (Directory.Exists(_rootPath))
+            Directory.Delete(_rootPath, recursive: true);
+    }
+
+    private (Neo4jExportService service, FileSystemArtifactStore blobs) Build()
+    {
+        var blobs = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _rootPath });
         return (new Neo4jExportService(blobs), blobs);
     }
 
-    private static async Task SeedJobAsync(InMemoryBlobStore blobs, Guid jobId, JobState state, MatchConfiguration? config = null)
+    private static async Task SeedJobAsync(FileSystemArtifactStore blobs, Guid jobId, JobState state, MatchConfiguration? config = null)
     {
         var job = new Job
         {
