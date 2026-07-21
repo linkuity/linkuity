@@ -16,8 +16,6 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
         {
             services.RemoveAll<IBlobStore>();
             services.AddSingleton<IBlobStore, InMemoryBlobStore>();
-            services.RemoveAll<IJobDispatcher>();
-            services.AddSingleton<IJobDispatcher, CapturingJobDispatcher>();
         });
     }
 }

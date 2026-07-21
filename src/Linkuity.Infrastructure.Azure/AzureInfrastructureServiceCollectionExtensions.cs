@@ -14,9 +14,7 @@ public static class AzureInfrastructureServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.Configure<BlobStorageOptions>(configuration.GetSection("BlobStorage"));
-        services.Configure<ServiceBusOptions>(configuration.GetSection("AzureServiceBus"));
         services.AddSingleton<IBlobStore, AzureBlobStore>();
-        services.AddSingleton<IJobDispatcher, AzureServiceBusJobDispatcher>();
         return services;
     }
 

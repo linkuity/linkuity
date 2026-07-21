@@ -42,7 +42,6 @@ public static class RuntimeInfrastructureRegistration
                 {
                     RootPath = artifactRoot
                 }));
-            services.AddSingleton<IJobDispatcher, NoOpJobDispatcher>();
         }
 
         // Forward IArtifactStore to the same instance registered for IBlobStore
