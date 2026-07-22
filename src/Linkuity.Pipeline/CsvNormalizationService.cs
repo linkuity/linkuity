@@ -14,12 +14,6 @@ public class CsvNormalizationService
 
     public CsvNormalizationService(IBlobStore blobs) => _blobs = blobs;
 
-    public Task<int> NormalizeAsync(Guid jobId, MatchConfiguration config, CancellationToken ct = default)
-    {
-        var fieldMap = config.Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
-        return NormalizeAsync(jobId, fieldMap, ct);
-    }
-
     public Task<int> NormalizeAsync(Guid jobId, MatchingProfile profile, CancellationToken ct = default)
     {
         var fieldMap = profile.Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);

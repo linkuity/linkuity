@@ -1,6 +1,7 @@
 using System.Text;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Matching.Profiles;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Linkuity.Pipeline.Tests;
@@ -19,23 +20,11 @@ public sealed class BatchRunServiceTests : IDisposable
     public async Task RunAsync_ProducesCompleteJobAndGoldenRecords()
     {
         var store = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _root });
-        var request = new CreateJobRequest
-        {
-            Configuration = new MatchConfiguration
-            {
-                ContentType = "person",
-                Fields =
-                [
-                    new Field { Name = "first_name", SemanticType = SemanticFieldType.FirstName },
-                    new Field { Name = "last_name", SemanticType = SemanticFieldType.LastName },
-                    new Field { Name = "email", SemanticType = SemanticFieldType.Email }
-                ]
-            }
-        };
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
         var input = "first_name,last_name,email,id\nAda,Lovelace,ada@x.com,a\nAda,Lovelace,ada@x.com,b\n";
         using var csv = new MemoryStream(Encoding.UTF8.GetBytes(input));
 
-        var result = await Build(store).RunAsync(request, csv, CancellationToken.None);
+        var result = await Build(store).RunAsync(profile, merge: null, csv, CancellationToken.None);
 
         var job = await store.ReadJsonAsync<Job>($"{result.JobId}/metadata.json");
         Assert.NotNull(job);
@@ -48,7 +37,7 @@ public sealed class BatchRunServiceTests : IDisposable
     {
         var store = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _root });
         var service = Build(store);
-        var profile = Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.CreatePersonProfile();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
         var csv = new MemoryStream(Encoding.UTF8.GetBytes(
             "id,source,first_name,email\n1,CRM,Al,a@example.com\n2,Marketing,Al,a@example.com\n"));
 

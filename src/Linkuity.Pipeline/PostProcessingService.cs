@@ -28,15 +28,6 @@ public class PostProcessingService
         _logger = logger;
     }
 
-    public async Task ProcessAsync(string jobId, CancellationToken ct = default)
-    {
-        var job = await _artifactStore.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct)
-            ?? throw new InvalidOperationException($"metadata.json for job {jobId} is empty");
-        var sourceField = job.Configuration?.Fields
-            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name;
-        await ProcessCoreAsync(jobId, job.MergeConfiguration, sourceField, ct);
-    }
-
     public Task ProcessAsync(string jobId, MatchingProfile profile, MergeConfiguration? merge, CancellationToken ct = default)
     {
         var sourceField = profile.Fields

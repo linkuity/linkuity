@@ -34,6 +34,26 @@ public class CsvNormalizationServiceTests : IDisposable
         return await reader.ReadToEndAsync();
     }
 
+    // NormalizeAsync only reads profile.Fields (name -> semantic type), so a minimal
+    // single-field profile carries the same normalization intent the old single-field
+    // config-based overload did. `roles` defaults to Matchable; pass FieldRole.None to
+    // express "excluded from matching, still normalized".
+    private static MatchingProfile SingleFieldProfile(
+        string name, SemanticFieldType type, FieldRole roles = FieldRole.Matchable) => new()
+    {
+        ContentType = "person",
+        Fields = [new ProfileField { Name = name, SemanticType = type, Roles = roles }],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.90,
+        ReviewThreshold = 0.75
+    };
+
     [Fact]
     public async Task NormalizeAsync_WritesNormalizedCsvBlob()
     {
@@ -41,11 +61,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "email\nuser@EXAMPLE.COM");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         Assert.True(await blobs.ExistsAsync($"{jobId}/normalized.csv"));
     }
@@ -57,11 +73,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "email,notes\nuser@EXAMPLE.COM,some note");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.StartsWith("email,notes", output);
@@ -74,11 +86,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "email\nUser@EXAMPLE.COM");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("user@example.com", output);
@@ -91,11 +99,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "email,notes\nuser@example.com,Some Note Value");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("Some Note Value", output);
@@ -108,11 +112,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "phone\n(800) 555-0100\nnot-a-phone");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "phone", SemanticType = SemanticFieldType.Phone }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("phone", SemanticFieldType.Phone));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("+18005550100", output);
@@ -126,11 +126,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "Email\nUser@EXAMPLE.COM");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("user@example.com", output);
@@ -143,11 +139,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "email\na@b.com\nc@d.com\ne@f.com");
 
-        var count = await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "email", SemanticType = SemanticFieldType.Email }]
-        });
+        var count = await service.NormalizeAsync(jobId, SingleFieldProfile("email", SemanticFieldType.Email));
 
         Assert.Equal(3, count);
     }
@@ -159,16 +151,7 @@ public class CsvNormalizationServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await WriteCsvAsync(blobs, jobId, "phone\n(800) 555-0100");
 
-        await service.NormalizeAsync(jobId, new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field
-            {
-                Name = "phone",
-                SemanticType = SemanticFieldType.Phone,
-                ParticipatesInMatching = false
-            }]
-        });
+        await service.NormalizeAsync(jobId, SingleFieldProfile("phone", SemanticFieldType.Phone, FieldRole.None));
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("+18005550100", output);

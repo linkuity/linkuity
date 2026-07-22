@@ -7,15 +7,28 @@ namespace Linkuity.Pipeline.Tests;
 
 public sealed class BatchMatchingServiceTests
 {
-    private static MatchConfiguration PersonConfig() => new()
+    // Mirrors what the retired config-to-profile factory used to produce for a
+    // person config with first_name/last_name/email: same roles/evaluator/weight as
+    // the built-in person profile's templates for those semantic types, remapped
+    // onto blocking-linear retrieval (as BuildMatchesCsv always forces).
+    private static MatchingProfile PersonProfile() => new()
     {
         ContentType = "person",
         Fields =
         [
-            new Field { Name = "first_name", SemanticType = SemanticFieldType.FirstName },
-            new Field { Name = "last_name", SemanticType = SemanticFieldType.LastName },
-            new Field { Name = "email", SemanticType = SemanticFieldType.Email }
-        ]
+            new ProfileField { Name = "first_name", SemanticType = SemanticFieldType.FirstName, Roles = FieldRole.Searchable | FieldRole.Matchable, SimilarityEvaluator = "fuzzy", Weight = 1.0 },
+            new ProfileField { Name = "last_name", SemanticType = SemanticFieldType.LastName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "fuzzy", Weight = 2.0 },
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 3.0 }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value", "token-name"],
+        CandidateRetrievalStrategy = "blocking-linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.90,
+        ReviewThreshold = 0.75
     };
 
     private static (string, IReadOnlyDictionary<string, string>) Row(
@@ -34,7 +47,7 @@ public sealed class BatchMatchingServiceTests
     [Fact]
     public void BuildMatchesCsv_HasExpectedHeader()
     {
-        var csv = BatchMatchingService.BuildMatchesCsv([Row("a", "Ada", "Lovelace", "ada@x.com")], PersonConfig());
+        var csv = BatchMatchingService.BuildMatchesCsv([Row("a", "Ada", "Lovelace", "ada@x.com")], PersonProfile());
         var header = ParseCsv(csv)[0];
         Assert.Equal(["left_id", "right_id", "similarity", "fuzzy_similarity"], header);
     }
@@ -47,7 +60,7 @@ public sealed class BatchMatchingServiceTests
             Row("a", "Ada", "Lovelace", "ada@x.com"),
             Row("b", "Ada", "Lovelace", "ada@x.com")
         };
-        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonConfig());
+        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonProfile());
         var dataRows = ParseCsv(csv).Skip(1).ToList();
         var edge = Assert.Single(dataRows);
         Assert.Equal(new HashSet<string> { "a", "b" }, new HashSet<string> { edge[0], edge[1] });
@@ -61,7 +74,7 @@ public sealed class BatchMatchingServiceTests
             Row("a", "Ada", "Lovelace", "ada@x.com"),
             Row("b", "Zed", "Quixote", "zed@y.com")
         };
-        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonConfig());
+        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonProfile());
         Assert.Empty(ParseCsv(csv).Skip(1));
     }
 
@@ -73,7 +86,7 @@ public sealed class BatchMatchingServiceTests
             Row("a", "Ada", "Lovelace", "ada@x.com"),
             Row("b", "Ada", "Lovelace", "ada@x.com")
         };
-        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonConfig());
+        var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonProfile());
         foreach (var edge in ParseCsv(csv).Skip(1))
             Assert.NotEqual(edge[0], edge[1]);
     }
@@ -105,23 +118,12 @@ public sealed class BatchMatchingServiceRunTests : IDisposable
     {
         var store = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _root });
         var jobId = Guid.NewGuid().ToString();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields =
-            [
-                new Field { Name = "first_name", SemanticType = SemanticFieldType.FirstName },
-                new Field { Name = "last_name", SemanticType = SemanticFieldType.LastName },
-                new Field { Name = "email", SemanticType = SemanticFieldType.Email }
-            ]
-        };
-        await store.WriteJsonAsync($"{jobId}/metadata.json",
-            new Job { Id = Guid.Parse(jobId), State = JobState.Processing, CreatedAt = DateTimeOffset.UtcNow, Configuration = config, AutoStart = false });
         var normalized = "id,first_name,last_name,email\na,Ada,Lovelace,ada@x.com\nb,Ada,Lovelace,ada@x.com\n";
         using (var s = new MemoryStream(Encoding.UTF8.GetBytes(normalized)))
             await store.UploadAsync($"{jobId}/normalized.csv", s, "text/csv");
 
-        await new BatchMatchingService(store).RunAsync(jobId, CancellationToken.None);
+        await new BatchMatchingService(store).RunAsync(
+            jobId, DefaultMatchingProfileProvider.CreatePersonProfile(), CancellationToken.None);
 
         await using var outStream = await store.DownloadAsync($"{jobId}/matches.csv");
         using var reader = new StreamReader(outStream);

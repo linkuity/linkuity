@@ -1,6 +1,7 @@
 using System.Text;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Matching.Profiles;
 using Linkuity.Pipeline;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -29,8 +30,13 @@ public class PostProcessingServiceTests : IDisposable
             1,2,0.97
             """);
         var service = CreateService(store);
+        var profile = PersonWithSourceProfile();
+        var merge = new MergeConfiguration
+        {
+            MergeFields = [new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing"] }]
+        };
 
-        await service.ProcessAsync(jobId.ToString());
+        await service.ProcessAsync(jobId.ToString(), profile, merge, CancellationToken.None);
 
         Assert.True(await store.ExistsAsync($"{jobId}/golden_records.csv"));
         await using var goldenStream = await store.DownloadAsync($"{jobId}/golden_records.csv");
@@ -57,7 +63,8 @@ public class PostProcessingServiceTests : IDisposable
             """);
         var service = CreateService(store);
 
-        await Assert.ThrowsAsync<FileNotFoundException>(() => service.ProcessAsync(jobId.ToString()));
+        await Assert.ThrowsAsync<FileNotFoundException>(
+            () => service.ProcessAsync(jobId.ToString(), PersonWithSourceProfile(), merge: null, CancellationToken.None));
 
         var metadata = await store.ReadJsonAsync<Job>($"{jobId}/metadata.json");
         Assert.NotNull(metadata);
@@ -87,7 +94,7 @@ public class PostProcessingServiceTests : IDisposable
 
         // Person profile has no SourceIdentifier field; organization profile declares
         // `source` as SourceIdentifier, which is what this test needs to exercise.
-        var profile = Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.CreateOrganizationProfile();
+        var profile = DefaultMatchingProfileProvider.CreateOrganizationProfile();
         var merge = new MergeConfiguration
         {
             MergeFields = [new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing"] }]
@@ -134,23 +141,29 @@ public class PostProcessingServiceTests : IDisposable
             State = JobState.MatchingComplete,
             CreatedAt = DateTimeOffset.Parse("2026-06-12T12:00:00Z"),
             AutoStart = true,
-            RecordCount = 3,
-            Configuration = new MatchConfiguration
-            {
-                ContentType = "person",
-                Fields =
-                [
-                    new Field { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier },
-                    new Field { Name = "name", SemanticType = SemanticFieldType.FullName },
-                    new Field { Name = "email", SemanticType = SemanticFieldType.Email }
-                ]
-            },
-            MergeConfiguration = new MergeConfiguration
-            {
-                MergeFields =
-                [
-                    new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing"] }
-                ]
-            }
+            RecordCount = 3
         };
+
+    // Mirrors the person profile shape the old job configuration in CreateJob used to
+    // carry (source/name/email), so ProcessAsync still resolves "source" as the
+    // SourceIdentifier field for merge priority.
+    private static MatchingProfile PersonWithSourceProfile() => new()
+    {
+        ContentType = "person",
+        Fields =
+        [
+            new ProfileField { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier, Roles = FieldRole.None },
+            new ProfileField { Name = "name", SemanticType = SemanticFieldType.FullName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "fuzzy", Weight = 1.5 },
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 3.0 }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value", "token-name"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.90,
+        ReviewThreshold = 0.75
+    };
 }
