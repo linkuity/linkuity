@@ -43,6 +43,23 @@ public sealed class BatchRunServiceTests : IDisposable
         Assert.True(await store.ExistsAsync($"{result.JobId}/golden_records.csv"));
     }
 
+    [Fact]
+    public async Task RunAsync_WithProfile_ProducesGoldenRecords()
+    {
+        var store = new FileSystemArtifactStore(new FileSystemArtifactStoreOptions { RootPath = _root });
+        var service = Build(store);
+        var profile = Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.CreatePersonProfile();
+        var csv = new MemoryStream(Encoding.UTF8.GetBytes(
+            "id,source,first_name,email\n1,CRM,Al,a@example.com\n2,Marketing,Al,a@example.com\n"));
+
+        var result = await service.RunAsync(profile, merge: null, csv, CancellationToken.None);
+
+        await using var goldenStream = await store.DownloadAsync($"{result.JobId}/golden_records.csv");
+        using var reader = new StreamReader(goldenStream, Encoding.UTF8);
+        var golden = await reader.ReadToEndAsync();
+        Assert.Contains("1|2", golden); // the two rows merged into one golden record
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
