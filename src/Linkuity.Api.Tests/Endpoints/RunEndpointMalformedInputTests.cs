@@ -13,11 +13,7 @@ public sealed class RunEndpointMalformedInputTests : IClassFixture<TestWebApplic
     {
         var client = _factory.CreateClient();
         using var form = new MultipartFormDataContent();
-        form.Add(
-            new StringContent("{\"configuration\":{\"contentType\":\"person\",\"fields\":[" +
-                "{\"name\":\"source\",\"semanticType\":\"source_identifier\"}," +
-                "{\"name\":\"first_name\",\"semanticType\":\"first_name\"}]}}"),
-            "config");
+        form.Add(new StringContent("person"), "profile");
 
         // Unterminated quoted field: CsvHelper's default RFC4180 mode hits end-of-file
         // while still inside a quoted field and throws a CsvHelperException.

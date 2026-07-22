@@ -13,7 +13,7 @@ public sealed class RunEndpointLimitTests : IClassFixture<TestWebApplicationFact
     {
         var client = _factory.CreateClient();
         using var form = new MultipartFormDataContent();
-        form.Add(new StringContent("{\"configuration\":{\"contentType\":\"person\",\"fields\":[]}}"), "config");
+        form.Add(new StringContent("person"), "profile");
         var big = new byte[Linkuity.Api.Endpoints.RunEndpoints.MaxInputBytes + 1];
         var csv = new ByteArrayContent(big);
         csv.Headers.ContentType = new MediaTypeHeaderValue("text/csv");
