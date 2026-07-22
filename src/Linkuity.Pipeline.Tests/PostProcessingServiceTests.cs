@@ -65,6 +65,46 @@ public class PostProcessingServiceTests : IDisposable
         Assert.False(await store.ExistsAsync($"{jobId}/golden_records.csv"));
     }
 
+    [Fact]
+    public async Task ProcessAsync_WithProfile_ExcludesSourceColumn_AndAppliesPriorityMerge()
+    {
+        var store = CreateStore();
+        var jobId = Guid.NewGuid();
+        await store.WriteJsonAsync($"{jobId}/metadata.json", CreateJob(jobId));
+        await UploadTextAsync(store, $"{jobId}/normalized.csv",
+            """
+            id,source,name,email
+            1,CRM,Alice,alice@crm.example
+            2,Marketing,Alice M,alice@marketing.example
+            3,CRM,Bob,bob@example.com
+            """);
+        await UploadTextAsync(store, $"{jobId}/matches.csv",
+            """
+            left_id,right_id,score
+            1,2,0.97
+            """);
+        var service = CreateService(store);
+
+        // Person profile has no SourceIdentifier field; organization profile declares
+        // `source` as SourceIdentifier, which is what this test needs to exercise.
+        var profile = Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.CreateOrganizationProfile();
+        var merge = new MergeConfiguration
+        {
+            MergeFields = [new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing"] }]
+        };
+
+        await service.ProcessAsync(jobId.ToString(), profile, merge, CancellationToken.None);
+
+        Assert.True(await store.ExistsAsync($"{jobId}/golden_records.csv"));
+        await using var goldenStream = await store.DownloadAsync($"{jobId}/golden_records.csv");
+        using var reader = new StreamReader(goldenStream, Encoding.UTF8);
+        var golden = await reader.ReadToEndAsync();
+
+        Assert.DoesNotContain("source", golden.Split('\n')[0]); // header has no `source` column
+        Assert.Contains("alice@crm.example", golden);
+        Assert.DoesNotContain("alice@marketing.example", golden);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_rootPath))
