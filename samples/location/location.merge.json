@@ -1,0 +1,8 @@
+{
+  "mergeFields": [
+    { "fieldName": "name",         "sourcePriority": ["Google", "Yelp", "POS"] },
+    { "fieldName": "address_line", "sourcePriority": ["Google", "POS", "Yelp"] },
+    { "fieldName": "phone",        "sourcePriority": ["POS", "Google", "Yelp"] },
+    { "fieldName": "domain_name",  "sourcePriority": ["Google", "Yelp", "POS"] }
+  ]
+}

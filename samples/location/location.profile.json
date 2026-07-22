@@ -1,0 +1,20 @@
+{
+  "contentType": "location",
+  "fields": [
+    { "name": "source",       "semanticType": "SourceIdentifier", "roles": [] },
+    { "name": "name",         "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"],   "similarityEvaluator": "fuzzy",   "weight": 1.5 },
+    { "name": "address_line", "semanticType": "AddressLine",      "roles": ["Searchable","Matchable"],              "similarityEvaluator": "jaccard", "weight": 3.0 },
+    { "name": "postal_code",  "semanticType": "PostalCode",       "roles": ["Matchable"],                           "similarityEvaluator": "exact",   "weight": 1.5 },
+    { "name": "phone",        "semanticType": "Phone",            "roles": ["Matchable","Blocking","Identifier"],   "similarityEvaluator": "exact",   "weight": 3.0 },
+    { "name": "domain_name",  "semanticType": "DomainName",       "roles": ["Searchable","Matchable","Blocking"],   "similarityEvaluator": "exact",   "weight": 1.0 }
+  ],
+  "normalizationStrategy": "identity",
+  "blockingStrategies": ["exact-value", "token-name"],
+  "candidateRetrievalStrategy": "linear",
+  "similarityStrategy": "field-weighted",
+  "scoringStrategy": "identifier-weighted",
+  "decisionStrategy": "threshold",
+  "clusteringStrategy": "union-find",
+  "autoMatchThreshold": 0.90,
+  "reviewThreshold": 0.75
+}
