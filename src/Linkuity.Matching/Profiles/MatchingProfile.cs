@@ -28,4 +28,25 @@ public sealed class MatchingProfile
     /// into review. Consumed by <c>IdentifierAwareWeightedScoringStrategy</c>.
     /// </summary>
     public double ReviewFloorGate { get; init; } = 0.75;
+
+    /// <summary>
+    /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
+    /// replaced. Used by the batch run path to force blocking-gated retrieval, which
+    /// the identifier-weighted scorer's review floor assumes.
+    /// </summary>
+    public MatchingProfile WithCandidateRetrievalStrategy(string strategy) => new()
+    {
+        ContentType = ContentType,
+        Fields = Fields,
+        NormalizationStrategy = NormalizationStrategy,
+        BlockingStrategies = BlockingStrategies,
+        CandidateRetrievalStrategy = strategy,
+        SimilarityStrategy = SimilarityStrategy,
+        ScoringStrategy = ScoringStrategy,
+        DecisionStrategy = DecisionStrategy,
+        ClusteringStrategy = ClusteringStrategy,
+        AutoMatchThreshold = AutoMatchThreshold,
+        ReviewThreshold = ReviewThreshold,
+        ReviewFloorGate = ReviewFloorGate
+    };
 }
