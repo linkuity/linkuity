@@ -1,0 +1,4 @@
+id,source,first_name,last_name,email,phone
+mkt-1,Marketing,Ada,Lovelace,ada@analytical.example,555-9001
+mkt-2,Marketing,Thomas,Hopper,thomas@hopper-mail.example,555-7777
+mkt-3,Marketing,Margaret,Hamilton,margaret@apollo.example,555-3333

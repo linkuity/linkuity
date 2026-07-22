@@ -40,6 +40,9 @@ data/
 # ...and product catalog tutorial fixture data is tracked under docs/tutorials
 !docs/tutorials/cli-durable-product-catalog/data/
 !docs/tutorials/cli-durable-product-catalog/data/**
+# ...and MDM quickstart tutorial fixture data is tracked under docs/tutorials
+!docs/tutorials/cli-durable-mdm-quickstart/data/
+!docs/tutorials/cli-durable-mdm-quickstart/data/**
 
 # OS
 .DS_Store
