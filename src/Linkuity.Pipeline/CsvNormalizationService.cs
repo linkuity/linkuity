@@ -4,6 +4,7 @@ using CsvHelper.Configuration;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Core.Normalization;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline;
 
@@ -13,10 +14,20 @@ public class CsvNormalizationService
 
     public CsvNormalizationService(IBlobStore blobs) => _blobs = blobs;
 
-    public async Task<int> NormalizeAsync(Guid jobId, MatchConfiguration config, CancellationToken ct = default)
+    public Task<int> NormalizeAsync(Guid jobId, MatchConfiguration config, CancellationToken ct = default)
     {
         var fieldMap = config.Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
+        return NormalizeAsync(jobId, fieldMap, ct);
+    }
 
+    public Task<int> NormalizeAsync(Guid jobId, MatchingProfile profile, CancellationToken ct = default)
+    {
+        var fieldMap = profile.Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
+        return NormalizeAsync(jobId, fieldMap, ct);
+    }
+
+    private async Task<int> NormalizeAsync(Guid jobId, IReadOnlyDictionary<string, SemanticFieldType> fieldMap, CancellationToken ct)
+    {
         using var inputStream = await _blobs.DownloadAsync($"{jobId}/input.csv", ct);
         using var reader = new StreamReader(inputStream);
         var csvConfig = new CsvConfiguration(CultureInfo.InvariantCulture);

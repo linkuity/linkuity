@@ -1,6 +1,7 @@
 using System.Text;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
 
@@ -171,5 +172,21 @@ public class CsvNormalizationServiceTests : IDisposable
 
         var output = await ReadNormalizedAsync(blobs, jobId);
         Assert.Contains("+18005550100", output);
+    }
+
+    [Fact]
+    public async Task NormalizeAsync_WithProfile_NormalizesBySemanticType()
+    {
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        await WriteCsvAsync(blobs, jobId, "id,email\n1,ALICE@EXAMPLE.COM\n");
+
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+
+        var count = await service.NormalizeAsync(jobId, profile, CancellationToken.None);
+
+        Assert.Equal(1, count);
+        var output = await ReadNormalizedAsync(blobs, jobId);
+        Assert.Contains("alice@example.com", output); // email lowercased by semantic normalization
     }
 }
