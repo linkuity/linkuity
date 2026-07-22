@@ -1,16 +1,16 @@
 canonical_key,canonical_name,ticker,include_former
-apple,Apple Inc.,AAPL,false
+apple,Apple Inc.,AAPL,true
 microsoft,Microsoft Corporation,MSFT,false
 amazon,Amazon.com Inc.,AMZN,false
 alphabet,Alphabet Inc.,GOOGL,false
-meta,Meta Platforms Inc.,META,false
+meta,Meta Platforms Inc.,META,true
 nvidia,NVIDIA Corporation,NVDA,false
 tesla,Tesla Inc.,TSLA,false
 berkshire-hathaway,Berkshire Hathaway Inc.,BRK-B,false
 jpmorgan-chase,JPMorgan Chase & Co.,JPM,false
 visa,Visa Inc.,V,false
 johnson-and-johnson,Johnson & Johnson,JNJ,false
-walmart,Walmart Inc.,WMT,false
+walmart,Walmart Inc.,WMT,true
 procter-and-gamble,The Procter & Gamble Company,PG,false
 mastercard,Mastercard Incorporated,MA,false
 home-depot,The Home Depot Inc.,HD,false
@@ -26,8 +26,8 @@ netflix,Netflix Inc.,NFLX,false
 walt-disney,The Walt Disney Company,DIS,false
 cisco,Cisco Systems Inc.,CSCO,false
 intel,Intel Corporation,INTC,false
-verizon,Verizon Communications Inc.,VZ,false
-att,AT&T Inc.,T,false
+verizon,Verizon Communications Inc.,VZ,true
+att,AT&T Inc.,T,true
 nike,NIKE Inc.,NKE,false
 oracle,Oracle Corporation,ORCL,false
 pfizer,Pfizer Inc.,PFE,false
