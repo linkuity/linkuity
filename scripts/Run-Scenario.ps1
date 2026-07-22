@@ -3,14 +3,16 @@
     Run a Linkuity sample scenario end-to-end through the local CLI or API.
 
 .DESCRIPTION
-    Runs sample.csv + match-config.json through either the local Linkuity CLI or the
-    running Linkuity API, writes golden records CSV and (optionally) the Neo4j export,
-    then verifies the result against expectations.json if present.
+    Runs sample.csv + *.profile.json (+ optional *.merge.json) through either the local
+    Linkuity CLI or the running Linkuity API, writes golden records CSV and (optionally)
+    the Neo4j export, then verifies the result against expectations.json if present.
 
     Designed to work with any scenario folder that contains:
       - sample.csv          (required)  the input data
-      - match-config.json   (required)  drop-in body for POST /jobs
-      - expectations.json   (optional)  assertions to verify the output
+      - *.profile.json       (required)  matching profile, resolved by convention (CLI mode)
+      - *.merge.json          (optional)  merge policy, resolved by convention (CLI mode)
+      - match-config.json    (required, Api mode)  drop-in body for POST /jobs
+      - expectations.json    (optional)  assertions to verify the output
 
 .PARAMETER ScenarioPath
     Path to the scenario folder. Required.
@@ -90,7 +92,7 @@ $expectationsPath = Join-Path $ScenarioPath "expectations.json"
 if (-not (Test-Path -LiteralPath $csvPath)) {
     throw "sample.csv not found in $ScenarioPath"
 }
-if (-not (Test-Path -LiteralPath $configPath)) {
+if ($Mode -eq "Api" -and -not (Test-Path -LiteralPath $configPath)) {
     throw "match-config.json not found in $ScenarioPath"
 }
 
@@ -200,15 +202,22 @@ if ($Mode -eq "Api") {
     Write-Host ""
 } else {
     Write-Step "[1/2] Running local CLI..."
+    $profilePath = (Get-ChildItem -Path $ScenarioPath -Filter *.profile.json | Select-Object -First 1).FullName
+    if (-not $profilePath) {
+        throw "No *.profile.json found in $ScenarioPath"
+    }
+    $mergeFile = Get-ChildItem -Path $ScenarioPath -Filter *.merge.json | Select-Object -First 1
+
     $cliArgs = @(
         "run",
         "--project", $cliProjectPath,
         "--",
         "run",
         "--input", $csvPath,
-        "--config", $configPath,
+        "--profile", $profilePath,
         "--output", $OutputPath
     )
+    if ($mergeFile) { $cliArgs += @("--merge-policy", $mergeFile.FullName) }
     if (-not $SkipNeo4jExport) {
         $cliArgs += "--neo4j-export"
     }
