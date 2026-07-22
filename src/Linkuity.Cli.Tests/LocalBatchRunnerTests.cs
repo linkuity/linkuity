@@ -10,7 +10,8 @@ public sealed class LocalBatchRunnerTests : IDisposable
     [Fact]
     public async Task RunAsync_WhenInputIsMissing_ReturnsNonZero()
     {
-        var configPath = WriteConfig();
+        var profilePath = WriteProfile();
+        var mergePath = WriteMergePolicy();
         var outputPath = Path.Combine(_root, "output");
         var runner = new LocalBatchRunner();
 
@@ -18,7 +19,8 @@ public sealed class LocalBatchRunnerTests : IDisposable
             [
                 "run",
                 "--input", Path.Combine(_root, "missing.csv"),
-                "--config", configPath,
+                "--profile", profilePath,
+                "--merge-policy", mergePath,
                 "--output", outputPath
             ],
             CancellationToken.None);
@@ -28,58 +30,56 @@ public sealed class LocalBatchRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_WhenConfigHasDuplicateFields_ReturnsNonZeroWithoutCreatingOutput()
+    public async Task RunAsync_WhenProfileFileMissing_ReturnsNonZeroWithoutCreatingOutput()
     {
         var inputPath = WriteInputCsv();
-        var configPath = WriteConfig(fieldsJson:
-            """
+        var outputPath = Path.Combine(_root, "missing-profile-output");
+        var runner = new LocalBatchRunner();
+        var exit = await runner.RunAsync(
+            ["run", "--input", inputPath, "--profile", "no-such-profile", "--output", outputPath],
+            CancellationToken.None);
+        Assert.NotEqual(0, exit);
+        Assert.False(Directory.Exists(outputPath));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenProfileHasDuplicateFields_ReturnsNonZeroWithoutCreatingOutput()
+    {
+        var inputPath = WriteInputCsv();
+        var profilePath = WriteProfile(fieldsJson: """
             [
-              { "name": "email", "semanticType": "email" },
-              { "name": "EMAIL", "semanticType": "email" }
+              { "name": "email", "semanticType": "Email", "roles": ["Matchable"], "similarityEvaluator": "exact" },
+              { "name": "EMAIL", "semanticType": "Email", "roles": ["Matchable"], "similarityEvaluator": "exact" }
             ]
             """);
-        var outputPath = Path.Combine(_root, "invalid-output");
+        var outputPath = Path.Combine(_root, "dup-output");
         var runner = new LocalBatchRunner();
-
-        var exitCode = await runner.RunAsync(
-            [
-                "run",
-                "--input", inputPath,
-                "--config", configPath,
-                "--output", outputPath
-            ],
+        var exit = await runner.RunAsync(
+            ["run", "--input", inputPath, "--profile", profilePath, "--output", outputPath],
             CancellationToken.None);
-
-        Assert.NotEqual(0, exitCode);
+        Assert.NotEqual(0, exit);
         Assert.False(Directory.Exists(outputPath));
     }
 
     [Fact]
-    public async Task RunAsync_WhenConfigHasInvalidContentType_ReturnsNonZeroWithoutCreatingOutput()
+    public async Task RunAsync_BuiltInProfileByName_Resolves()
     {
         var inputPath = WriteInputCsv();
-        var configPath = WriteConfig(contentType: "unsupported");
-        var outputPath = Path.Combine(_root, "invalid-content-type-output");
+        var outputPath = Path.Combine(_root, "builtin-output");
         var runner = new LocalBatchRunner();
-
-        var exitCode = await runner.RunAsync(
-            [
-                "run",
-                "--input", inputPath,
-                "--config", configPath,
-                "--output", outputPath
-            ],
+        var exit = await runner.RunAsync(
+            ["run", "--input", inputPath, "--profile", "person", "--output", outputPath],
             CancellationToken.None);
-
-        Assert.NotEqual(0, exitCode);
-        Assert.False(Directory.Exists(outputPath));
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(Path.Combine(outputPath, "golden-records.csv")));
     }
 
     [Fact]
     public async Task RunAsync_WithValidInput_WritesGoldenRecordsAndLocalArtifacts()
     {
         var inputPath = WriteInputCsv();
-        var configPath = WriteConfig();
+        var profilePath = WriteProfile();
+        var mergePath = WriteMergePolicy();
         var outputPath = Path.Combine(_root, "output");
         var runner = new LocalBatchRunner();
 
@@ -87,7 +87,8 @@ public sealed class LocalBatchRunnerTests : IDisposable
             [
                 "run",
                 "--input", inputPath,
-                "--config", configPath,
+                "--profile", profilePath,
+                "--merge-policy", mergePath,
                 "--output", outputPath
             ],
             CancellationToken.None);
@@ -113,7 +114,8 @@ public sealed class LocalBatchRunnerTests : IDisposable
     public async Task RunAsync_WithNeo4jExport_WritesZip()
     {
         var inputPath = WriteInputCsv();
-        var configPath = WriteConfig();
+        var profilePath = WriteProfile();
+        var mergePath = WriteMergePolicy();
         var outputPath = Path.Combine(_root, "neo4j-output");
         var runner = new LocalBatchRunner();
 
@@ -121,7 +123,8 @@ public sealed class LocalBatchRunnerTests : IDisposable
             [
                 "run",
                 "--input", inputPath,
-                "--config", configPath,
+                "--profile", profilePath,
+                "--merge-policy", mergePath,
                 "--output", outputPath,
                 "--neo4j-export"
             ],
@@ -163,36 +166,47 @@ public sealed class LocalBatchRunnerTests : IDisposable
         return path;
     }
 
-    private string WriteConfig(
-        string contentType = "person",
-        string fieldsJson = """
-            [
-              { "name": "source", "semanticType": "source_identifier", "participatesInMatching": false },
-              { "name": "name", "semanticType": "full_name" },
-              { "name": "email", "semanticType": "email" },
-              { "name": "phone", "semanticType": "phone" }
-            ]
-            """)
+    private string WriteProfile(string contentType = "person", string? fieldsJson = null)
     {
         Directory.CreateDirectory(_root);
-        var path = Path.Combine(_root, "match-config.json");
+        var fields = fieldsJson ?? """
+            [
+              { "name": "source", "semanticType": "SourceIdentifier", "roles": [] },
+              { "name": "name", "semanticType": "FullName", "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "fuzzy", "weight": 1.5 },
+              { "name": "email", "semanticType": "Email", "roles": ["Searchable","Matchable","Blocking","Identifier"], "similarityEvaluator": "exact", "weight": 3.0 },
+              { "name": "phone", "semanticType": "Phone", "roles": ["Matchable","Blocking","Identifier"], "similarityEvaluator": "exact", "weight": 3.0 }
+            ]
+            """;
+        var path = Path.Combine(_root, "run.profile.json");
         File.WriteAllText(path,
             $$"""
             {
-              "configuration": {
-                "contentType": "{{contentType}}",
-                "fields": {{fieldsJson}}
-              },
-              "mergeConfiguration": {
-                "mergeFields": [
-                  { "fieldName": "email", "sourcePriority": ["CRM", "Marketing"] },
-                  { "fieldName": "phone", "sourcePriority": ["CRM", "Marketing"] }
-                ]
-              },
-              "autoStart": true
+              "contentType": "{{contentType}}",
+              "fields": {{fields}},
+              "normalizationStrategy": "identity",
+              "blockingStrategies": ["exact-value", "token-name"],
+              "candidateRetrievalStrategy": "linear",
+              "similarityStrategy": "field-weighted",
+              "scoringStrategy": "identifier-weighted",
+              "decisionStrategy": "threshold",
+              "clusteringStrategy": "union-find",
+              "autoMatchThreshold": 0.90,
+              "reviewThreshold": 0.75
             }
-            """,
-            Encoding.UTF8);
+            """, Encoding.UTF8);
+        return path;
+    }
+
+    private string WriteMergePolicy()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "run.merge.json");
+        File.WriteAllText(path, """
+            { "mergeFields": [
+              { "fieldName": "email", "sourcePriority": ["CRM", "Marketing"] },
+              { "fieldName": "phone", "sourcePriority": ["CRM", "Marketing"] }
+            ] }
+            """, Encoding.UTF8);
         return path;
     }
 

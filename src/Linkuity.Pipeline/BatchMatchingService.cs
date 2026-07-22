@@ -25,16 +25,13 @@ public sealed class BatchMatchingService
         _store = store;
     }
 
-    public async Task RunAsync(string jobId, CancellationToken ct)
+    public async Task RunAsync(string jobId, MatchingProfile profile, CancellationToken ct)
     {
-        var job = await _store.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct)
-            ?? throw new InvalidOperationException($"metadata.json for job {jobId} is empty.");
-
         List<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows;
         await using (var normalized = await _store.DownloadAsync($"{jobId}/normalized.csv", ct))
             rows = ReadRows(normalized);
 
-        var matchesCsv = BuildMatchesCsv(rows, job.Configuration);
+        var matchesCsv = BuildMatchesCsv(rows, profile);
 
         using var outStream = new MemoryStream(Encoding.UTF8.GetBytes(matchesCsv));
         await _store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);
@@ -42,9 +39,9 @@ public sealed class BatchMatchingService
 
     public static string BuildMatchesCsv(
         IReadOnlyList<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows,
-        MatchConfiguration configuration)
+        MatchingProfile profile)
     {
-        var profile = MatchConfigurationProfileFactory.Create(configuration);
+        profile = profile.WithCandidateRetrievalStrategy("blocking-linear");
         var engine = new MatchingEngine(MatchingDefaults.CreateRegistry());
         var now = DateTimeOffset.UtcNow;
 

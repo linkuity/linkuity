@@ -661,10 +661,18 @@ scale. This matters because the scorer's `0.80` review floor assumes every score
 candidate already shares a blocking key; the ungated `linear` strategy would violate
 that assumption, which is why it isn't used.
 
-**Where it's configured.** The exhaustive schema (every field and strategy name),
-the JSON format, and the built-in/override and validation semantics are documented
-under "Authoring a matching profile" in [`docs/architecture.md`](architecture.md);
-this guide covers the intuition and the worked profile, not the full schema.
+This is the same profile format both entry points consume: `linkuity run`
+(`--profile`) and durable ingest (`--content-type`/`--profiles`) resolve identically
+— there is no separate "batch config" shape. The profile taught in this section is
+literally the `*.profile.json` file (or built-in name) you'd pass to `linkuity run
+--profile ...`.
+
+**Where it's configured.** The exhaustive schema (every field and strategy name,
+required vs. optional, and every value's meaning) is the field-by-field reference in
+[`docs/configuration.md`](configuration.md); the built-in/override and validation
+semantics are documented under "Authoring a matching profile" in
+[`docs/architecture.md`](architecture.md#authoring-a-matching-profile-no-code-changes).
+This guide covers the intuition and the worked profile, not the full schema.
 
 ## Tuning and troubleshooting
 

@@ -14,7 +14,8 @@ During development the shortest path is `dotnet run`, which rebuilds on each cal
 ```powershell
 dotnet run --project src/Linkuity.Cli -- run `
   --input samples/people-multi-source/sample.csv `
-  --config samples/people-multi-source/match-config.json `
+  --profile samples/people-multi-source/people-multi-source.profile.json `
+  --merge-policy samples/people-multi-source/people-multi-source.merge.json `
   --output ./data/output/people-multi-source `
   --neo4j-export
 ```
@@ -24,9 +25,12 @@ dotnet run --project src/Linkuity.Cli -- run `
 | Flag | Meaning |
 |------|---------|
 | `--input` | Path to the source CSV. |
-| `--config` | Path to the match configuration JSON (fields + merge policy). |
+| `--profile` | Built-in profile name (`person`, `organization`) or path to a `*.profile.json` matching profile. |
+| `--merge-policy` | Path to a `*.merge.json` merge policy (optional — omit for consensus merging). |
 | `--output` | Output directory for `golden-records.csv` and `artifacts/`. |
 | `--neo4j-export` | Also write a `neo4j-export.zip` graph bundle (optional). |
+
+See [`docs/configuration.md`](configuration.md) for the full profile and merge-policy schema.
 
 Outputs land under `--output`:
 
@@ -47,7 +51,8 @@ you can run directly, publish it.
 dotnet publish src/Linkuity.Cli -c Release -o dist
 .\dist\Linkuity.Cli.exe run `
   --input samples/people-multi-source/sample.csv `
-  --config samples/people-multi-source/match-config.json `
+  --profile samples/people-multi-source/people-multi-source.profile.json `
+  --merge-policy samples/people-multi-source/people-multi-source.merge.json `
   --output ./data/output/people-multi-source
 ```
 
@@ -56,7 +61,7 @@ dotnet publish src/Linkuity.Cli -c Release -o dist
 ```powershell
 dotnet publish src/Linkuity.Cli -c Release -r win-x64 --self-contained `
   -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o dist
-.\dist\Linkuity.Cli.exe run --input ... --config ... --output ...
+.\dist\Linkuity.Cli.exe run --input ... --profile ... [--merge-policy ...] --output ...
 ```
 
 The self-contained build targets one platform via the runtime identifier (`-r`).

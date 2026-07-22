@@ -5,7 +5,8 @@ A 28-row organization dataset that exercises Linkuity's source-priority merging 
 ## Files
 
 - `sample.csv` — 28 input rows representing 10 distinct organizations, ingested from 4 different source systems.
-- `match-config.json` — standalone CLI/API job configuration. Declares matching fields and per-field source-priority merge rules.
+- `organizations-multi-source.profile.json` — matching profile. Declares the fields, semantic types, and matching strategy (its `contentType: "organization"` is byte-equivalent to the built-in `organization` profile — see `SampleScenarioTests.OrgMultiSource_BuiltInProfileByName_MatchesFileProfile`).
+- `organizations-multi-source.merge.json` — merge policy. Declares per-field source-priority merge rules.
 - `expectations.json` — asserted golden values for each cluster, used by `Run-Scenario.ps1` and `SampleScenarioTests`.
 
 ## Sources and merge priorities
@@ -21,7 +22,7 @@ Four sources are present: **CRM**, **Marketing**, **Support**, **Finance**. Each
 | `address_line`      | Finance → CRM → Support → Marketing             | Finance has the legal billing address.                                                                            |
 | `postal_code`       | Finance → CRM → Support → Marketing             | Same as `address_line`.                                                                                           |
 
-Fields **not** listed in `mergeConfiguration` (`legal_form`, `industry`, `employee_count`, `account_owner`, `lifecycle_stage`, `founded_year`) fall back to **consensus merge**: most-frequent value wins; ties broken by longest string. Enrichment fields like `account_owner` (CRM-only) and `lifecycle_stage` (Marketing-only) flow through to the golden record without being declared in `mergeConfiguration`. The `source` column itself is excluded from the golden output.
+Fields **not** listed in `mergeFields` (`legal_form`, `industry`, `employee_count`, `account_owner`, `lifecycle_stage`, `founded_year`) fall back to **consensus merge**: most-frequent value wins; ties broken by longest string. Enrichment fields like `account_owner` (CRM-only) and `lifecycle_stage` (Marketing-only) flow through to the golden record without being declared in `mergeFields`. The `source` column itself is excluded from the golden output.
 
 ## How merging works
 
@@ -334,34 +335,27 @@ You can also run the CLI directly:
 ```powershell
 dotnet run --project src\Linkuity.Cli -- run `
   --input samples\organizations-multi-source\sample.csv `
-  --config samples\organizations-multi-source\match-config.json `
+  --profile samples\organizations-multi-source\organizations-multi-source.profile.json `
+  --merge-policy samples\organizations-multi-source\organizations-multi-source.merge.json `
   --output samples\organizations-multi-source\output `
   --neo4j-export
 ```
 
-The legacy API job path remains available for regression coverage. It requires the API to be running locally at `http://localhost:5017`.
+Because this sample's profile is byte-equivalent to the built-in `organization` profile, `--profile organization` works identically in place of the file path above.
+
+The HTTP API completes the same run synchronously via `POST /run`. It requires the API
+to be running locally at `http://localhost:5017`.
 
 ```powershell
-$cfg = Get-Content samples\organizations-multi-source\match-config.json -Raw
-$job = curl -s -X POST http://localhost:5017/jobs `
-  -H "Content-Type: application/json" `
-  -d $cfg | ConvertFrom-Json
-
-curl -X POST "http://localhost:5017/jobs/$($job.id)/upload" `
-  -F "file=@samples\organizations-multi-source\sample.csv;type=text/csv"
-curl -X POST "http://localhost:5017/jobs/$($job.id)/upload-complete"
-
-do {
-  Start-Sleep -Seconds 2
-  $status = curl -s "http://localhost:5017/jobs/$($job.id)" | ConvertFrom-Json
-  Write-Host "State: $($status.state)"
-} while ($status.state -ne "complete" -and $status.state -ne "failed")
-
-curl "http://localhost:5017/jobs/$($job.id)/golden-records" -o golden-records.csv
+curl.exe -X POST http://localhost:5017/run `
+  -F "profile=<samples\organizations-multi-source\organizations-multi-source.profile.json" `
+  -F "merge-policy=<samples\organizations-multi-source\organizations-multi-source.merge.json" `
+  -F "file=@samples\organizations-multi-source\sample.csv;type=text/csv" `
+  -o golden-records.csv
 Get-Content golden-records.csv
 ```
 
-The job is configured with `autoStart: true`, so processing begins as soon as the upload completes — no separate `/start` call is needed.
+See [`docs/http-api.md`](../../docs/http-api.md) for the full `/run` contract.
 
 ## Loading into Neo4j
 

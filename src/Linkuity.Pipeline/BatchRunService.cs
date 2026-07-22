@@ -1,5 +1,6 @@
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline;
 
@@ -24,7 +25,8 @@ public sealed class BatchRunService
         _store = store;
     }
 
-    public async Task<BatchRunResult> RunAsync(CreateJobRequest request, Stream inputCsv, CancellationToken ct)
+    public async Task<BatchRunResult> RunAsync(
+        MatchingProfile profile, MergeConfiguration? merge, Stream inputCsv, CancellationToken ct)
     {
         var jobId = Guid.NewGuid();
         var job = new Job
@@ -32,9 +34,7 @@ public sealed class BatchRunService
             Id = jobId,
             State = JobState.Ingesting,
             CreatedAt = DateTimeOffset.UtcNow,
-            Configuration = request.Configuration,
-            AutoStart = request.AutoStart,
-            MergeConfiguration = request.MergeConfiguration
+            AutoStart = true
         };
         var metadataPath = $"{jobId}/metadata.json";
 
@@ -43,11 +43,11 @@ public sealed class BatchRunService
 
         job.State = JobState.Processing;
         await _store.WriteJsonAsync(metadataPath, job, ct);
-        job.RecordCount = await _normalization.NormalizeAsync(jobId, job.Configuration, ct);
+        job.RecordCount = await _normalization.NormalizeAsync(jobId, profile, ct);
         await _store.WriteJsonAsync(metadataPath, job, ct);
 
-        await _matching.RunAsync(jobId.ToString(), ct);
-        await _postProcessing.ProcessAsync(jobId.ToString(), ct);
+        await _matching.RunAsync(jobId.ToString(), profile, ct);
+        await _postProcessing.ProcessAsync(jobId.ToString(), profile, merge, ct);
 
         return new BatchRunResult(jobId);
     }

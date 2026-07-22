@@ -1,22 +1,23 @@
 # People — Phone-Noise Sample
 
-A 10-row dataset demonstrating Linkuity's `participatesInMatching: false` flag. Phone numbers are declared (so they are normalized to E.164 and exported to the Neo4j graph) but **excluded from matching**, modeling a real-world case where phones are unreliable for identity (shared landlines, recently-recycled numbers, port confusion).
+A 10-row dataset demonstrating an empty `roles: []` field. Phone numbers are declared (so they are normalized to E.164 and exported to the Neo4j graph) but **excluded from matching** — `phone` carries no roles, so it never contributes to blocking, scoring, or identifier floors — modeling a real-world case where phones are unreliable for identity (shared landlines, recently-recycled numbers, port confusion).
 
 ## What this sample exercises
 
-- **Phone genuinely changes the cluster boundary.** The James/Marcus pair (`crm-001`, `crm-002`) are twins sharing last name, household phone, and address, but they differ on `date_of_birth` and every other field. With phone **excluded** from matching (`participatesInMatching: false`), no strong identifier is shared between the pair — the weighted field-similarity score stays below the auto-match cut (**0.90**) and they stay separate. Flip `phone.participatesInMatching` to `true` (the default) and the shared phone becomes a strong identifier that **floors the pair to a match**, false-merging the twins into one golden record. The flag is doing real work on this row pair.
+- **Phone genuinely changes the cluster boundary.** The James/Marcus pair (`crm-001`, `crm-002`) are twins sharing last name, household phone, and address, but they differ on `date_of_birth` and every other field. With phone's `roles` empty (`[]`), no strong identifier is shared between the pair — the weighted field-similarity score stays below the auto-match cut (**0.90**) and they stay separate. Give `phone` `["Matchable", "Blocking", "Identifier"]` roles instead and the shared phone becomes a strong identifier that **floors the pair to a match**, false-merging the twins into one golden record. The `roles` declaration is doing real work on this row pair.
 - **Phone is still normalized.** Raw `(212) 555-9999` becomes `+12125559999` in the golden record output, even though it doesn't participate in matching.
 - **Phone is still exported to Neo4j.** `phones.csv` and `has-phone.csv` populate in the Neo4j ZIP — the per-entity phone relationship is preserved.
 - **Other clusters form on the remaining signal.** Name + email + address + DOB are sufficient to merge the three legitimate duplicate pairs (Emma, Frank, Iris) regardless of whether their phones agree.
 
 Note: in `matches.csv`, a pair sharing an exact strong-identifier field (e.g. `date_of_birth` for Emma/Frank/Iris) scores in the auto-match band at the identifier floor (~0.98), not a "perfect" 1.0.
 
-The contrast is pinned by `SampleScenarioTests.PhoneNoise_TwinsStaySeparateWhenPhoneExcluded` and `SampleScenarioTests.PhoneNoise_TwinsMergeWhenPhoneIncluded` in `src/Linkuity.Cli.Tests` — the tests load this sample (the second with phone's `participatesInMatching` flag flipped to `true`) and assert both halves of the boundary flip.
+The contrast is pinned by `SampleScenarioTests.PhoneNoise_TwinsStaySeparateWhenPhoneExcluded` and `SampleScenarioTests.PhoneNoise_TwinsMergeWhenPhoneIncluded` in `src/Linkuity.Cli.Tests` — the tests load this sample (the second with `phone` given matching roles instead of `[]`) and assert both halves of the boundary flip.
 
 ## Files
 
 - `sample.csv` — 10 input rows, 7 distinct people, 2 sources (CRM + Marketing).
-- `match-config.json` — standalone CLI/API job configuration. `phone` and `source` carry `participatesInMatching: false`.
+- `people-phone-noise.profile.json` — matching profile. `phone` and `source` carry empty `roles: []`, so they're excluded from matching.
+- `people-phone-noise.merge.json` — merge policy. Per-field source-priority rules for building the golden record.
 - `expectations.json` — assertions for `Run-Scenario.ps1`, including the `neo4jExports.nonEmpty` block that verifies Neo4j export populated.
 
 ## Cluster catalog
@@ -38,7 +39,7 @@ The sample produces 7 golden records:
 After running the pipeline:
 
 1. **Golden records phone field** — `output/golden-records.csv` shows phones in E.164 form (`+12125550100`, not `(212) 555-0100`). This proves normalization ran on the non-matching field.
-2. **Neo4j export** — `output/neo4j-export/phones.csv` lists distinct phone values; `output/neo4j-export/has-phone.csv` links each entity to its phone. Both are non-empty. This proves the export resolved phone via semantic-type lookup, regardless of `participatesInMatching`.
+2. **Neo4j export** — `output/neo4j-export/phones.csv` lists distinct phone values; `output/neo4j-export/has-phone.csv` links each entity to its phone. Both are non-empty. This proves the export resolved phone via semantic-type lookup, regardless of `roles`.
 
 ## Run the scenario
 
@@ -73,7 +74,7 @@ Expected: 7 rows. Emma, Frank, and Iris are 2-member clusters; the rest (James, 
 
 ### Pin #1 — James and Marcus stay in separate clusters despite the shared household phone
 
-The core assertion of the sample: `crm-001` (James) and `crm-002` (Marcus) share the same E.164 phone (`+12125559999`) but are not duplicates — they differ on `date_of_birth` and every other field. With `phone.participatesInMatching: false`, no field shared between them floors the pair to a match, and the weighted field-similarity score stays below the 0.90 auto-match cut, so they stay apart. If this query returns `clustered_together: true`, the flag has stopped working.
+The core assertion of the sample: `crm-001` (James) and `crm-002` (Marcus) share the same E.164 phone (`+12125559999`) but are not duplicates — they differ on `date_of_birth` and every other field. With `phone.roles: []`, no field shared between them floors the pair to a match, and the weighted field-similarity score stays below the 0.90 auto-match cut, so they stay apart. If this query returns `clustered_together: true`, the empty `roles` declaration has stopped working.
 
 ```cypher
 MATCH (a:Entity {id: 'crm-001'})-[:RESOLVED_TO]->(g1:GoldenRecord)
@@ -109,7 +110,7 @@ Expected: 2 rows (`crm-010`, `mkt-011`), each with a different `source_phone`, b
 
 ### Phone graph — every entity links to its phone, including the non-matching ones
 
-Confirms that `phone.participatesInMatching: false` does NOT prevent the phone from being exported. James and Marcus both connect to the same shared `:Phone` node; everyone else has their own.
+Confirms that `phone.roles: []` does NOT prevent the phone from being exported. James and Marcus both connect to the same shared `:Phone` node; everyone else has their own.
 
 ```cypher
 MATCH (e:Entity)-[:HAS_PHONE]->(p:Phone)

@@ -1,0 +1,20 @@
+{
+  "goldenRecordCount": 3,
+  "clusters": [
+    {
+      "name": "cluster_ferry_building_blue_bottle",
+      "members": ["goog-001", "yelp-002", "pos-003"],
+      "expectedFields": { "phone": "+14155550100", "name": "Blue Bottle Coffee", "domain_name": "bluebottle.com" }
+    },
+    {
+      "name": "cluster_mint_st_blue_bottle",
+      "members": ["goog-004", "yelp-005"],
+      "expectedFields": { "phone": "+14155550200", "name": "Blue Bottle Coffee" }
+    },
+    {
+      "name": "cluster_sightglass",
+      "members": ["goog-006", "yelp-007"],
+      "expectedFields": { "phone": "+14155550300", "name": "Sightglass Coffee" }
+    }
+  ]
+}

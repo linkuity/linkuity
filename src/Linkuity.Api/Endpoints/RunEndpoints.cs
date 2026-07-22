@@ -1,8 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Linkuity.Core.Models;
-using Linkuity.Core.Validation;
+using Linkuity.Matching.Profiles;
+using Linkuity.Matching.Profiles.Configuration;
 using Linkuity.Pipeline;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Linkuity.Api.Endpoints;
 
@@ -31,7 +33,8 @@ public static class RunEndpoints
 
     private static async Task<IResult> Run(
         IFormFile file,
-        [Microsoft.AspNetCore.Mvc.FromForm] string config,
+        [FromForm] string profile,
+        [FromForm(Name = "merge-policy")] string? mergePolicy,
         BatchRunService runService,
         Linkuity.Core.Interfaces.IArtifactStore store,
         CancellationToken ct)
@@ -42,25 +45,34 @@ public static class RunEndpoints
             return Results.BadRequest(
                 $"Input exceeds the {MaxInputBytes / 1024} KB synchronous limit. Use the CLI for larger inputs.");
 
-        CreateJobRequest request;
+        MatchingProfile resolved;
         try
         {
-            request = JsonSerializer.Deserialize<CreateJobRequest>(config, ConfigJson)
-                ?? throw new JsonException("config is empty");
+            resolved = ProfileResolver.ResolveNameOrJson(profile);
         }
-        catch (JsonException ex)
+        catch (MatchingProfileConfigException ex)
         {
-            return Results.BadRequest($"Invalid config JSON: {ex.Message}");
+            return Results.BadRequest($"Invalid profile: {ex.Message}");
         }
 
-        if (MatchConfigurationValidator.Validate(request.Configuration) is ValidationResult.InvalidContentType invalid)
-            return Results.BadRequest($"contentType must be one of: {string.Join(", ", invalid.Accepted)}");
+        MergeConfiguration? merge = null;
+        if (!string.IsNullOrWhiteSpace(mergePolicy))
+        {
+            try
+            {
+                merge = JsonSerializer.Deserialize<MergeConfiguration>(mergePolicy, ConfigJson);
+            }
+            catch (JsonException ex)
+            {
+                return Results.BadRequest($"Invalid merge-policy JSON: {ex.Message}");
+            }
+        }
 
         BatchRunResult result;
         try
         {
             await using var input = file.OpenReadStream();
-            result = await runService.RunAsync(request, input, ct);
+            result = await runService.RunAsync(resolved, merge, input, ct);
         }
         catch (Exception ex) when (ex is CsvHelper.CsvHelperException or FormatException or InvalidOperationException)
         {

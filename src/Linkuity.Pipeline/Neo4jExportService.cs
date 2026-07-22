@@ -6,6 +6,7 @@ using CsvHelper.Configuration;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Core.Vocabulary;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline;
 
@@ -81,17 +82,17 @@ public class Neo4jExportService
 
     public Neo4jExportService(IBlobStore blobs) => _blobs = blobs;
 
-    public async Task<Neo4jFileResult> OpenAsync(Guid jobId, string fileKey, CancellationToken ct = default)
+    public async Task<Neo4jFileResult> OpenAsync(Guid jobId, string fileKey, MatchingProfile profile, CancellationToken ct = default)
     {
         if (!KnownFiles.Contains(fileKey)) return new Neo4jFileResult.UnknownFile();
         var job = await _blobs.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct);
         if (job is null) return new Neo4jFileResult.JobNotFound();
         if (job.State != JobState.Complete) return new Neo4jFileResult.NotReady(job.State);
 
-        return new Neo4jFileResult.Ready(await GenerateFileAsync(jobId, fileKey, job, ct));
+        return new Neo4jFileResult.Ready(await GenerateFileAsync(jobId, fileKey, profile, ct));
     }
 
-    public async Task<Neo4jExportResult> OpenZipAsync(Guid jobId, CancellationToken ct = default)
+    public async Task<Neo4jExportResult> OpenZipAsync(Guid jobId, MatchingProfile profile, CancellationToken ct = default)
     {
         var job = await _blobs.ReadJsonAsync<Job>($"{jobId}/metadata.json", ct);
         if (job is null) return new Neo4jExportResult.JobNotFound();
@@ -105,13 +106,13 @@ public class Neo4jExportService
                 ct.ThrowIfCancellationRequested();
                 var entry = archive.CreateEntry($"{fileKey}.csv", CompressionLevel.Optimal);
                 await using var entryStream = entry.Open();
-                await using var content = await GenerateFileAsync(jobId, fileKey, job, ct);
+                await using var content = await GenerateFileAsync(jobId, fileKey, profile, ct);
                 await content.CopyToAsync(entryStream, ct);
             }
 
             var cypherEntry = archive.CreateEntry("load.cypher", CompressionLevel.Optimal);
             await using var cypherStream = cypherEntry.Open();
-            var typeLabel = ContentTypeVocabulary.TryGetLabel(job.Configuration.ContentType, out var resolved) ? resolved : null;
+            var typeLabel = ContentTypeVocabulary.TryGetLabel(profile.ContentType, out var resolved) ? resolved : null;
             var cypherBytes = Encoding.UTF8.GetBytes(BuildLoadCypherScript(typeLabel));
             await cypherStream.WriteAsync(cypherBytes, ct);
         }
@@ -120,24 +121,24 @@ public class Neo4jExportService
         return new Neo4jExportResult.Ready(ms);
     }
 
-    private async Task<Stream> GenerateFileAsync(Guid jobId, string fileKey, Job job, CancellationToken ct) => fileKey switch
+    private async Task<Stream> GenerateFileAsync(Guid jobId, string fileKey, MatchingProfile profile, CancellationToken ct) => fileKey switch
     {
         "entities" => await _blobs.DownloadAsync($"{jobId}/normalized.csv", ct),
         "golden-records" =>
             await DropColumnAsync(await _blobs.DownloadAsync($"{jobId}/golden_records.csv", ct), "member_ids", ct),
         "matched-to" => await _blobs.DownloadAsync($"{jobId}/matches.csv", ct),
         "resolved-to" => await GenerateResolvedToAsync(jobId, ct),
-        "emails" => await GenerateDistinctValuesAsync(jobId, FieldByType(job, SemanticFieldType.Email), "value", ct),
-        "has-email" => await GenerateEntityToValueAsync(jobId, FieldByType(job, SemanticFieldType.Email), "entity_id", "email_value", ct),
-        "phones" => await GenerateDistinctValuesAsync(jobId, FieldByType(job, SemanticFieldType.Phone), "value", ct),
-        "has-phone" => await GenerateEntityToValueAsync(jobId, FieldByType(job, SemanticFieldType.Phone), "entity_id", "phone_value", ct),
-        "sources" => await GenerateDistinctValuesAsync(jobId, FieldByType(job, SemanticFieldType.SourceIdentifier), "name", ct),
-        "from-source" => await GenerateEntityToValueAsync(jobId, FieldByType(job, SemanticFieldType.SourceIdentifier), "entity_id", "source_name", ct),
+        "emails" => await GenerateDistinctValuesAsync(jobId, FieldByType(profile, SemanticFieldType.Email), "value", ct),
+        "has-email" => await GenerateEntityToValueAsync(jobId, FieldByType(profile, SemanticFieldType.Email), "entity_id", "email_value", ct),
+        "phones" => await GenerateDistinctValuesAsync(jobId, FieldByType(profile, SemanticFieldType.Phone), "value", ct),
+        "has-phone" => await GenerateEntityToValueAsync(jobId, FieldByType(profile, SemanticFieldType.Phone), "entity_id", "phone_value", ct),
+        "sources" => await GenerateDistinctValuesAsync(jobId, FieldByType(profile, SemanticFieldType.SourceIdentifier), "name", ct),
+        "from-source" => await GenerateEntityToValueAsync(jobId, FieldByType(profile, SemanticFieldType.SourceIdentifier), "entity_id", "source_name", ct),
         _ => throw new InvalidOperationException($"Unhandled known file '{fileKey}' — this is a bug")
     };
 
-    private static string? FieldByType(Job job, SemanticFieldType type)
-        => job.Configuration.Fields.FirstOrDefault(f => f.SemanticType == type)?.Name;
+    private static string? FieldByType(MatchingProfile profile, SemanticFieldType type)
+        => profile.Fields.FirstOrDefault(f => f.SemanticType == type)?.Name;
 
     private async Task<Stream> GenerateDistinctValuesAsync(Guid jobId, string? fieldName, string outputHeader, CancellationToken ct)
     {

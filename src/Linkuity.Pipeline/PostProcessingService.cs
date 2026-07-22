@@ -4,6 +4,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
+using Linkuity.Matching.Profiles;
 using Microsoft.Extensions.Logging;
 
 namespace Linkuity.Pipeline;
@@ -27,7 +28,14 @@ public class PostProcessingService
         _logger = logger;
     }
 
-    public async Task ProcessAsync(string jobId, CancellationToken ct = default)
+    public Task ProcessAsync(string jobId, MatchingProfile profile, MergeConfiguration? merge, CancellationToken ct = default)
+    {
+        var sourceField = profile.Fields
+            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name;
+        return ProcessCoreAsync(jobId, merge, sourceField, ct);
+    }
+
+    private async Task ProcessCoreAsync(string jobId, MergeConfiguration? merge, string? sourceField, CancellationToken ct)
     {
         var metadataPath = $"{jobId}/metadata.json";
         var job = await _artifactStore.ReadJsonAsync<Job>(metadataPath, ct)
@@ -35,9 +43,6 @@ public class PostProcessingService
 
         try
         {
-            var sourceField = job.Configuration.Fields
-                .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name;
-
             await using var normalizedStream = await _artifactStore.DownloadAsync($"{jobId}/normalized.csv", ct);
             var recordsById = ReadCsvById(normalizedStream);
 
@@ -45,7 +50,7 @@ public class PostProcessingService
             var pairs = ReadMatchPairs(matchesStream);
 
             var clusters = _graphService.FindClusters(recordsById.Keys, pairs);
-            var goldenRecords = _goldenRecordService.Merge(clusters, recordsById, job.MergeConfiguration, sourceField);
+            var goldenRecords = _goldenRecordService.Merge(clusters, recordsById, merge, sourceField);
 
             var csvBytes = SerializeGoldenRecords(goldenRecords);
             await using var csvStream = new MemoryStream(csvBytes);

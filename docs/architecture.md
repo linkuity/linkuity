@@ -119,7 +119,7 @@ sequenceDiagram
     participant Pipeline as PostProcessingService
     participant Output as Output directory
 
-    Operator->>CLI: run --input CSV --config JSON --output dir
+    Operator->>CLI: run --input CSV --profile NAME|JSON [--merge-policy JSON] --output dir
     CLI->>Artifacts: write metadata.json and input.csv
     CLI->>Normalizer: normalize input.csv
     Normalizer->>Artifacts: write normalized.csv
@@ -150,9 +150,9 @@ CLI batch artifacts are written under the requested output directory:
       golden_records.csv
 ```
 
-Standalone `run` is self-contained. It reads match configuration and optional
-`mergeConfiguration` from the run config file and does not require a durable MDM
-project.
+Standalone `run` is self-contained. It takes a `MatchingProfile` (`--profile`) and
+an optional `MergeConfiguration` (`--merge-policy`) directly and does not require a
+durable MDM project.
 
 ## HTTP API
 
@@ -162,7 +162,7 @@ Synchronous batch-match endpoint:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/run` | Run a batch match synchronously: multipart `config` (JSON) + `file` (`text/csv`); streams merged golden records back as `text/csv`. Max input 400 KiB (`RunEndpoints.MaxInputBytes`) — larger inputs get a 400 with guidance to use the CLI. |
+| `POST` | `/run` | Run a batch match synchronously: multipart `profile` (built-in name or JSON) + optional `merge-policy` (JSON) + `file` (`text/csv`); streams merged golden records back as `text/csv`. Max input 400 KiB (`RunEndpoints.MaxInputBytes`) — larger inputs get a 400 with guidance to use the CLI. |
 | `GET` | `/health` | Health check |
 
 Durable project metadata endpoints:
@@ -212,9 +212,13 @@ Before matching, configured fields are normalized by semantic type.
 | `Sku`, `Gtin`, `ProductName` | Passed through unchanged |
 | Other fields | Passed through unchanged |
 
-`MatchConfiguration` must contain at least one field with
-`ParticipatesInMatching = true`, must not duplicate field names, and must not
-mark a `SourceIdentifier` field as participating in matching.
+A `MatchingProfile` must declare at least one `fields[]` entry, and field names
+must be unique within the profile — both are enforced at load time. A
+`SourceIdentifier` field conventionally carries an empty `roles: []` (it's
+carried through to the golden record but not used for matching), but this is a
+convention, not a loader-enforced constraint. See
+[`docs/configuration.md`](configuration.md#schema-field-by-field) for the full
+schema.
 
 ## Authoring a matching profile (no code changes)
 
@@ -228,6 +232,12 @@ A profile is a JSON file (`*.profile.json`) loaded at runtime. Durable CLI
 commands accept `--profiles <file|dir>`; loaded profiles are registered alongside
 the built-in `person` profile, and a project resolves the profile whose
 `contentType` matches the project's `--content-type`.
+
+This is also the profile format batch (`linkuity run`) consumes — via
+`--profile <name|profile.json>` — so everything in this section (schema, roles,
+built-ins, override semantics) applies identically to both paths; see
+[Batch matching](#batch-matching-linkuity-run) below and
+[`docs/configuration.md`](configuration.md) for the full field-by-field reference.
 
 ### Schema
 
@@ -330,11 +340,14 @@ The CLI `run` command's matching stage is `NativeMatchingProcess`, an in-process
 
 Flow: normalize → `NativeMatchingProcess` → post-process → golden records.
 
-1. `MatchConfigurationProfileFactory` synthesizes a `MatchingProfile` from the run's
-   `MatchConfiguration`: field roles, evaluators, and weights are copied from the
-   built-in `person`/`organization` profile (matched by semantic type) and remapped
-   onto the run's actual column names. Retrieval is forced to the blocking-gated
-   `blocking-linear` strategy — the identifier-weighted scorer's review floor assumes
+1. `BatchRunService.RunAsync` takes a `MatchingProfile` directly — resolved from
+   `--profile`/`profile` (a built-in name or a loaded `*.profile.json`; see
+   [`docs/configuration.md`](configuration.md) for the schema) — and an optional
+   `MergeConfiguration` from `--merge-policy`/`merge-policy`. There is no
+   configuration-synthesis step: the profile the batch run uses is exactly the
+   profile you authored or named, taxonomy and all. `BatchMatchingService` forces
+   retrieval to the blocking-gated `blocking-linear` strategy regardless of what
+   the profile declares — the identifier-weighted scorer's review floor assumes
    every scored candidate already shares a blocking key.
 2. For each normalized record, the engine generates blocking keys and resolves
    candidates against the rest of the batch, keeping the highest-scoring pair per
@@ -709,7 +722,7 @@ There are two merge-policy modes:
 
 | Mode | Storage | Used by |
 |---|---|---|
-| Standalone run configuration | The `run` config JSON passed with `--config` | Local sample/evaluation batch jobs |
+| Standalone run merge policy | The `*.merge.json` file (or JSON text) passed via `--merge-policy`/`merge-policy` | Local sample/evaluation batch jobs |
 | Durable project merge policy | `Project.MergeConfiguration` in metadata storage | `persist-batch` and `ingest-incremental` |
 
 Durable project merge policy is the authority for MDM current golden records.

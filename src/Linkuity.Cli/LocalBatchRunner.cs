@@ -4,7 +4,6 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
-using Linkuity.Core.Validation;
 using Linkuity.Infrastructure.Local;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.Infrastructure.Postgres;
@@ -43,17 +42,26 @@ public sealed class LocalBatchRunner
             return 2;
         }
 
-        if (!File.Exists(options.ConfigPath))
+        MatchingProfile profile;
+        try
         {
-            await Console.Error.WriteLineAsync($"Match config not found: {options.ConfigPath}");
+            profile = ProfileResolver.ResolveNameOrFile(options.ProfilePath);
+        }
+        catch (MatchingProfileConfigException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
             return 2;
         }
 
-        var request = await ReadConfigAsync(options.ConfigPath, ct);
-        if (!TryValidateRequest(request, out var validationError))
+        MergeConfiguration? merge = null;
+        if (!string.IsNullOrWhiteSpace(options.MergePolicyPath))
         {
-            await Console.Error.WriteLineAsync(validationError);
-            return 2;
+            try { merge = await ReadMergeConfigurationAsync(options.MergePolicyPath, ct); }
+            catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or JsonException)
+            {
+                await Console.Error.WriteLineAsync(ex.Message);
+                return 2;
+            }
         }
 
         var outputPath = Path.GetFullPath(options.OutputPath);
@@ -69,13 +77,13 @@ public sealed class LocalBatchRunner
 
         BatchRunResult result;
         await using (var input = File.OpenRead(options.InputPath))
-            result = await runService.RunAsync(request, input, ct);
+            result = await runService.RunAsync(profile, merge, input, ct);
         var jobId = result.JobId;
 
         await CopyArtifactAsync(store, $"{jobId}/golden_records.csv", Path.Combine(outputPath, "golden-records.csv"), ct);
 
         if (options.WriteNeo4jExport)
-            await WriteNeo4jExportAsync(store, jobId, Path.Combine(outputPath, "neo4j-export.zip"), ct);
+            await WriteNeo4jExportAsync(store, jobId, profile, Path.Combine(outputPath, "neo4j-export.zip"), ct);
 
         Console.WriteLine($"Job {jobId} completed.");
         Console.WriteLine($"Golden records: {Path.Combine(outputPath, "golden-records.csv")}");
@@ -665,13 +673,6 @@ public sealed class LocalBatchRunner
             ];
     }
 
-    private static async Task<CreateJobRequest> ReadConfigAsync(string configPath, CancellationToken ct)
-    {
-        await using var stream = File.OpenRead(configPath);
-        return await JsonSerializer.DeserializeAsync<CreateJobRequest>(stream, JsonOptions, ct)
-            ?? throw new InvalidOperationException($"Match config is empty: {configPath}");
-    }
-
     private static async Task<MergeConfiguration> ReadMergeConfigurationAsync(string configPath, CancellationToken ct)
     {
         if (!File.Exists(configPath))
@@ -682,43 +683,6 @@ public sealed class LocalBatchRunner
             ?? throw new InvalidOperationException($"Merge policy is empty: {configPath}");
     }
 
-    private static bool TryValidateRequest(CreateJobRequest request, out string error)
-    {
-        if (MatchConfigurationValidator.Validate(request.Configuration) is ValidationResult.InvalidContentType invalid)
-        {
-            error = $"contentType must be one of: {string.Join(", ", invalid.Accepted)}";
-            return false;
-        }
-
-        if (!request.Configuration.Fields.Any(f => f.ParticipatesInMatching))
-        {
-            error = "MatchConfiguration must declare at least one field with participatesInMatching=true.";
-            return false;
-        }
-
-        var duplicates = request.Configuration.Fields
-            .GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToArray();
-        if (duplicates.Length > 0)
-        {
-            error = $"MatchConfiguration field names must be unique. Duplicates: {string.Join(", ", duplicates)}.";
-            return false;
-        }
-
-        var badSourceField = request.Configuration.Fields.FirstOrDefault(f =>
-            f.SemanticType == SemanticFieldType.SourceIdentifier && f.ParticipatesInMatching);
-        if (badSourceField is not null)
-        {
-            error = $"Field '{badSourceField.Name}' has semanticType=source_identifier; it must declare participatesInMatching=false.";
-            return false;
-        }
-
-        error = "";
-        return true;
-    }
-
     private static async Task CopyArtifactAsync(FileSystemArtifactStore store, string artifactPath, string destinationPath, CancellationToken ct)
     {
         await using var source = await store.DownloadAsync(artifactPath, ct);
@@ -726,10 +690,10 @@ public sealed class LocalBatchRunner
         await source.CopyToAsync(destination, ct);
     }
 
-    private static async Task WriteNeo4jExportAsync(FileSystemArtifactStore store, Guid jobId, string destinationPath, CancellationToken ct)
+    private static async Task WriteNeo4jExportAsync(FileSystemArtifactStore store, Guid jobId, MatchingProfile profile, string destinationPath, CancellationToken ct)
     {
         var service = new Neo4jExportService(store);
-        var result = await service.OpenZipAsync(jobId, ct);
+        var result = await service.OpenZipAsync(jobId, profile, ct);
         if (result is not Neo4jExportResult.Ready ready)
             throw new InvalidOperationException($"Neo4j export was not ready for job {jobId}.");
 
@@ -739,17 +703,18 @@ public sealed class LocalBatchRunner
 
     private static bool TryParseRunOptions(string[] args, out RunOptions options, out string error)
     {
-        options = new RunOptions("", "", "", false);
+        options = new RunOptions("", "", null, "", false);
         error = "";
 
         if (args.Length == 0 || !string.Equals(args[0], "run", StringComparison.OrdinalIgnoreCase))
         {
-            error = "Usage: linkuity run --input <sample.csv> --config <match-config.json> --output <directory> [--neo4j-export]";
+            error = "Usage: linkuity run --input <sample.csv> --profile <name|profile.json> [--merge-policy <merge.json>] --output <directory> [--neo4j-export]";
             return false;
         }
 
         string? input = null;
-        string? config = null;
+        string? profile = null;
+        string? mergePolicy = null;
         string? output = null;
         var neo4j = false;
 
@@ -760,8 +725,11 @@ public sealed class LocalBatchRunner
                 case "--input" when i + 1 < args.Length:
                     input = args[++i];
                     break;
-                case "--config" when i + 1 < args.Length:
-                    config = args[++i];
+                case "--profile" when i + 1 < args.Length:
+                    profile = args[++i];
+                    break;
+                case "--merge-policy" when i + 1 < args.Length:
+                    mergePolicy = args[++i];
                     break;
                 case "--output" when i + 1 < args.Length:
                     output = args[++i];
@@ -776,14 +744,14 @@ public sealed class LocalBatchRunner
         }
 
         if (string.IsNullOrWhiteSpace(input) ||
-            string.IsNullOrWhiteSpace(config) ||
+            string.IsNullOrWhiteSpace(profile) ||
             string.IsNullOrWhiteSpace(output))
         {
-            error = "The run command requires --input, --config, and --output.";
+            error = "The run command requires --input, --profile, and --output.";
             return false;
         }
 
-        options = new RunOptions(input, config, output, neo4j);
+        options = new RunOptions(input, profile, mergePolicy, output, neo4j);
         return true;
     }
 
@@ -1056,7 +1024,7 @@ public sealed class LocalBatchRunner
             ? value
             : throw new ArgumentException($"Missing --{name}.");
 
-    private sealed record RunOptions(string InputPath, string ConfigPath, string OutputPath, bool WriteNeo4jExport);
+    private sealed record RunOptions(string InputPath, string ProfilePath, string? MergePolicyPath, string OutputPath, bool WriteNeo4jExport);
     private sealed record PersistedGoldenRecords(
         IReadOnlyList<Cluster> Clusters,
         IReadOnlyList<CoreGoldenRecord> GoldenRecords,

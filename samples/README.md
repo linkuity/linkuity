@@ -6,9 +6,11 @@ pinned by tests, so they stay honest as the engine evolves.
 
 There are two kinds:
 
-- **Flat samples** — one `sample.csv` plus a `match-config.json`. Run them with
-  `linkuity run` (or the [scenario harness](../scripts/Run-Scenario.ps1)); their
-  outcomes are pinned by `SampleScenarioTests`.
+- **Flat samples** — one `sample.csv` plus a `<name>.profile.json` matching profile and
+  a `<name>.merge.json` merge policy (see [docs/configuration.md](../docs/configuration.md)
+  for the schema of both). Run them with `linkuity run` (or the
+  [scenario harness](../scripts/Run-Scenario.ps1)); their outcomes are pinned by
+  `SampleScenarioTests`.
 - **Durable samples** — ordered command sequences described by a `scenario.json`
   manifest and run by [`scripts/Run-DurableScenario.ps1`](../scripts/Run-DurableScenario.ps1).
 
@@ -17,9 +19,10 @@ There are two kinds:
 | Sample | Kind | What it shows |
 |--------|------|---------------|
 | [people-multi-source](people-multi-source/README.md) | flat | 28 rows → 10 golden records. Source-priority merging across a range of cluster shapes — the main teaching example. |
-| [people-phone-noise](people-phone-noise/README.md) | flat | Declaring a field but excluding it from matching (`participatesInMatching: false`), for when phone numbers are unreliable for identity (shared landlines, recycled numbers). |
+| [people-phone-noise](people-phone-noise/README.md) | flat | Declaring a field but excluding it from matching (empty `roles: []`), for when phone numbers are unreliable for identity (shared landlines, recycled numbers). |
 | [organizations-multi-source](organizations-multi-source/README.md) | flat | Multi-source merge mechanics on org data — legal-suffix variation, article/prefix name noise, and the `organization_name` / `domain_name` semantic types. |
 | [organizations-name-noise](organizations-name-noise/README.md) | flat | Org name-noise corner cases: ampersand variants (`A & B` vs `A and B`) and disambiguating same-named firms by `domain_name`. |
+| [location](location/README.md) | flat | A **non-built-in** taxonomy (`contentType: "location"`), composed entirely from existing semantic types — proves custom taxonomies are a config-only change, no code. |
 | [durable](durable/README.md) | durable | Durable MDM as scenario scripts: incremental auto-join, golden-record versioning, the review queue, and full-vs-incremental consistency. |
 
 ## Run a flat sample
@@ -27,7 +30,8 @@ There are two kinds:
 ```powershell
 dotnet run --project src/Linkuity.Cli -- run `
   --input samples/people-multi-source/sample.csv `
-  --config samples/people-multi-source/match-config.json `
+  --profile samples/people-multi-source/people-multi-source.profile.json `
+  --merge-policy samples/people-multi-source/people-multi-source.merge.json `
   --output ./data/output/people-multi-source
 ```
 

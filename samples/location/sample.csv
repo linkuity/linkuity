@@ -1,0 +1,8 @@
+id,source,name,address_line,postal_code,phone,domain_name
+goog-001,Google,Blue Bottle Coffee,1 Ferry Building,94111,(415) 555-0100,bluebottle.com
+yelp-002,Yelp,Blue Bottle,1 Ferry Bldg,94111,(415) 555-0100,bluebottle.com
+pos-003,POS,Blue Bottle Coffee Co,One Ferry Building,94111,415-555-0100,bluebottle.com
+goog-004,Google,Blue Bottle Coffee,66 Mint St,94103,(415) 555-0200,bluebottle.com
+yelp-005,Yelp,Blue Bottle,66 Mint Street,94103,(415) 555-0200,bluebottle.com
+goog-006,Google,Sightglass Coffee,270 7th St,94103,(415) 555-0300,sightglass.com
+yelp-007,Yelp,Sightglass,270 7th Street,94103,415-555-0300,sightglass.com

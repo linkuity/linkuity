@@ -29,7 +29,8 @@ git clone https://github.com/linkuity/linkuity.git
 cd linkuity
 dotnet run --project src/Linkuity.Cli -- run `
   --input samples/people-multi-source/sample.csv `
-  --config samples/people-multi-source/match-config.json `
+  --profile samples/people-multi-source/people-multi-source.profile.json `
+  --merge-policy samples/people-multi-source/people-multi-source.merge.json `
   --output ./data/output/people-multi-source
 ```
 
@@ -143,6 +144,9 @@ PostgreSQL, see [durable-postgres.md](docs/durable-postgres.md).
 
 - **Matching engine** — normalization, blocking (including phonetic), weighted
   similarity scoring, Lucene-backed candidate retrieval
+- **Taxonomy-driven** — ships `person` and `organization` built in; a new content type
+  (e.g. the [`location`](samples/location/README.md) sample) is a config-only
+  `*.profile.json`, no code change — see [docs/configuration.md](docs/configuration.md)
 - **Explainability** — persisted per-field score breakdowns and read-back commands
 - **Golden records** — configurable source-priority merge policies; composite output
 - **Two modes** — stateless batch and durable incremental (versioning + review queue)
@@ -163,6 +167,7 @@ scenarios. Start with [people-multi-source](samples/people-multi-source/README.m
 
 ## Documentation
 
+- [Configuration reference](docs/configuration.md) — matching profile and merge-policy schema, taxonomies
 - [How matching works](docs/how-matching-works.md) — blocking, scoring, decision bands, merging, tuning
 - [Tutorials](docs/tutorials/README.md) — hands-on durable MDM walkthroughs
 - [CLI reference](docs/cli.md) — batch usage and building a standalone binary

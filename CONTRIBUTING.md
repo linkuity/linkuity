@@ -74,7 +74,7 @@ dotnet test Linkuity.slnx -c Release
 Run the sample end-to-end batch job:
 
 ```powershell
-dotnet run --project src/Linkuity.Cli -- run --input samples/people-multi-source/sample.csv --config samples/people-multi-source/match-config.json --output ./data/output/people-multi-source
+dotnet run --project src/Linkuity.Cli -- run --input samples/people-multi-source/sample.csv --profile samples/people-multi-source/people-multi-source.profile.json --merge-policy samples/people-multi-source/people-multi-source.merge.json --output ./data/output/people-multi-source
 ```
 
 See [`docs/how-matching-works.md`](docs/how-matching-works.md) to understand the

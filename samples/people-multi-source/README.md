@@ -5,7 +5,8 @@ A 28-row people dataset that exercises Linkuity's source-priority merging across
 ## Files
 
 - `sample.csv` — 28 input rows representing 10 distinct people, ingested from 4 different source systems.
-- `match-config.json` — standalone CLI/API job configuration. Declares matching fields and per-field source-priority merge rules.
+- `people-multi-source.profile.json` — matching profile. Declares the fields, semantic types, and matching strategy.
+- `people-multi-source.merge.json` — merge policy. Declares per-field source-priority merge rules.
 
 ## Sources and merge priorities
 
@@ -19,7 +20,7 @@ Four sources are present: **CRM**, **Marketing**, **Support**, **Billing**. Each
 | `address_line`  | Billing → CRM → Support → Marketing     | Billing has the legal address                  |
 | `postal_code`   | Billing → CRM → Support → Marketing     | Same as address                                |
 
-Fields **not** listed in `mergeConfiguration` (`first_name`, `last_name`, `company`) fall back to **consensus merge**: most-frequent value wins; ties broken by longest string. The `source` column itself is excluded from the golden output.
+Fields **not** listed in `mergeFields` (`first_name`, `last_name`, `company`) fall back to **consensus merge**: most-frequent value wins; ties broken by longest string. The `source` column itself is excluded from the golden output.
 
 ## How merging works
 
@@ -281,34 +282,25 @@ You can also run the CLI directly:
 ```powershell
 dotnet run --project src\Linkuity.Cli -- run `
   --input samples\people-multi-source\sample.csv `
-  --config samples\people-multi-source\match-config.json `
+  --profile samples\people-multi-source\people-multi-source.profile.json `
+  --merge-policy samples\people-multi-source\people-multi-source.merge.json `
   --output samples\people-multi-source\output `
   --neo4j-export
 ```
 
-The legacy API job path remains available for regression coverage. It requires the API to be running locally at `http://localhost:5017`.
+The HTTP API completes the same run synchronously via `POST /run`. It requires the API
+to be running locally at `http://localhost:5017`.
 
 ```powershell
-$cfg = Get-Content samples\people-multi-source\match-config.json -Raw
-$job = curl -s -X POST http://localhost:5017/jobs `
-  -H "Content-Type: application/json" `
-  -d $cfg | ConvertFrom-Json
-
-curl -X POST "http://localhost:5017/jobs/$($job.id)/upload" `
-  -F "file=@samples\people-multi-source\sample.csv;type=text/csv"
-curl -X POST "http://localhost:5017/jobs/$($job.id)/upload-complete"
-
-do {
-  Start-Sleep -Seconds 2
-  $status = curl -s "http://localhost:5017/jobs/$($job.id)" | ConvertFrom-Json
-  Write-Host "State: $($status.state)"
-} while ($status.state -ne "complete" -and $status.state -ne "failed")
-
-curl "http://localhost:5017/jobs/$($job.id)/golden-records" -o golden-records.csv
+curl.exe -X POST http://localhost:5017/run `
+  -F "profile=<samples\people-multi-source\people-multi-source.profile.json" `
+  -F "merge-policy=<samples\people-multi-source\people-multi-source.merge.json" `
+  -F "file=@samples\people-multi-source\sample.csv;type=text/csv" `
+  -o golden-records.csv
 Get-Content golden-records.csv
 ```
 
-The job is configured with `autoStart: true`, so processing begins as soon as the upload completes — no separate `/start` call is needed.
+See [`docs/http-api.md`](../../docs/http-api.md) for the full `/run` contract.
 
 ## Loading into Neo4j
 
