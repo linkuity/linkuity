@@ -31,10 +31,10 @@ Sleep 500ms
 Enter
 Sleep 22s
 
-Type "head -1 ./data/output/demo/golden-records.csv | tr ',' '\n' | head -4"
+Type "head -5 ./data/output/demo/golden-records.csv"
 Enter
 Sleep 2s
 
-Type "echo \"golden records: $(($(wc -l < ./data/output/demo/golden-records.csv) - 1))\""
+Type "echo golden records: $(( $(wc -l < ./data/output/demo/golden-records.csv) - 1 ))"
 Enter
 Sleep 3s
