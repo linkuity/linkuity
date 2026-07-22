@@ -6,7 +6,7 @@ alphabet,Alphabet Inc.,GOOGL,false
 meta,Meta Platforms Inc.,META,false
 nvidia,NVIDIA Corporation,NVDA,false
 tesla,Tesla Inc.,TSLA,false
-berkshire-hathaway,Berkshire Hathaway Inc.,BRK.B,false
+berkshire-hathaway,Berkshire Hathaway Inc.,BRK-B,false
 jpmorgan-chase,JPMorgan Chase & Co.,JPM,false
 visa,Visa Inc.,V,false
 johnson-and-johnson,Johnson & Johnson,JNJ,false
@@ -14,8 +14,8 @@ walmart,Walmart Inc.,WMT,false
 procter-and-gamble,The Procter & Gamble Company,PG,false
 mastercard,Mastercard Incorporated,MA,false
 home-depot,The Home Depot Inc.,HD,false
-chevron,Chevron Corporation,CVX,false
-exxon-mobil,Exxon Mobil Corporation,XOM,false
+chevron,Chevron U.S.A. Inc.,CVX,false
+exxon-mobil,ExxonMobil Holdings Corporation,XOM,false
 coca-cola,The Coca-Cola Company,KO,false
 pepsico,PepsiCo Inc.,PEP,false
 broadcom,Broadcom Inc.,AVGO,false
