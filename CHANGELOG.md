@@ -9,8 +9,27 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** `match-config.json` is retired. Batch `linkuity run` and
+  `POST /run` now take a **matching profile** (`--profile` / `profile` — a
+  built-in name like `person`/`organization`, or a `*.profile.json` file) and an
+  optional **merge policy** (`--merge-policy` / `merge-policy`, a `*.merge.json`
+  file). This is the same profile/merge-policy format durable ingest already used
+  (`--content-type`/`--profiles`/`--merge-policy`), so there is now exactly one
+  configuration format across the whole product — and custom taxonomies (not just
+  the built-in `person`/`organization`) are now supported in batch. See
+  [`docs/configuration.md`](docs/configuration.md) for the full schema.
+
+  Before (retired): a single `--config` flag pointed at one `match-config.json`
+  bundling both matching fields and merge rules. After, a profile plus an
+  optional merge policy:
+  ```powershell
+  linkuity run --input sample.csv `
+    --profile sample.profile.json --merge-policy sample.merge.json `
+    --output ./out
+  ```
 - HTTP API now completes batch matches end-to-end via synchronous `POST /run`
-  (multipart config + CSV → golden records CSV), sharing the CLI's batch engine.
+  (multipart `profile` + optional `merge-policy` + `file` → golden records CSV),
+  sharing the CLI's batch engine.
 
 ### Removed
 - The multi-step job API (`/jobs/*`), the in-process/Azure Service Bus dispatch

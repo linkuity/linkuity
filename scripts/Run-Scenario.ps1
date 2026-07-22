@@ -1,63 +1,49 @@
 <#
 .SYNOPSIS
-    Run a Linkuity sample scenario end-to-end through the local CLI or API.
+    Run a Linkuity sample scenario end-to-end through the local CLI.
 
 .DESCRIPTION
-    Runs sample.csv + *.profile.json (+ optional *.merge.json) through either the local
-    Linkuity CLI or the running Linkuity API, writes golden records CSV and (optionally)
-    the Neo4j export, then verifies the result against expectations.json if present.
+    Runs sample.csv + *.profile.json (+ optional *.merge.json) through the local
+    Linkuity CLI, writes golden records CSV and (optionally) the Neo4j export,
+    then verifies the result against expectations.json if present.
 
     Designed to work with any scenario folder that contains:
       - sample.csv          (required)  the input data
-      - *.profile.json       (required)  matching profile, resolved by convention (CLI mode)
-      - *.merge.json          (optional)  merge policy, resolved by convention (CLI mode)
-      - match-config.json    (required, Api mode)  drop-in body for POST /jobs
+      - *.profile.json       (required)  matching profile, resolved by convention
+      - *.merge.json          (optional)  merge policy, resolved by convention
       - expectations.json    (optional)  assertions to verify the output
+
+    The HTTP API's `/run` contract (multipart `profile` + `merge-policy` + `file`) is
+    covered by RunEndpointParityTests, so this harness only drives the CLI.
 
 .PARAMETER ScenarioPath
     Path to the scenario folder. Required.
 
-.PARAMETER ApiBaseUrl
-    Base URL of the Linkuity API. Defaults to http://localhost:5017.
-
 .PARAMETER Mode
-    Runtime mode. Defaults to Cli. Use Api to exercise the hosted API flow.
+    Runtime mode. "Cli" is the only supported value (kept for call-site
+    compatibility; the retired API-driven mode was removed since RunEndpointParityTests
+    already covers the `/run` contract).
 
 .PARAMETER OutputPath
     Directory where output files are written. Defaults to <ScenarioPath>\output.
 
 .PARAMETER SkipNeo4jExport
-    If set, skips downloading and extracting the Neo4j export ZIP.
-
-.PARAMETER PollIntervalSeconds
-    Seconds between status polls while waiting for the job to finish. Default 2.
-
-.PARAMETER TimeoutSeconds
-    Maximum time to wait for processing. Default 300.
+    If set, skips writing and extracting the Neo4j export ZIP.
 
 .EXAMPLE
     .\scripts\Run-Scenario.ps1 -ScenarioPath samples\people-multi-source
-
-.EXAMPLE
-    .\scripts\Run-Scenario.ps1 -ScenarioPath samples\people-multi-source -Mode Api -SkipNeo4jExport
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$ScenarioPath,
 
-    [ValidateSet("Cli", "Api")]
+    [ValidateSet("Cli")]
     [string]$Mode = "Cli",
-
-    [string]$ApiBaseUrl = "http://localhost:5017",
 
     [string]$OutputPath,
 
-    [switch]$SkipNeo4jExport,
-
-    [int]$PollIntervalSeconds = 2,
-
-    [int]$TimeoutSeconds = 300
+    [switch]$SkipNeo4jExport
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,14 +72,10 @@ function Write-Fail {
 
 $ScenarioPath = (Resolve-Path -LiteralPath $ScenarioPath).Path
 $csvPath = Join-Path $ScenarioPath "sample.csv"
-$configPath = Join-Path $ScenarioPath "match-config.json"
 $expectationsPath = Join-Path $ScenarioPath "expectations.json"
 
 if (-not (Test-Path -LiteralPath $csvPath)) {
     throw "sample.csv not found in $ScenarioPath"
-}
-if ($Mode -eq "Api" -and -not (Test-Path -LiteralPath $configPath)) {
-    throw "match-config.json not found in $ScenarioPath"
 }
 
 if (-not $OutputPath) {
@@ -108,153 +90,62 @@ $cliProjectPath = Join-Path $repoRoot "src\Linkuity.Cli"
 
 Write-Host "Scenario:  $ScenarioPath" -ForegroundColor Cyan
 Write-Host "Mode:      $Mode" -ForegroundColor Cyan
-Write-Host "API:       $ApiBaseUrl" -ForegroundColor Cyan
 Write-Host "Output:    $OutputPath" -ForegroundColor Cyan
 Write-Host ""
 
-if ($Mode -eq "Api") {
-    # --- Health check ---
-
-    try {
-        Invoke-RestMethod -Uri "$ApiBaseUrl/health" -Method Get -TimeoutSec 5 | Out-Null
-    } catch {
-        throw "API not reachable at $ApiBaseUrl/health. Is the AppHost running? Original error: $($_.Exception.Message)"
-    }
-
-    # --- Step 1: Create job ---
-
-    Write-Step "[1/5] Creating job..."
-    $configBody = Get-Content -Raw -LiteralPath $configPath
-    $job = Invoke-RestMethod -Uri "$ApiBaseUrl/jobs" -Method Post -ContentType "application/json" -Body $configBody
-    $jobId = $job.id
-    Write-Info "job id: $jobId"
-    Write-Info "state:  $($job.state)"
-
-    # --- Step 2: Upload CSV ---
-    # Windows PowerShell 5.1 lacks native multipart support; use curl.exe (ships with Windows 10+).
-
-    Write-Step "[2/5] Uploading $csvPath..."
-    $uploadResult = & curl.exe -s -S -o NUL -w "%{http_code}" -X POST "$ApiBaseUrl/jobs/$jobId/upload" -F "file=@${csvPath};type=text/csv"
-    if ($LASTEXITCODE -ne 0 -or $uploadResult -notmatch "^2\d\d$") {
-        throw "Upload failed (curl exit $LASTEXITCODE, http $uploadResult)"
-    }
-    Write-Info "uploaded (http $uploadResult)"
-
-    # --- Step 3: Mark upload complete (autoStart triggers processing) ---
-
-    Write-Step "[3/5] Completing upload..."
-    $completeResult = Invoke-RestMethod -Uri "$ApiBaseUrl/jobs/$jobId/upload-complete" -Method Post
-    Write-Info "state: $($completeResult.state)"
-
-    # --- Step 4: Poll for completion ---
-
-    Write-Step "[4/5] Polling for completion (interval ${PollIntervalSeconds}s, timeout ${TimeoutSeconds}s)..."
-    $startTime = Get-Date
-    $lastState = $completeResult.state
-    Write-Info "state: $lastState"
-
-    while ($lastState -ne "complete" -and $lastState -ne "failed") {
-        Start-Sleep -Seconds $PollIntervalSeconds
-
-        $elapsed = (Get-Date) - $startTime
-        if ($elapsed.TotalSeconds -gt $TimeoutSeconds) {
-            throw "Timed out after ${TimeoutSeconds}s waiting for completion. Last state: $lastState"
-        }
-
-        $status = Invoke-RestMethod -Uri "$ApiBaseUrl/jobs/$jobId" -Method Get
-        if ($status.state -ne $lastState) {
-            Write-Info "state: $($status.state)"
-            $lastState = $status.state
-        }
-    }
-
-    if ($lastState -eq "failed") {
-        throw "Job $jobId reported state 'failed'. Check API logs for the cause."
-    }
-
-    # --- Step 5: Download outputs ---
-
-    Write-Step "[5/5] Downloading outputs..."
-
-    $goldenRecordsPath = Join-Path $OutputPath "golden-records.csv"
-    Invoke-WebRequest -Uri "$ApiBaseUrl/jobs/$jobId/golden-records" -OutFile $goldenRecordsPath -UseBasicParsing
-    Write-Info "golden records -> $goldenRecordsPath"
-
-    if (-not $SkipNeo4jExport) {
-        $neo4jZipPath = Join-Path $OutputPath "neo4j-export.zip"
-        Invoke-WebRequest -Uri "$ApiBaseUrl/jobs/$jobId/neo4j-export" -OutFile $neo4jZipPath -UseBasicParsing
-
-        $neo4jExtractPath = Join-Path $OutputPath "neo4j-export"
-        if (Test-Path -LiteralPath $neo4jExtractPath) {
-            Remove-Item -Recurse -Force -LiteralPath $neo4jExtractPath
-        }
-        Expand-Archive -LiteralPath $neo4jZipPath -DestinationPath $neo4jExtractPath
-        Write-Info "neo4j export  -> $neo4jExtractPath"
-    }
-
-    # --- Summary ---
-
-    Write-Host ""
-    $goldenRecords = @(Import-Csv -LiteralPath $goldenRecordsPath)
-    Write-Host "Job $jobId completed." -ForegroundColor Green
-    Write-Host "Input records:   $($status.recordCount)" -ForegroundColor Cyan
-    Write-Host "Golden records:  $($goldenRecords.Count)" -ForegroundColor Cyan
-    Write-Host ""
-} else {
-    Write-Step "[1/2] Running local CLI..."
-    $profilePath = (Get-ChildItem -Path $ScenarioPath -Filter *.profile.json | Select-Object -First 1).FullName
-    if (-not $profilePath) {
-        throw "No *.profile.json found in $ScenarioPath"
-    }
-    $mergeFile = Get-ChildItem -Path $ScenarioPath -Filter *.merge.json | Select-Object -First 1
-
-    $cliArgs = @(
-        "run",
-        "--project", $cliProjectPath,
-        "--",
-        "run",
-        "--input", $csvPath,
-        "--profile", $profilePath,
-        "--output", $OutputPath
-    )
-    if ($mergeFile) { $cliArgs += @("--merge-policy", $mergeFile.FullName) }
-    if (-not $SkipNeo4jExport) {
-        $cliArgs += "--neo4j-export"
-    }
-
-    & dotnet @cliArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "CLI scenario run failed with exit code $LASTEXITCODE"
-    }
-
-    $goldenRecordsPath = Join-Path $OutputPath "golden-records.csv"
-    if (-not (Test-Path -LiteralPath $goldenRecordsPath)) {
-        throw "CLI completed but did not write $goldenRecordsPath"
-    }
-
-    if (-not $SkipNeo4jExport) {
-        $neo4jZipPath = Join-Path $OutputPath "neo4j-export.zip"
-        if (-not (Test-Path -LiteralPath $neo4jZipPath)) {
-            throw "CLI completed but did not write $neo4jZipPath"
-        }
-
-        $neo4jExtractPath = Join-Path $OutputPath "neo4j-export"
-        if (Test-Path -LiteralPath $neo4jExtractPath) {
-            Remove-Item -Recurse -Force -LiteralPath $neo4jExtractPath
-        }
-        Expand-Archive -LiteralPath $neo4jZipPath -DestinationPath $neo4jExtractPath
-        Write-Info "neo4j export  -> $neo4jExtractPath"
-    }
-
-    Write-Step "[2/2] Loading outputs..."
-    $goldenRecords = @(Import-Csv -LiteralPath $goldenRecordsPath)
-    $inputRecords = @(Import-Csv -LiteralPath $csvPath)
-    Write-Host ""
-    Write-Host "CLI scenario completed." -ForegroundColor Green
-    Write-Host "Input records:   $($inputRecords.Count)" -ForegroundColor Cyan
-    Write-Host "Golden records:  $($goldenRecords.Count)" -ForegroundColor Cyan
-    Write-Host ""
+Write-Step "[1/2] Running local CLI..."
+$profilePath = (Get-ChildItem -Path $ScenarioPath -Filter *.profile.json | Select-Object -First 1).FullName
+if (-not $profilePath) {
+    throw "No *.profile.json found in $ScenarioPath"
 }
+$mergeFile = Get-ChildItem -Path $ScenarioPath -Filter *.merge.json | Select-Object -First 1
+
+$cliArgs = @(
+    "run",
+    "--project", $cliProjectPath,
+    "--",
+    "run",
+    "--input", $csvPath,
+    "--profile", $profilePath,
+    "--output", $OutputPath
+)
+if ($mergeFile) { $cliArgs += @("--merge-policy", $mergeFile.FullName) }
+if (-not $SkipNeo4jExport) {
+    $cliArgs += "--neo4j-export"
+}
+
+& dotnet @cliArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "CLI scenario run failed with exit code $LASTEXITCODE"
+}
+
+$goldenRecordsPath = Join-Path $OutputPath "golden-records.csv"
+if (-not (Test-Path -LiteralPath $goldenRecordsPath)) {
+    throw "CLI completed but did not write $goldenRecordsPath"
+}
+
+if (-not $SkipNeo4jExport) {
+    $neo4jZipPath = Join-Path $OutputPath "neo4j-export.zip"
+    if (-not (Test-Path -LiteralPath $neo4jZipPath)) {
+        throw "CLI completed but did not write $neo4jZipPath"
+    }
+
+    $neo4jExtractPath = Join-Path $OutputPath "neo4j-export"
+    if (Test-Path -LiteralPath $neo4jExtractPath) {
+        Remove-Item -Recurse -Force -LiteralPath $neo4jExtractPath
+    }
+    Expand-Archive -LiteralPath $neo4jZipPath -DestinationPath $neo4jExtractPath
+    Write-Info "neo4j export  -> $neo4jExtractPath"
+}
+
+Write-Step "[2/2] Loading outputs..."
+$goldenRecords = @(Import-Csv -LiteralPath $goldenRecordsPath)
+$inputRecords = @(Import-Csv -LiteralPath $csvPath)
+Write-Host ""
+Write-Host "CLI scenario completed." -ForegroundColor Green
+Write-Host "Input records:   $($inputRecords.Count)" -ForegroundColor Cyan
+Write-Host "Golden records:  $($goldenRecords.Count)" -ForegroundColor Cyan
+Write-Host ""
 
 # --- Expectations check (optional) ---
 

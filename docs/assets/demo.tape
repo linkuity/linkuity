@@ -23,7 +23,9 @@ Type "dotnet run --project src/Linkuity.Cli -- run \"
 Enter
 Type "  --input samples/people-multi-source/sample.csv \"
 Enter
-Type "  --config samples/people-multi-source/match-config.json \"
+Type "  --profile samples/people-multi-source/people-multi-source.profile.json \"
+Enter
+Type "  --merge-policy samples/people-multi-source/people-multi-source.merge.json \"
 Enter
 Type "  --output ./data/output/demo"
 Enter

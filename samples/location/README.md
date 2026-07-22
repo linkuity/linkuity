@@ -75,12 +75,6 @@ phone identifier.
 
 ## Running it
 
-> **Note:** the command below uses the `--profile` / `--merge-policy` CLI flags
-> introduced by the CLI migration work. Until that lands, this sample cannot be run
-> end-to-end from the command line; its behavioral correctness (3 golden records,
-> per `expectations.json`) is instead pinned by an automated test once the CLI
-> supports it.
-
 ```bash
 dotnet run --project src/Linkuity.Cli -- run --input samples/location/sample.csv --profile samples/location/location.profile.json --merge-policy samples/location/location.merge.json --output ./data/output/location-check
 ```

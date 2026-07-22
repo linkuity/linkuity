@@ -13,7 +13,8 @@ Note: in `matches.csv`, any pair sharing an exact strong-identifier field (e.g. 
 ## Files
 
 - `sample.csv` — 8 input rows, 5 distinct organizations, 3 sources (CRM + Marketing + Support).
-- `match-config.json` — standalone CLI/API job configuration. All six match fields participate in matching with uniform `["CRM", "Marketing", "Support"]` source priority.
+- `organizations-name-noise.profile.json` — matching profile. All six fields carry matching roles.
+- `organizations-name-noise.merge.json` — merge policy. Uniform `["CRM", "Marketing", "Support"]` source priority for every merge-eligible field.
 - `expectations.json` — assertions for `Run-Scenario.ps1`, including the `neo4jExports.nonEmpty` block that pins the org export populated.
 
 ## Cluster catalog

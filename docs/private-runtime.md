@@ -54,18 +54,20 @@ matches with the native .NET matching engine, clusters, merges golden records, a
 optionally export a Neo4j-ready bundle — with no server, queue, or external process:
 
 ```powershell
-dotnet run --project src/Linkuity.Cli -- run --input <input.csv> --config <match-config.json> --output <dir>
+dotnet run --project src/Linkuity.Cli -- run --input <input.csv> --profile <person|organization|profile.json> [--merge-policy <merge.json>] --output <dir>
 ```
+
+See [`docs/configuration.md`](configuration.md) for the profile and merge-policy schema.
 
 On top of that, the current codebase supports durable local MDM metadata (JSON-backed or a
 first-class **PostgreSQL** backend), incremental ingest (`linkuity ingest-incremental`),
 durable project merge policy, and a Docker Compose private-server batch path.
 
 The HTTP API also completes a batch match end to end today, synchronously: `POST /run`
-takes a multipart request (a `config` JSON part plus a `file` CSV part) and streams back
-the merged golden records as `text/csv`, sharing the same normalize -> match -> cluster ->
-merge pipeline (`BatchRunService`) that the CLI uses — no polling, no separate dispatch
-step. Because within-batch matching is O(n^2)-ish, synchronous input is capped at 400 KiB;
+takes a multipart request (a `profile` part, an optional `merge-policy` part, and a `file`
+CSV part) and streams back the merged golden records as `text/csv`, sharing the same
+normalize -> match -> cluster -> merge pipeline (`BatchRunService`) that the CLI uses — no
+polling, no separate dispatch step. Because within-batch matching is O(n^2)-ish, synchronous input is capped at 400 KiB;
 larger inputs get a 400 response with guidance to use the CLI instead. An asynchronous
 variant of this endpoint (for larger inputs) is planned as an additive future addition —
 it does not exist today. Azure Blob Storage remains available as an artifact-store adapter
@@ -89,7 +91,11 @@ To reproduce or extend the scale numbers, use the `Linkuity.Mdm.Benchmarks` harn
 
 ## Merge Policy Modes
 
-Standalone `run` is a self-contained local batch job. It reads matching and merge settings from the run file passed with `--config`, including `mergeConfiguration`, and writes job artifacts plus `golden-records.csv` to the requested output directory. This path remains useful for samples, evaluation jobs, and one-off analysis because it does not require a durable project or metadata database.
+Standalone `run` is a self-contained local batch job. It takes a matching profile
+(`--profile`) and an optional merge policy (`--merge-policy`) directly, and writes job
+artifacts plus `golden-records.csv` to the requested output directory. This path
+remains useful for samples, evaluation jobs, and one-off analysis because it does not
+require a durable project or metadata database.
 
 Durable MDM projects store merge policy on the project. Project create/read/update surfaces expose that policy, and durable workflows use it when creating current golden records and versions. `persist-batch` imports completed batch artifacts into durable metadata, but durable canonical values are computed from the project merge policy. `ingest-incremental` uses the same project policy when new records update affected clusters, keeping source-priority fields consistent across full durable imports and incremental ingests.
 

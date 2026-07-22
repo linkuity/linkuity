@@ -110,7 +110,7 @@ annotated block above is not fiction, it will load as-is.)
 | `fields[]` | yes, ≥ 1 entry | One entry per column in your data. Field names must be unique within a profile (duplicates throw at load time). |
 | `fields[].name` | yes | The column name in your input data. |
 | `fields[].semanticType` | yes | What kind of value this is — see [the semantic-type vocabulary](#the-semantic-type-vocabulary) below. Drives normalization and which blocking strategies apply. Unknown value throws. |
-| `fields[].roles` | yes (may be `[]`) | Any combination of `Searchable`, `Matchable`, `Blocking`, `Identifier` — see [roles](#field-roles) below. Unknown role name throws. |
+| `fields[].roles` | no (omitted ⇒ no roles, same as `[]`) | Any combination of `Searchable`, `Matchable`, `Blocking`, `Identifier` — see [roles](#field-roles) below. Unknown role name throws. |
 | `fields[].similarityEvaluator` | no | Which evaluator compares this field: `exact`, `fuzzy`, `jaccard`, `ngram`, `numeric`, or `date`. Must be registered if present; unknown value throws. |
 | `fields[].weight` | no | Relative importance in weighted scoring. Defaults to `1.0`. |
 | `fields[].evaluatorOptions` | no | Per-evaluator tuning knobs, as a string-to-string map. Recognized keys: `numeric.tolerance`, `numeric.maxPercentDiff` (for the `numeric` evaluator), `date.maxDays` (for `date`), `ngram.size` (for `ngram`). E.g. `{ "ngram.size": "3" }`. |

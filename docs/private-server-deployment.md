@@ -11,24 +11,27 @@ Storage artifact-store adapter remains an opt-in compatibility and deployment pa
 
 - Docker Engine or Docker Desktop with Docker Compose.
 - Enough local disk for input files, job artifacts, and output CSVs.
-- A CSV input file and a Linkuity match configuration JSON file.
+- A CSV input file, a Linkuity matching profile (`*.profile.json`) JSON file, and an
+  optional merge-policy (`*.merge.json`) JSON file. See
+  [`docs/configuration.md`](configuration.md) for the schema.
 
 ## Directory Layout
 
 The default `.env.example` uses these paths:
 
 ```text
-./samples/people-multi-source/sample.csv       sample input CSV
-./samples/people-multi-source/match-config.json sample match configuration
-./data/artifacts                               local job artifacts
-./data/output/people-multi-source             golden-record output
+./samples/people-multi-source/sample.csv                          sample input CSV
+./samples/people-multi-source/people-multi-source.profile.json    sample matching profile
+./samples/people-multi-source/people-multi-source.merge.json      sample merge policy
+./data/artifacts                                                  local job artifacts
+./data/output/people-multi-source                                golden-record output
 ```
 
 For a real private server, keep operational data under a server-owned directory such as `/srv/linkuity`:
 
 ```text
 /srv/linkuity/input      source CSV files supplied by operators or jobs
-/srv/linkuity/config     match configuration JSON files
+/srv/linkuity/config     matching profile and merge-policy JSON files
 /srv/linkuity/artifacts  normalized CSVs, metadata, matches, and job internals
 /srv/linkuity/output     golden-record CSVs and optional exports
 ```
@@ -47,7 +50,8 @@ Edit `.env` for your server paths:
 
 ```dotenv
 LINKUITY_INPUT=./samples/people-multi-source/sample.csv
-LINKUITY_CONFIG=./samples/people-multi-source/match-config.json
+LINKUITY_PROFILE=./samples/people-multi-source/people-multi-source.profile.json
+LINKUITY_MERGE=./samples/people-multi-source/people-multi-source.merge.json
 LINKUITY_OUTPUT=./data/output/people-multi-source
 LINKUITY_ARTIFACTS=./data/artifacts
 ```
@@ -85,7 +89,7 @@ The sample run writes:
 ./data/artifacts/<job-id>/golden_records.csv
 ```
 
-To rerun with another dataset, update `LINKUITY_INPUT`, `LINKUITY_CONFIG`, `LINKUITY_OUTPUT`, and `LINKUITY_ARTIFACTS` in `.env`.
+To rerun with another dataset, update `LINKUITY_INPUT`, `LINKUITY_PROFILE`, `LINKUITY_MERGE`, `LINKUITY_OUTPUT`, and `LINKUITY_ARTIFACTS` in `.env`.
 
 ## Health Checks
 
@@ -116,7 +120,7 @@ Back up these paths according to your organization's retention policy:
 - `LINKUITY_OUTPUT`: golden-record CSVs and exports that users consume.
 - `LINKUITY_ARTIFACTS`: job metadata, normalized CSVs, match files, and intermediate artifacts when auditability or reruns matter.
 - Source input directories: original CSVs if they are not already retained in an upstream system.
-- Match configuration directories: JSON configuration files used to produce outputs.
+- Matching profile and merge-policy directories: JSON configuration files used to produce outputs.
 - Durable database volumes when running a durable MDM project on the PostgreSQL backend.
 
 If job artifacts are temporary in your environment, you may delete old `LINKUITY_ARTIFACTS/<job-id>` folders after confirming the output has been retained. Do not delete `LINKUITY_OUTPUT` unless the golden-record outputs have been backed up or are no longer needed.

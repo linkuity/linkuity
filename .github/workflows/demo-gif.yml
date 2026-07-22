@@ -49,7 +49,8 @@ jobs:
         run: |
           dotnet run --project src/Linkuity.Cli -- run \
             --input samples/people-multi-source/sample.csv \
-            --config samples/people-multi-source/match-config.json \
+            --profile samples/people-multi-source/people-multi-source.profile.json \
+            --merge-policy samples/people-multi-source/people-multi-source.merge.json \
             --output ./data/output/warm
 
       - name: Render demo.gif
