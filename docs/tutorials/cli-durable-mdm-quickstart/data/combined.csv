@@ -1,0 +1,8 @@
+id,source,first_name,last_name,email,phone
+crm-1,CRM,Ada,Lovelace,ada@analytical.example,555-0101
+crm-2,CRM,Grace,Hopper,grace@navy.example,555-0102
+crm-3,CRM,Alan,Turing,alan@bletchley.example,555-0103
+crm-4,CRM,Katherine,Johnson,katherine@nasa.example,555-0104
+mkt-1,Marketing,Ada,Lovelace,ada@analytical.example,555-9001
+mkt-2,Marketing,Thomas,Hopper,thomas@hopper-mail.example,555-7777
+mkt-3,Marketing,Margaret,Hamilton,margaret@apollo.example,555-3333
