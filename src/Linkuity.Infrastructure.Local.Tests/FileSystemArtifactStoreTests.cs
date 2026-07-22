@@ -65,7 +65,7 @@ public class FileSystemArtifactStoreTests : IDisposable
         var roundTrip = await store.ReadJsonAsync<Job>($"{job.Id}/metadata.json");
         Assert.NotNull(roundTrip);
         Assert.Equal(JobState.MatchingComplete, roundTrip.State);
-        Assert.Equal(SemanticFieldType.LastName, roundTrip.Configuration.Fields[0].SemanticType);
+        Assert.Equal(SemanticFieldType.LastName, roundTrip.Configuration!.Fields[0].SemanticType);
     }
 
     [Fact]

@@ -34,7 +34,7 @@ public sealed class BatchMatchingService
         await using (var normalized = await _store.DownloadAsync($"{jobId}/normalized.csv", ct))
             rows = ReadRows(normalized);
 
-        var matchesCsv = BuildMatchesCsv(rows, job.Configuration);
+        var matchesCsv = BuildMatchesCsv(rows, job.Configuration!);
 
         using var outStream = new MemoryStream(Encoding.UTF8.GetBytes(matchesCsv));
         await _store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);

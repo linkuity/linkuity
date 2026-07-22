@@ -35,7 +35,7 @@ public class PostProcessingService
 
         try
         {
-            var sourceField = job.Configuration.Fields
+            var sourceField = job.Configuration!.Fields
                 .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name;
 
             await using var normalizedStream = await _artifactStore.DownloadAsync($"{jobId}/normalized.csv", ct);

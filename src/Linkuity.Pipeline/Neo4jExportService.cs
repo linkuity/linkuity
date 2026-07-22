@@ -111,7 +111,7 @@ public class Neo4jExportService
 
             var cypherEntry = archive.CreateEntry("load.cypher", CompressionLevel.Optimal);
             await using var cypherStream = cypherEntry.Open();
-            var typeLabel = ContentTypeVocabulary.TryGetLabel(job.Configuration.ContentType, out var resolved) ? resolved : null;
+            var typeLabel = ContentTypeVocabulary.TryGetLabel(job.Configuration!.ContentType, out var resolved) ? resolved : null;
             var cypherBytes = Encoding.UTF8.GetBytes(BuildLoadCypherScript(typeLabel));
             await cypherStream.WriteAsync(cypherBytes, ct);
         }
@@ -137,7 +137,7 @@ public class Neo4jExportService
     };
 
     private static string? FieldByType(Job job, SemanticFieldType type)
-        => job.Configuration.Fields.FirstOrDefault(f => f.SemanticType == type)?.Name;
+        => job.Configuration!.Fields.FirstOrDefault(f => f.SemanticType == type)?.Name;
 
     private async Task<Stream> GenerateDistinctValuesAsync(Guid jobId, string? fieldName, string outputHeader, CancellationToken ct)
     {
