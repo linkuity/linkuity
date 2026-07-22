@@ -54,12 +54,13 @@
       }
     },
     {
-      "name": "cluster_7_grace_garcia_all_four",
+      "name": "cluster_7_joseph_martinez_all_four",
       "members": ["crm-050", "mkt-051", "sup-052", "bil-053"],
       "expectedFields": {
-        "email": "grace.garcia@example.com",
-        "phone": "+12125555002",
-        "address_line": "700 Walnut Dr Suite 100"
+        "email": "joseph.martinez@example.com",
+        "phone": "+13125550147",
+        "address_line": "1420 Maple Ave Apt 3B",
+        "first_name": "Joseph"
       }
     },
     {

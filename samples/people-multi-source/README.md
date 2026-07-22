@@ -27,24 +27,25 @@ For each field with a priority rule, the merger walks the priority list and take
 
 ## Worked example: cluster 7
 
-Cluster 7 (Grace Garcia) is the cleanest illustration — all four sources contribute one row each, and three different sources own three different priority fields. The four input rows from `sample.csv`:
+Cluster 7 (Joseph Martinez) is the cleanest illustration — all four sources contribute one row each, and each stores the same person a little differently: a nickname (`Joe`), a misspelling (`Joesph`), a one-letter email typo (`joseph.martimez`), the same phone in four formats, and an apartment number that only reached two systems. The four input rows from `sample.csv`:
 
-| id        | source    | email                              | phone           | address_line               |
-|-----------|-----------|------------------------------------|-----------------|----------------------------|
-| crm-050   | CRM       | grace.garcia@example.com           | (212) 555-5000  | 700 Walnut Dr              |
-| mkt-051   | Marketing | grace.garcia+m@example.com         | (212) 555-5001  | 700 Walnut Dr              |
-| sup-052   | Support   | grace.garcia+s@example.com         | (212) 555-5002  | 700 Walnut Dr Apt 1        |
-| bil-053   | Billing   | grace.garcia+b@example.com         | (212) 555-5003  | 700 Walnut Dr Suite 100    |
+| id        | source    | first_name | email                          | phone           | address_line               |
+|-----------|-----------|------------|--------------------------------|-----------------|----------------------------|
+| crm-050   | CRM       | Joseph     | joseph.martinez@example.com    | (312) 555-0147  | 1420 Maple Avenue          |
+| mkt-051   | Marketing | Joe        | joe.martinez@example.com       | 312-555-0147    | 1420 Maple Ave             |
+| sup-052   | Support   | Joesph     | joseph.martinez@example.com    | 312.555.0147    | 1420 Maple Avenue Apt 3B   |
+| bil-053   | Billing   | Joseph     | joseph.martimez@example.com    | 3125550147      | 1420 Maple Ave Apt 3B      |
 
-After the pipeline runs, the merger applies each field's priority list to produce the golden record:
+After the pipeline runs, the merger applies each field's priority list (falling back to consensus for fields without one) to produce the golden record:
 
-| Field          | Priority list                          | Winner    | Golden value                  |
-|----------------|----------------------------------------|-----------|-------------------------------|
-| `email`        | **CRM** → MKT → SUP → BIL              | `crm-050` | `grace.garcia@example.com`    |
-| `phone`        | **SUP** → CRM → BIL → MKT              | `sup-052` | `+12125555002`                |
-| `address_line` | **BIL** → CRM → SUP → MKT              | `bil-053` | `700 Walnut Dr Suite 100`     |
+| Field          | Priority list                          | Winner      | Golden value                  |
+|----------------|----------------------------------------|-------------|-------------------------------|
+| `first_name`   | *(none — consensus)*                    | consensus   | `Joseph`                      |
+| `email`        | **CRM** → MKT → SUP → BIL              | `crm-050`   | `joseph.martinez@example.com` |
+| `phone`        | **SUP** → CRM → BIL → MKT              | `sup-052`   | `+13125550147`                |
+| `address_line` | **BIL** → CRM → SUP → MKT              | `bil-053`   | `1420 Maple Ave Apt 3B`       |
 
-Three different sources win three different fields — the golden record is a *composite*, not a copy of any single input row. Phone is shown post-normalization (libphonenumber → E.164); see [Notes on normalization](#notes-on-normalization) below.
+Different sources win different fields — the golden record is a *composite*, not a copy of any single input row. `first_name` has no priority list, so the merger falls back to the most common spelling (`Joseph`, 2 of 4), discarding the nickname and the typo. Phone is shown post-normalization (libphonenumber → E.164); see [Notes on normalization](#notes-on-normalization) below.
 
 ## Cluster catalog
 
