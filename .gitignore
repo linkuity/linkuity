@@ -6,6 +6,9 @@ TestResults/
 *.nupkg
 nupkgs/
 
+# Linkuity local working artifacts (durable index, etc.)
+.linkuity/
+
 # Test sample outputs
 samples/people-multi-source/output
 samples/people-phone-noise/output

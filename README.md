@@ -45,28 +45,37 @@ The sample starts with 28 records from CRM, Marketing, Support, and Billing. Lin
 
 ## Before And After
 
-Input rows can disagree across systems:
+Real systems rarely store a person the same way twice. The same customer shows up as a nickname in one app, a fat-fingered typo in another, and a differently formatted phone number in a third:
 
 | id | source | first_name | last_name | email | phone | address_line |
 |----|--------|------------|-----------|-------|-------|--------------|
-| crm-050 | CRM | Grace | Garcia | grace.garcia@example.com | (212) 555-5000 | 700 Walnut Dr |
-| mkt-051 | Marketing | Grace | Garcia | grace.garcia+m@example.com | (212) 555-5001 | 700 Walnut Dr |
-| sup-052 | Support | Grace | Garcia | grace.garcia+s@example.com | (212) 555-5002 | 700 Walnut Dr Apt 1 |
-| bil-053 | Billing | Grace | Garcia | grace.garcia+b@example.com | (212) 555-5003 | 700 Walnut Dr Suite 100 |
+| crm-050 | CRM | Joseph | Martinez | joseph.martinez@example.com | (312) 555-0147 | 1420 Maple Avenue |
+| mkt-051 | Marketing | Joe | Martinez | joe.martinez@example.com | 312-555-0147 | 1420 Maple Ave |
+| sup-052 | Support | Joesph | Martinez | joseph.martinez@example.com | 312.555.0147 | 1420 Maple Avenue Apt 3B |
+| bil-053 | Billing | Joseph | Martinez | joseph.martimez@example.com | 3125550147 | 1420 Maple Ave Apt 3B |
 
-Linkuity clusters the records and produces one golden record:
+Every mismatch here is one you have probably seen in production:
 
-| record_count | member_ids | email | phone | address_line |
-|--------------|------------|-------|-------|--------------|
-| 4 | crm-050\|mkt-051\|sup-052\|bil-053 | grace.garcia@example.com | +12125555002 | 700 Walnut Dr Suite 100 |
+- **Nickname vs. legal name** — `Joe` in Marketing, `Joseph` in the others.
+- **A typo in the name** — Support saved `Joesph`.
+- **A typo in the email** — Billing has `joseph.martimez` (an `m` where the `n` should be), so an exact-match join silently misses it.
+- **One phone, four formats** — parentheses, dashes, dots, and bare digits.
+- **Addresses that drifted apart** — `Avenue` shortened to `Ave`, and the apartment number only reached two of the four systems.
+
+Linkuity normalizes, blocks, scores, and clusters these into one golden record:
+
+| record_count | member_ids | first_name | email | phone | address_line |
+|--------------|------------|------------|-------|-------|--------------|
+| 4 | crm-050\|mkt-051\|sup-052\|bil-053 | Joseph | joseph.martinez@example.com | +13125550147 | 1420 Maple Ave Apt 3B |
 
 That output is explainable:
 
 | Field | Winner | Why |
 |-------|--------|-----|
-| email | CRM | CRM is the highest-priority source for email |
-| phone | Support | Support is the highest-priority source for phone |
-| address_line | Billing | Billing is the highest-priority source for address |
+| first_name | Consensus | `Joseph` is the most common spelling across the sources, so the nickname and the typo lose |
+| email | CRM | CRM is the highest-priority source for email — and its address has no typo |
+| phone | Support | Support is the highest-priority source for phone; every format normalizes to the same number |
+| address_line | Billing | Billing is the highest-priority source for address and carries the apartment number |
 
 Golden records are composites. They do not have to be copied from a single source row.
 
@@ -83,6 +92,55 @@ Linkuity currently supports batch and durable incremental entity resolution:
 7. Export artifacts, score breakdowns, and optional Neo4j graph files.
 
 The default path is local-first. Azure Blob Storage is available as an optional adapter when `Linkuity:RuntimeMode=Azure`, but it is not required for local or private-server use.
+
+## How Matching Works
+
+Comparing every record against every other is `N²` and doesn't scale, so Linkuity only compares records that share a cheap-to-compute **blocking key**, then scores just those candidate pairs field by field — name, email, phone, address — into a single similarity score. That score falls into one of three **decision bands**: high scores **auto-merge**, low scores stay **separate**, and the uncertain middle becomes a **review task** for a human. Accepted pairs are grouped transitively into clusters, and each cluster collapses into one golden record using your source-priority merge rules. Every pair keeps a per-field score breakdown, so you can always see *why* two records did or didn't merge.
+
+You steer all of this with a matching profile and a few score thresholds. The two failure modes are **under-merging** (real duplicates left separate) and **over-merging** (distinct entities collapsed together) — tuning the thresholds and which fields participate in matching is how you correct each. For the full treatment — normalization, blocking, similarity scoring, the decision bands, clustering, and merge policy, with a worked example computed from real engine output — see [docs/how-matching-works.md](docs/how-matching-works.md).
+
+## Two Ways to Run Linkuity
+
+Linkuity has two execution modes, and the quick start above used the first one.
+
+**Batch mode** (`linkuity run`) is stateless. It reads a CSV, resolves it in one pass, writes `golden-records.csv`, and forgets everything. Reach for it when you want a one-off dedupe, an export, or a CI check — it's exactly what the [quick start](#try-it-in-under-five-minutes) did.
+
+**Durable mode** (`linkuity project` + `ingest-incremental`) keeps a persistent store. It *remembers* every record it has seen, so when new data arrives it matches against what already exists and updates the golden records incrementally — with full version history and a review queue for uncertain matches. The store is backed by a **local JSON file** or **PostgreSQL**.
+
+| | Batch mode | Durable mode |
+|---|---|---|
+| Entry point | `linkuity run` | `linkuity project` / `ingest-incremental` |
+| State | Stateless — resolves and forgets | Persistent store that remembers |
+| New data | Reprocesses the whole file each time | Matched incrementally against stored records |
+| History & review | — | Versioned golden records + review queue |
+| Store backend | Output files on disk | Local JSON file **or** PostgreSQL |
+| Reach for it when | One-off dedupe, exports, CI | Ongoing MDM as data arrives over time |
+
+### Durable mode on PostgreSQL
+
+Every durable command targets a Postgres store by adding `--metadata-store postgres --connection-string <conn>` (a local JSON store uses `--metadata <file>` instead). Linkuity creates its schema on first use, so all you need is a reachable database:
+
+```powershell
+$conn = "Host=localhost;Port=5432;Database=linkuity;Username=postgres;Password=postgres"
+$data = "docs/tutorials/cli-durable-mdm-quickstart/data"
+
+# Helper so every command targets the same Postgres store
+# (don't name it `cli` — that's a built-in PowerShell alias)
+function linkuity { dotnet run --project src/Linkuity.Cli -- @args --metadata-store postgres --connection-string $conn }
+
+# Create a durable project (prints a project id)
+$projectId = (linkuity project create --name "Customer 360" --content-type person --merge-policy "$data/merge-policy.json").Trim()
+
+# Register the CRM source, open a batch, and load its rows
+$crm   = (linkuity source create --project-id $projectId --name "CRM").Trim()
+$batch = (linkuity batch create  --project-id $projectId --source-id $crm --record-count 4).Trim()
+linkuity ingest-incremental --project-id $projectId --source-id $crm --batch-id $batch --input "$data/crm.csv"
+
+# Read the golden records back out of Postgres
+linkuity golden list --project-id $projectId
+```
+
+Load a second source later and Linkuity matches it against the records already in Postgres — auto-merging confident duplicates, versioning the golden records, and queuing uncertain matches for review. For the full step-by-step walkthrough (it uses a JSON-file store, but every command works the same on Postgres by adding the two flags above), see [docs/tutorials/cli-durable-mdm-quickstart.md](docs/tutorials/cli-durable-mdm-quickstart.md).
 
 ## Quick Starts
 
@@ -190,6 +248,20 @@ curl.exe -X POST http://localhost:5017/run `
 
 `POST /run` returns the golden-records CSV directly. The endpoint accepts small synchronous inputs today; use the CLI for larger files.
 
+## Samples
+
+The [`samples/`](samples/) directory holds small, self-contained datasets — each with a README walkthrough and expected results — that double as teaching examples and as starting points for tuning your own rules. The flat samples are one CSV plus a `match-config.json`, pinned by `SampleScenarioTests`; the durable samples are ordered command sequences run by `scripts/Run-DurableScenario.ps1`.
+
+| Sample | What it shows |
+|--------|---------------|
+| [people-multi-source](samples/people-multi-source/README.md) | 28 rows → 10 golden records. Source-priority merging across a range of cluster shapes — the main teaching example, used throughout this README. |
+| [people-phone-noise](samples/people-phone-noise/README.md) | Declaring a field but excluding it from matching (`participatesInMatching: false`), for when phone numbers are unreliable for identity (shared landlines, recycled numbers). |
+| [organizations-multi-source](samples/organizations-multi-source/README.md) | The multi-source merge mechanics applied to org data — legal-suffix variation, article/prefix name noise, and the `organization_name` / `domain_name` semantic types. |
+| [organizations-name-noise](samples/organizations-name-noise/README.md) | Org name-noise corner cases: ampersand variants (`A & B` vs `A and B`) and disambiguating same-named firms by `domain_name`. |
+| [durable](samples/durable/README.md) | Durable MDM as scenario scripts: incremental auto-join, golden-record versioning, the review queue, and full-vs-incremental consistency. |
+
+Run a flat sample with the [CLI batch command](#cli-batch-run) (swap in that sample's `sample.csv` and `match-config.json`), verify one end to end with the [scenario harness](#verified-sample-scenario), or work through the guided [durable MDM quick start](docs/tutorials/cli-durable-mdm-quickstart.md).
+
 ## Why Developers Use Linkuity
 
 | Need | Linkuity gives you |
@@ -229,8 +301,14 @@ docs/
                             Docker Compose private-server batch path
   tutorials/                Hands-on guides
 samples/
-  people-multi-source/      28-row, 10-golden-record sample scenario
+  people-multi-source/      28-row, 10-golden-record teaching scenario
+  people-phone-noise/       Excluding an unreliable field from matching
+  organizations-multi-source/  Org-shaped multi-source merging
+  organizations-name-noise/ Org name-noise corner cases
+  durable/                  Durable MDM scenario scripts
 ```
+
+See [Samples](#samples) for what each one demonstrates and how to run it.
 
 ## Documentation
 
