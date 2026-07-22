@@ -1,6 +1,7 @@
 using System.Text;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
 
@@ -75,6 +76,23 @@ public sealed class BatchMatchingServiceTests
         var csv = BatchMatchingService.BuildMatchesCsv(rows, PersonConfig());
         foreach (var edge in ParseCsv(csv).Skip(1))
             Assert.NotEqual(edge[0], edge[1]);
+    }
+
+    [Fact]
+    public void BuildMatchesCsv_WithProfile_MatchesOnSharedIdentifier()
+    {
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var rows = new List<(string, IReadOnlyDictionary<string, string>)>
+        {
+            ("1", new Dictionary<string, string> { ["id"] = "1", ["email"] = "a@example.com", ["first_name"] = "Al" }),
+            ("2", new Dictionary<string, string> { ["id"] = "2", ["email"] = "a@example.com", ["first_name"] = "Al" }),
+            ("3", new Dictionary<string, string> { ["id"] = "3", ["email"] = "b@example.com", ["first_name"] = "Bo" }),
+        };
+
+        var csv = BatchMatchingService.BuildMatchesCsv(rows, profile);
+
+        Assert.Contains("1,2", csv); // shared email -> auto-match edge
+        Assert.DoesNotContain("1,3", csv);
     }
 }
 

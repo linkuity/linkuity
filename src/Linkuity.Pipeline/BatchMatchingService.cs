@@ -40,11 +40,28 @@ public sealed class BatchMatchingService
         await _store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);
     }
 
+    public async Task RunAsync(string jobId, MatchingProfile profile, CancellationToken ct)
+    {
+        List<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows;
+        await using (var normalized = await _store.DownloadAsync($"{jobId}/normalized.csv", ct))
+            rows = ReadRows(normalized);
+
+        var matchesCsv = BuildMatchesCsv(rows, profile);
+
+        using var outStream = new MemoryStream(Encoding.UTF8.GetBytes(matchesCsv));
+        await _store.UploadAsync($"{jobId}/matches.csv", outStream, "text/csv", ct);
+    }
+
     public static string BuildMatchesCsv(
         IReadOnlyList<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows,
         MatchConfiguration configuration)
+        => BuildMatchesCsv(rows, MatchConfigurationProfileFactory.Create(configuration));
+
+    public static string BuildMatchesCsv(
+        IReadOnlyList<(string SourceId, IReadOnlyDictionary<string, string> Fields)> rows,
+        MatchingProfile profile)
     {
-        var profile = MatchConfigurationProfileFactory.Create(configuration);
+        profile = profile.WithCandidateRetrievalStrategy("blocking-linear");
         var engine = new MatchingEngine(MatchingDefaults.CreateRegistry());
         var now = DateTimeOffset.UtcNow;
 
