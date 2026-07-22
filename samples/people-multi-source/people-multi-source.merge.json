@@ -1,0 +1,9 @@
+{
+  "mergeFields": [
+    { "fieldName": "email",         "sourcePriority": ["CRM", "Marketing", "Support", "Billing"] },
+    { "fieldName": "phone",         "sourcePriority": ["Support", "CRM", "Billing", "Marketing"] },
+    { "fieldName": "date_of_birth", "sourcePriority": ["CRM", "Billing", "Support", "Marketing"] },
+    { "fieldName": "address_line",  "sourcePriority": ["Billing", "CRM", "Support", "Marketing"] },
+    { "fieldName": "postal_code",   "sourcePriority": ["Billing", "CRM", "Support", "Marketing"] }
+  ]
+}

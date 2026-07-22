@@ -1,0 +1,23 @@
+{
+  "contentType": "person",
+  "fields": [
+    { "name": "source",        "semanticType": "SourceIdentifier", "roles": [] },
+    { "name": "first_name",    "semanticType": "FirstName",        "roles": ["Searchable","Matchable"],                         "similarityEvaluator": "fuzzy",   "weight": 1.0 },
+    { "name": "last_name",     "semanticType": "LastName",         "roles": ["Searchable","Matchable","Blocking"],              "similarityEvaluator": "fuzzy",   "weight": 2.0 },
+    { "name": "email",         "semanticType": "Email",            "roles": ["Searchable","Matchable","Blocking","Identifier"], "similarityEvaluator": "exact",   "weight": 3.0 },
+    { "name": "phone",         "semanticType": "Phone",            "roles": ["Matchable","Blocking","Identifier"],              "similarityEvaluator": "exact",   "weight": 3.0 },
+    { "name": "date_of_birth", "semanticType": "DateOfBirth",      "roles": ["Matchable","Blocking","Identifier"],              "similarityEvaluator": "date",    "weight": 2.0 },
+    { "name": "address_line",  "semanticType": "AddressLine",      "roles": ["Searchable","Matchable"],                         "similarityEvaluator": "jaccard", "weight": 1.0 },
+    { "name": "postal_code",   "semanticType": "PostalCode",       "roles": ["Matchable"],                                      "similarityEvaluator": "exact",   "weight": 1.0 },
+    { "name": "company",       "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"],              "similarityEvaluator": "fuzzy",   "weight": 1.5 }
+  ],
+  "normalizationStrategy": "identity",
+  "blockingStrategies": ["exact-value", "token-name"],
+  "candidateRetrievalStrategy": "linear",
+  "similarityStrategy": "field-weighted",
+  "scoringStrategy": "identifier-weighted",
+  "decisionStrategy": "threshold",
+  "clusteringStrategy": "union-find",
+  "autoMatchThreshold": 0.90,
+  "reviewThreshold": 0.75
+}
