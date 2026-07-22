@@ -8,7 +8,7 @@ namespace Linkuity.Cli.Tests;
 // Parity gate: drives each real sample under samples/ through `linkuity run` with the native
 // matcher and asserts the cluster outcomes the (now-removed) Python pytest suite pinned. This
 // proves no example/tutorial lesson was lost in the native rewrite, and is the tuning gate for
-// the batch match cut (MatchConfigurationProfileFactory.AutoMatchThreshold).
+// the batch match cut (the profile's configured auto-match threshold).
 public sealed class SampleScenarioTests : IDisposable
 {
     private readonly string _work = Path.Combine(Path.GetTempPath(), $"linkuity-samples-{Guid.NewGuid():N}");

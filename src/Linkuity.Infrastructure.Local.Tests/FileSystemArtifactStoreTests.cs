@@ -43,19 +43,7 @@ public class FileSystemArtifactStoreTests : IDisposable
             State = JobState.MatchingComplete,
             CreatedAt = DateTimeOffset.Parse("2026-06-11T12:00:00Z"),
             AutoStart = true,
-            RecordCount = 42,
-            Configuration = new MatchConfiguration
-            {
-                ContentType = "person",
-                Fields =
-                [
-                    new Field
-                    {
-                        Name = "last_name",
-                        SemanticType = SemanticFieldType.LastName
-                    }
-                ]
-            }
+            RecordCount = 42
         };
 
         await store.WriteJsonAsync($"{job.Id}/metadata.json", job);
@@ -64,8 +52,9 @@ public class FileSystemArtifactStoreTests : IDisposable
         Assert.Contains("\"State\":\"matching_complete\"", json);
         var roundTrip = await store.ReadJsonAsync<Job>($"{job.Id}/metadata.json");
         Assert.NotNull(roundTrip);
+        Assert.Equal(job.Id, roundTrip.Id);
         Assert.Equal(JobState.MatchingComplete, roundTrip.State);
-        Assert.Equal(SemanticFieldType.LastName, roundTrip.Configuration!.Fields[0].SemanticType);
+        Assert.Equal(42, roundTrip.RecordCount);
     }
 
     [Fact]
@@ -79,12 +68,7 @@ public class FileSystemArtifactStoreTests : IDisposable
             Id = Guid.Parse(jobId),
             State = JobState.Open,
             CreatedAt = DateTimeOffset.Parse("2026-06-11T12:00:00Z"),
-            AutoStart = false,
-            Configuration = new MatchConfiguration
-            {
-                ContentType = "person",
-                Fields = []
-            }
+            AutoStart = false
         });
 
         foreach (var artifactName in new[] { "input.csv", "normalized.csv", "matches.csv", "golden_records.csv" })

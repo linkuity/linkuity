@@ -363,17 +363,18 @@ data as a graph of people, sources, emails, and the links between them.
 > records. It produces the same six clusters you built durably, just rendered as a graph.
 > This step additionally needs **Neo4j**.
 
-This tutorial ships a combined file (`data/combined.csv`, all seven records) and a matching
-configuration (`data/match-config.json`). Generate the graph bundle:
+This tutorial ships a combined file (`data/combined.csv`, all seven records), a matching
+profile (`data/people.profile.json`), and a merge policy (`data/people.merge.json`). Generate
+the graph bundle:
 
 ```powershell
 # PowerShell
-linkuity run --input "$data/combined.csv" --config "$data/match-config.json" --output "$work/neo4j-out" --neo4j-export
+linkuity run --input "$data/combined.csv" --profile "$data/people.profile.json" --merge-policy "$data/people.merge.json" --output "$work/neo4j-out" --neo4j-export
 ```
 
 ```bash
 # bash
-linkuity run --input "$data/combined.csv" --config "$data/match-config.json" --output "$work/neo4j-out" --neo4j-export
+linkuity run --input "$data/combined.csv" --profile "$data/people.profile.json" --merge-policy "$data/people.merge.json" --output "$work/neo4j-out" --neo4j-export
 ```
 
 You'll get a `neo4j-out/` folder containing `golden-records.csv` and `neo4j-export.zip`. Unzip
