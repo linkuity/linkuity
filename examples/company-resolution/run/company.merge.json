@@ -1,0 +1,7 @@
+{
+  "mergeFields": [
+    { "fieldName": "organization_name", "sourcePriority": ["GLEIF", "SEC"] },
+    { "fieldName": "address_line",      "sourcePriority": ["SEC", "GLEIF"] },
+    { "fieldName": "postal_code",       "sourcePriority": ["SEC", "GLEIF"] }
+  ]
+}
