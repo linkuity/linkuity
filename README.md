@@ -16,6 +16,8 @@ your own environment.
 - 🔒 **Run locally or privately** — no customer data leaves your environment
 - ♻️ **Batch or durable incremental** resolution as data arrives over time
 
+![Linkuity resolving 28 source records into 10 golden records](docs/assets/demo.gif)
+
 ## Quick start
 
 **Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download).
@@ -40,8 +42,8 @@ Golden records: …/data/output/people-multi-source/golden-records.csv
 Add `--neo4j-export` to also write a graph bundle. Next: the guided
 [durable MDM quick start](docs/tutorials/cli-durable-mdm-quickstart.md).
 
-> A recordable terminal demo lives in [`docs/assets/demo.tape`](docs/assets/demo.tape)
-> (see [docs/assets](docs/assets/README.md)).
+> The demo above is generated from [`docs/assets/demo.tape`](docs/assets/demo.tape) by the
+> [Demo GIF workflow](.github/workflows/demo-gif.yml) — see [docs/assets](docs/assets/README.md).
 
 ## Before and after
 
