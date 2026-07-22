@@ -1,9 +1,13 @@
 # Build outputs
 bin/
 obj/
+dist/
 TestResults/
 *.nupkg
 nupkgs/
+
+# Linkuity local working artifacts (durable index, etc.)
+.linkuity/
 
 # Test sample outputs
 samples/people-multi-source/output

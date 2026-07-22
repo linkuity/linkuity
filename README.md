@@ -1,183 +1,194 @@
 # Linkuity
 
 [![CI](https://github.com/linkuity/linkuity/actions/workflows/ci.yml/badge.svg)](https://github.com/linkuity/linkuity/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](https://dotnet.microsoft.com/)
 
-Linkuity is an open-source private-runtime golden-record engine for data and MDM teams. It deduplicates people or organization records, links matching source records into clusters, and produces golden records that can stay inside your environment.
+**Open-source entity resolution and golden-record engine.**
 
-The codebase includes a local CLI batch runner, durable MDM projects with incremental matching, a Docker Compose private-server batch path, and an HTTP batch API that completes a match synchronously. Azure Blob Storage is optional adapter infrastructure selected with `Linkuity:RuntimeMode=Azure`, not the default runtime.
+Linkuity finds the records that refer to the same person or organization, links them
+into clusters, and merges each cluster into one explainable golden record — all inside
+your own environment.
 
-## Product Direction
+- 🔍 **Detect duplicates** across CSVs, systems, and incremental loads
+- 🧩 **Build golden records** with source-aware merge rules
+- 🧠 **Explain every match** with per-field score breakdowns
+- 🔒 **Run locally or privately** — no customer data leaves your environment
+- ♻️ **Batch or durable incremental** resolution as data arrives over time
 
-- Linkuity is open source.
-- Customer data does not need to leave the customer's environment.
-- The target runtime is local-first, private-server friendly, and suitable for customer-managed cloud accounts.
-- Azure Blob Storage remains a useful deployment adapter, but it is not the default architecture.
-- The durable MDM model will support projects, sources, ingest batches, entity relationships, clusters, golden records, and incremental matching over time.
+## Quick start
 
-See:
+**Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
-- `docs/tutorials/` for hands-on, step-by-step guides — start with `docs/tutorials/cli-durable-mdm-quickstart.md` to build a durable MDM project with the CLI.
-- `docs/private-runtime.md` for the private-runtime direction and current limitations.
-- `docs/private-server-deployment.md` for the Docker Compose private-server batch path.
-- `docs/how-matching-works.md` for how matching, blocking, scoring, merging, and tuning work end to end (start here to understand the engine).
-- `docs/architecture.md` for current and target architecture.
+Resolve the bundled 28-record sample into golden records:
 
-## What Linkuity Does
-
-Linkuity currently supports batch deduplication:
-
-1. Accept a CSV containing people or organization records.
-2. Normalize configured fields such as names, emails, phone numbers, dates, postal codes, and source identifiers.
-3. Block records to avoid full pairwise comparison.
-4. Score likely matches with the .NET matching engine.
-5. Cluster linked records with the .NET post-processing pipeline.
-6. Merge each cluster into a golden record.
-7. Optionally export a Neo4j-ready graph bundle.
-
-The target private runtime keeps this pipeline but removes the assumption that every run depends on hosted infrastructure or customer uploads to a Linkuity-operated service.
-
-## Current Batch API
-
-The HTTP API completes a batch match end to end, synchronously:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/run` | Run a batch match synchronously: multipart `config` (JSON) + `file` (`text/csv`); returns merged golden records as `text/csv`. Max input 400 KiB (synchronous limit; use the CLI for larger sets). |
-| GET | `/health` | Health check |
-
-`POST /run` shares the same normalize -> match -> cluster -> merge pipeline as the
-CLI (`BatchRunService`), so a request that fits under the size cap completes with the
-golden-records CSV in the response body — no polling, no job state machine. The 400 KiB
-cap exists because within-batch matching is O(n^2)-ish, so larger inputs risk exceeding a
-synchronous request's time budget; use `linkuity run` (or the durable/incremental CLI
-path) for larger inputs. An asynchronous variant of this endpoint (for larger inputs,
-polled to completion) is a planned, additive future addition — it does not exist today.
-
-Linkuity also exposes durable project/source/batch metadata endpoints (`/projects`,
-`/projects/{id}/sources`, `/projects/{id}/batches`, etc.) used by the durable MDM CLI
-path — see `docs/architecture.md` for the full list.
-
-This API is one interface to Linkuity. The local CLI (`linkuity run` and
-`linkuity ingest-incremental`) remains the default end-to-end path and drives durable MDM
-project persistence today.
-
-## Project Structure
+```powershell
+git clone https://github.com/linkuity/linkuity.git
+cd linkuity
+dotnet run --project src/Linkuity.Cli -- run `
+  --input samples/people-multi-source/sample.csv `
+  --config samples/people-multi-source/match-config.json `
+  --output ./data/output/people-multi-source
+```
 
 ```text
-src/
-  Linkuity.Cli/             Local CLI batch runner and durable MDM commands (default path)
-  Linkuity.Api/             ASP.NET Core Web API (synchronous POST /run plus durable metadata endpoints)
-  Linkuity.AppHost/         Optional .NET Aspire host for API + Azurite blob-emulator development
-  Linkuity.ServiceDefaults/ Shared telemetry and health check defaults
-  Linkuity.Core/            Shared domain models and interfaces
-  Linkuity.Matching/        Native .NET matching engine (blocking, scoring, retrieval)
-  Linkuity.Mdm/             Durable MDM model: projects, sources, batches, clusters, golden records
-  Linkuity.Pipeline/        End-to-end batch pipeline orchestration (normalize -> match -> cluster -> merge)
-  Linkuity.Infrastructure.Local/
-                            Local filesystem artifact storage and JSON metadata store
-  Linkuity.Infrastructure.Postgres/
-                            PostgreSQL durable metadata-store backend
-  Linkuity.Infrastructure.Lucene/
-                            Lucene.NET incremental candidate-retrieval index
-  Linkuity.Infrastructure.Azure/
-                            Optional Azure Blob Storage artifact-store adapter
-docs/
-  architecture.md           Current and target architecture
-  how-matching-works.md     How matching, blocking, scoring, and merging work
-  private-runtime.md        Private-runtime direction and current limitations
-  tutorials/                Hands-on, step-by-step guides
+Job 5f3a…c21e completed.
+Golden records: …/data/output/people-multi-source/golden-records.csv
 ```
 
-## Running On A Private Server
+**28 source records from CRM, Marketing, Support, and Billing → 10 golden records.**
+Add `--neo4j-export` to also write a graph bundle. Next: the guided
+[durable MDM quick start](docs/tutorials/cli-durable-mdm-quickstart.md).
 
-The first private-server mode runs Linkuity as a Docker Compose batch job with bind-mounted local storage. It uses the local CLI pipeline, writes artifacts to the server filesystem, and does not require Azure emulators.
+> A recordable terminal demo lives in [`docs/assets/demo.tape`](docs/assets/demo.tape)
+> (see [docs/assets](docs/assets/README.md)).
 
-```powershell
-Copy-Item .env.example .env
-New-Item -ItemType Directory -Force ./data/output/people-multi-source,./data/artifacts
-docker compose --env-file .env -f docker-compose.local.yml run --rm linkuity-runner
+## Before and after
+
+Real systems rarely store a person the same way twice — a nickname here, a typo there, a
+phone number in a different format:
+
+| id | source | first_name | last_name | email | phone | address_line |
+|----|--------|------------|-----------|-------|-------|--------------|
+| crm-050 | CRM | Joseph | Martinez | joseph.martinez@example.com | (312) 555-0147 | 1420 Maple Avenue |
+| mkt-051 | Marketing | Joe | Martinez | joe.martinez@example.com | 312-555-0147 | 1420 Maple Ave |
+| sup-052 | Support | Joesph | Martinez | joseph.martinez@example.com | 312.555.0147 | 1420 Maple Avenue Apt 3B |
+| bil-053 | Billing | Joseph | Martinez | joseph.martimez@example.com | 3125550147 | 1420 Maple Ave Apt 3B |
+
+Every mismatch is one you have probably seen in production: a **nickname** (`Joe`), a
+**misspelling** (`Joesph`), a **one-letter email typo** (`martimez`), **one phone in
+four formats**, and an **apartment number** that only reached two systems.
+
+Linkuity normalizes, blocks, scores, and clusters these into a single golden record:
+
+| record_count | member_ids | first_name | email | phone | address_line |
+|--------------|------------|------------|-------|-------|--------------|
+| 4 | crm-050\|mkt-051\|sup-052\|bil-053 | Joseph | joseph.martinez@example.com | +13125550147 | 1420 Maple Ave Apt 3B |
+
+And it is **explainable** — `first_name` wins by consensus (`Joseph` over the nickname
+and the typo), `email` by CRM source priority (the typo-free address), `phone`
+normalizes to one number, and `address` takes the Billing row with the unit. A golden
+record is a *composite*, not a copy of any single row. See
+[how matching works](docs/how-matching-works.md) and the
+[people-multi-source sample](samples/people-multi-source/README.md).
+
+## Why Linkuity
+
+Most ways to resolve entities fall into one of three buckets, each with a catch: **hosted
+matching services** (you ship customer data to someone else's cloud), **closed-source
+products** (you can't inspect or tune how matches are decided), and **low-level
+fuzzy-matching libraries** (powerful, but you assemble blocking, scoring, clustering,
+merging, and persistence yourself).
+
+Linkuity is a complete, open-source engine you run yourself:
+
+| | Hosted service | Closed product | Match library | **Linkuity** |
+|---|:---:|:---:|:---:|:---:|
+| Open source | ✕ | ✕ | ✓ | ✓ |
+| Data stays in your environment | ✕ | varies | ✓ | ✓ |
+| Explainable match decisions | varies | ✕ | you build it | ✓ |
+| Whole workflow (merge, golden records, persistence) | ✓ | ✓ | ✕ | ✓ |
+| Durable incremental resolution | varies | varies | ✕ | ✓ |
+| Native .NET, cross-platform | — | — | varies | ✓ |
+
+## Common use cases
+
+- **Customer 360 / MDM** — one trusted record per customer from many systems
+- **CRM cleanup & contact deduplication** — collapse duplicate people
+- **Supplier / vendor consolidation** — dedupe and standardize organizations
+- **Organization resolution** — match companies across name and domain variants
+- **Data migrations** — dedupe before loading into a new system
+- **Incremental identity resolution** — keep records linked as new data lands
+- **Graph analysis** — export resolved entities to Neo4j and explore the links
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[CSV / sources] --> B[Normalization]
+    B --> C[Blocking]
+    C --> D[Candidate retrieval]
+    D --> E[Scoring]
+    E --> F[Decision bands]
+    F --> G[Clustering]
+    G --> H[Golden records]
+    H --> I[Exports & review]
 ```
 
-Expected sample output:
+Comparing every record against every other is `N²` and doesn't scale, so Linkuity only
+scores candidate pairs that share a cheap **blocking key**, combines per-field
+similarities into one score, and sorts each pair into a **decision band**: auto-merge,
+review, or no-match. Accepted pairs cluster transitively, and each cluster merges into a
+golden record via your source-priority rules — with a per-field breakdown you can read
+back. Full detail (with a worked example): [how-matching-works.md](docs/how-matching-works.md).
 
-```text
-./data/output/people-multi-source/golden-records.csv
-```
+## Batch mode vs durable mode
 
-See `docs/private-server-deployment.md` for server directory layout, health checks, and backup responsibilities.
+| | Batch mode | Durable mode |
+|---|---|---|
+| Entry point | `linkuity run` | `linkuity project` / `ingest-incremental` |
+| State | Stateless — resolves and forgets | Persistent store that remembers |
+| New data | Reprocesses the whole file | Matched incrementally against stored records |
+| History & review | — | Versioned golden records + review queue |
+| Store backend | Output files | Local JSON file **or** PostgreSQL |
+| Reach for it when | One-off dedupe, exports, CI | Ongoing MDM as data arrives over time |
 
-## Running The Current Azure-Compatible Stack Locally
+The [quick start](#quick-start) uses batch mode. For durable mode, follow the
+[durable MDM quick start](docs/tutorials/cli-durable-mdm-quickstart.md); to back it with
+PostgreSQL, see [durable-postgres.md](docs/durable-postgres.md).
 
-Local development for the current Azure-compatible API path can use .NET Aspire to orchestrate the API and the Azurite blob emulator.
+## Key capabilities
 
-This setup does not require an Azure account, but it opts the API into `Linkuity:RuntimeMode=Azure` and mirrors the Azure Blob Storage artifact-store adapter through Azurite. It is optional developer tooling, not the default private-server deployment path.
+- **Matching engine** — normalization, blocking (including phonetic), weighted
+  similarity scoring, Lucene-backed candidate retrieval
+- **Explainability** — persisted per-field score breakdowns and read-back commands
+- **Golden records** — configurable source-priority merge policies; composite output
+- **Two modes** — stateless batch and durable incremental (versioning + review queue)
+- **Storage** — local filesystem + JSON store, or a PostgreSQL durable backend
+- **Interfaces** — [CLI](docs/cli.md), [HTTP API](docs/http-api.md), and
+  [Docker Compose](docs/private-server-deployment.md)
+- **Graph export** — Neo4j-ready node/relationship bundle
+- **Runtime** — native .NET 10; cross-platform and single-file deployable
+- **License** — Apache 2.0
 
-### Prerequisites
+## Examples and samples
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) running locally
+The [`samples/`](samples/README.md) directory has small, self-contained datasets — each
+with a walkthrough and test-pinned expected results — covering multi-source people and
+organization merging, unreliable-field handling, name noise, and durable incremental
+scenarios. Start with [people-multi-source](samples/people-multi-source/README.md) (the
+28 → 10 example above).
 
-### Start The Current Development Stack
+## Documentation
 
-```powershell
-dotnet run --project src/Linkuity.AppHost
-```
+- [How matching works](docs/how-matching-works.md) — blocking, scoring, decision bands, merging, tuning
+- [Tutorials](docs/tutorials/README.md) — hands-on durable MDM walkthroughs
+- [CLI reference](docs/cli.md) — batch usage and building a standalone binary
+- [HTTP API](docs/http-api.md) — synchronous `/run` and health endpoints
+- [Durable mode on PostgreSQL](docs/durable-postgres.md) — persistent incremental store
+- [Architecture](docs/architecture.md) — components, endpoints, and internals
+- [Private runtime](docs/private-runtime.md) & [private server deployment](docs/private-server-deployment.md) — local-first and Docker Compose
+- [Optional Azure-compatible local stack](docs/azure-local-stack.md) — Aspire + Azurite (optional)
+- [Benchmark plan](docs/benchmarks.md) — how quality/cost will be measured (no results yet)
 
-Aspire starts the Azure Storage (blob) emulator in Docker, waits for it to be healthy, then launches the API. The Aspire dashboard opens at `http://localhost:15888`.
+## Roadmap
 
-In this mode the API still completes matches synchronously through `POST /run` — Azure mode only changes where job artifacts are stored (Azure Blob Storage / Azurite instead of the local filesystem).
+Active development. Near-term focus (full plan in [docs/roadmap/PLAN.md](docs/roadmap/PLAN.md)):
 
-### Verify The API
+- Packaged CLI releases so users don't build from source
+- More realistic sample datasets
+- Reproducible quality/cost benchmarks ([plan](docs/benchmarks.md))
+- Better match explanations and review workflows
+- SDK, connector, and plugin guidance
+- Larger-scale private-server deployment examples
 
-```powershell
-curl http://localhost:5017/health
-```
+## Contributing
 
-Expected result: `200 OK`.
-
-## Running A Current Batch Job
-
-`linkuity run` is the default end-to-end batch path: normalize, match natively, cluster,
-merge, and optionally export a Neo4j-ready bundle — no server, queue, or external process
-required.
-
-```powershell
-dotnet run --project src/Linkuity.Cli -- run --input samples/people-multi-source/sample.csv --config samples/people-multi-source/match-config.json --output ./data/output/people-multi-source --neo4j-export
-```
-
-The sample should produce 10 golden records. See `samples/people-multi-source/README.md`
-for the full walkthrough of which records merge and why.
-
-For a durable project that remembers matches across incremental loads, see
-`docs/tutorials/cli-durable-mdm-quickstart.md`; use `linkuity ingest-incremental` there.
-
-## Tests
-
-```powershell
-dotnet test
-```
-
-## Optional Azure Deployment Path
-
-The Azure deployment option runs `Linkuity.Api` against Azure-managed infrastructure:
-
-- `Linkuity.Api`
-- Azure Blob Storage
-- Azure Container Apps
-
-In this mode `POST /run` still completes matches synchronously, in-process; Azure mode
-only changes the artifact-store backend from the local filesystem to Azure Blob Storage.
-
-Set `Linkuity__RuntimeMode=Azure` for the API to use the Azure Blob Storage adapter. Current environment variables:
-
-| Service | Required Variables |
-|---------|--------------------|
-| Linkuity.Api | `Linkuity__RuntimeMode=Azure`, `BlobStorage__ConnectionString`, `BlobStorage__ContainerName` |
-
-This deployment path remains documented for teams that want Azure infrastructure. Local CLI and private-server batch execution remain the default paths.
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), which covers
+development setup and the Contributor License Agreement ([CLA.md](CLA.md)). Please also
+review [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Linkuity is licensed under the [Apache License 2.0](LICENSE). Contributions are
-welcome — see [CONTRIBUTING.md](CONTRIBUTING.md), which requires signing the
-[Contributor License Agreement](CLA.md).
+Linkuity is licensed under the [Apache License 2.0](LICENSE).
