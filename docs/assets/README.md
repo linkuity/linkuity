@@ -7,7 +7,22 @@ records the quick start — resolving the bundled 28-record sample into 10 golde
 as an animated GIF.
 
 **No GIF is committed yet.** It is intentionally not embedded in the root README as a
-broken placeholder. To generate it:
+broken placeholder.
+
+## Recommended: render in CI
+
+VHS renders reliably on Linux but is flaky on native Windows (its headless-browser step
+tends to hang). The [`Demo GIF` workflow](../../.github/workflows/demo-gif.yml) renders
+the tape on an Ubuntu runner and commits `demo.gif` back to the branch. Once the workflow
+is on the default branch, trigger it from the Actions tab, or from the CLI:
+
+```bash
+gh workflow run demo-gif.yml --ref <branch>
+```
+
+## Local rendering
+
+To generate it locally instead:
 
 1. Install VHS: `go install github.com/charmbracelet/vhs@latest` (or see the VHS README
    for other install methods; it also needs `ttyd` and `ffmpeg`).

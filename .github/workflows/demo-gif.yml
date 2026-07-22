@@ -1,0 +1,68 @@
+name: Demo GIF
+
+# Renders docs/assets/demo.tape with VHS on Linux (where VHS is reliable) and commits
+# the resulting docs/assets/demo.gif back to the branch. Manual trigger only.
+#
+# NOTE: workflow_dispatch becomes available in the Actions UI once this file is on the
+# default branch. To run it against a branch from the CLI:
+#   gh workflow run demo-gif.yml --ref <branch>
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install VHS toolchain (ffmpeg, ttyd, vhs)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          # A nice monospace font for the recording (non-fatal if unavailable; VHS falls back).
+          sudo apt-get install -y fonts-jetbrains-mono || true
+          # ttyd (VHS's terminal backend)
+          sudo curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 -o /usr/local/bin/ttyd
+          sudo chmod +x /usr/local/bin/ttyd
+          ttyd --version
+          # vhs
+          VHS_VERSION=0.11.0
+          curl -fsSL "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz" -o /tmp/vhs.tgz
+          tar -xzf /tmp/vhs.tgz -C /tmp
+          sudo install -m 0755 "$(find /tmp -name vhs -type f | head -1)" /usr/local/bin/vhs
+          vhs --version
+
+      - name: Warm the build
+        # Pre-build and JIT so the `dotnet run` inside the tape finishes within the tape's
+        # Sleep window (the tape allows ~22s; a cold first build can exceed that).
+        run: |
+          dotnet run --project src/Linkuity.Cli -- run \
+            --input samples/people-multi-source/sample.csv \
+            --config samples/people-multi-source/match-config.json \
+            --output ./data/output/warm
+
+      - name: Render demo.gif
+        run: vhs docs/assets/demo.tape
+
+      - name: Commit GIF if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/demo.gif
+          if git diff --cached --quiet; then
+            echo "demo.gif unchanged — nothing to commit."
+          else
+            git commit -m "chore(docs): regenerate demo.gif via VHS [skip ci]"
+            git push
+          fi
