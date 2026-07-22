@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
 
@@ -8,11 +9,8 @@ public class Neo4jExportServiceTests : IDisposable
 {
     private readonly string _rootPath = Path.Combine(Path.GetTempPath(), $"linkuity-neo4jexport-{Guid.NewGuid():N}");
 
-    private static readonly MatchConfiguration DefaultConfig = new()
-    {
-        ContentType = "person",
-        Fields = new[] { new Field { Name = "email", SemanticType = SemanticFieldType.Email } }
-    };
+    private static readonly MatchingProfile DefaultProfile = BuildProfile("person",
+        new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable });
 
     public void Dispose()
     {
@@ -26,25 +24,39 @@ public class Neo4jExportServiceTests : IDisposable
         return (new Neo4jExportService(blobs), blobs);
     }
 
-    private static async Task SeedJobAsync(FileSystemArtifactStore blobs, Guid jobId, JobState state, MatchConfiguration? config = null)
+    private static async Task SeedJobAsync(FileSystemArtifactStore blobs, Guid jobId, JobState state)
     {
         var job = new Job
         {
             Id = jobId,
             State = state,
             CreatedAt = DateTimeOffset.UtcNow,
-            Configuration = config ?? DefaultConfig,
             AutoStart = false
         };
         await blobs.WriteJsonAsync($"{jobId}/metadata.json", job);
     }
+
+    private static MatchingProfile BuildProfile(string contentType, params ProfileField[] fields) => new()
+    {
+        ContentType = contentType,
+        Fields = fields,
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.90,
+        ReviewThreshold = 0.75
+    };
 
     [Fact]
     public async Task OpenAsync_MissingJob_ReturnsJobNotFound()
     {
         var (service, _) = Build();
 
-        var result = await service.OpenAsync(Guid.NewGuid(), "entities");
+        var result = await service.OpenAsync(Guid.NewGuid(), "entities", DefaultProfile);
 
         Assert.IsType<Neo4jFileResult.JobNotFound>(result);
     }
@@ -56,7 +68,7 @@ public class Neo4jExportServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await SeedJobAsync(blobs, jobId, JobState.Processing);
 
-        var result = await service.OpenAsync(jobId, "entities");
+        var result = await service.OpenAsync(jobId, "entities", DefaultProfile);
 
         var notReady = Assert.IsType<Neo4jFileResult.NotReady>(result);
         Assert.Equal(JobState.Processing, notReady.State);
@@ -69,7 +81,7 @@ public class Neo4jExportServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await SeedJobAsync(blobs, jobId, JobState.Complete);
 
-        var result = await service.OpenAsync(jobId, "bogus-file");
+        var result = await service.OpenAsync(jobId, "bogus-file", DefaultProfile);
 
         Assert.IsType<Neo4jFileResult.UnknownFile>(result);
     }
@@ -84,7 +96,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "entities");
+        var result = await service.OpenAsync(jobId, "entities", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -101,7 +113,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/matches.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "matched-to");
+        var result = await service.OpenAsync(jobId, "matched-to", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -120,7 +132,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv)))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "golden-records");
+        var result = await service.OpenAsync(jobId, "golden-records", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -143,7 +155,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv)))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "resolved-to");
+        var result = await service.OpenAsync(jobId, "resolved-to", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -166,7 +178,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "emails");
+        var result = await service.OpenAsync(jobId, "emails", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -183,14 +195,11 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var configWithoutEmail = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "phone", SemanticType = SemanticFieldType.Phone }]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, configWithoutEmail);
+        var profileWithoutEmail = BuildProfile("person",
+            new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
 
-        var result = await service.OpenAsync(jobId, "emails");
+        var result = await service.OpenAsync(jobId, "emails", profileWithoutEmail);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -208,7 +217,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "has-email");
+        var result = await service.OpenAsync(jobId, "has-email", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -225,17 +234,14 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "phone", SemanticType = SemanticFieldType.Phone }]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,phone\n1,+15551234567\n2,+15559999999\n3,+15551234567\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "phones");
+        var result = await service.OpenAsync(jobId, "phones", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -250,17 +256,14 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field { Name = "phone", SemanticType = SemanticFieldType.Phone }]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,phone\n1,+15551234567\n2,\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "has-phone");
+        var result = await service.OpenAsync(jobId, "has-phone", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -276,9 +279,9 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        await SeedJobAsync(blobs, jobId, JobState.Complete); // DefaultConfig has no SourceIdentifier
+        await SeedJobAsync(blobs, jobId, JobState.Complete); // DefaultProfile has no SourceIdentifier
 
-        var result = await service.OpenAsync(jobId, "sources");
+        var result = await service.OpenAsync(jobId, "sources", DefaultProfile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -291,20 +294,15 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [
-                new Field { Name = "email", SemanticType = SemanticFieldType.Email },
-                new Field { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier }
-            ]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable },
+            new ProfileField { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier, Roles = FieldRole.None });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,email,source\n1,a@x.com,CRM\n2,b@x.com,Marketing\n3,c@x.com,CRM\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "sources");
+        var result = await service.OpenAsync(jobId, "sources", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -319,20 +317,15 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [
-                new Field { Name = "email", SemanticType = SemanticFieldType.Email },
-                new Field { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier }
-            ]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable },
+            new ProfileField { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier, Roles = FieldRole.None });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,email,source\n1,a@x.com,CRM\n2,b@x.com,\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "from-source");
+        var result = await service.OpenAsync(jobId, "from-source", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -348,7 +341,7 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, _) = Build();
 
-        var result = await service.OpenZipAsync(Guid.NewGuid());
+        var result = await service.OpenZipAsync(Guid.NewGuid(), DefaultProfile);
 
         Assert.IsType<Neo4jExportResult.JobNotFound>(result);
     }
@@ -360,7 +353,7 @@ public class Neo4jExportServiceTests : IDisposable
         var jobId = Guid.NewGuid();
         await SeedJobAsync(blobs, jobId, JobState.Processing);
 
-        var result = await service.OpenZipAsync(jobId);
+        var result = await service.OpenZipAsync(jobId, DefaultProfile);
 
         var notReady = Assert.IsType<Neo4jExportResult.NotReady>(result);
         Assert.Equal(JobState.Processing, notReady.State);
@@ -383,7 +376,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var s = new MemoryStream(golden))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", s, "text/csv");
 
-        var result = await service.OpenZipAsync(jobId);
+        var result = await service.OpenZipAsync(jobId, DefaultProfile);
 
         var ready = Assert.IsType<Neo4jExportResult.Ready>(result);
         using var archive = new ZipArchive(ready.Content, ZipArchiveMode.Read);
@@ -415,22 +408,14 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field
-            {
-                Name = "phone",
-                SemanticType = SemanticFieldType.Phone,
-                ParticipatesInMatching = false
-            }]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.None });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,phone\n1,+15551234567\n2,+15559999999\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "phones");
+        var result = await service.OpenAsync(jobId, "phones", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -444,22 +429,14 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = [new Field
-            {
-                Name = "phone",
-                SemanticType = SemanticFieldType.Phone,
-                ParticipatesInMatching = false
-            }]
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.None });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         var csv = "id,phone\n1,+15551234567\n2,\n"u8.ToArray();
         using (var seed = new MemoryStream(csv))
             await blobs.UploadAsync($"{jobId}/normalized.csv", seed, "text/csv");
 
-        var result = await service.OpenAsync(jobId, "has-phone");
+        var result = await service.OpenAsync(jobId, "has-phone", profile);
 
         var ready = Assert.IsType<Neo4jFileResult.Ready>(result);
         using var reader = new StreamReader(ready.Content);
@@ -475,12 +452,9 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "person",
-            Fields = new[] { new Field { Name = "email", SemanticType = SemanticFieldType.Email } }
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("person",
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         using (var s = new MemoryStream("id,email\n1,a@x.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/normalized.csv", s, "text/csv");
         using (var s = new MemoryStream("left_id,right_id,similarity,fuzzy_similarity\n"u8.ToArray()))
@@ -488,7 +462,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var s = new MemoryStream("cluster_id,record_count,member_ids,email\nabc,1,1,a@x.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", s, "text/csv");
 
-        var result = await service.OpenZipAsync(jobId);
+        var result = await service.OpenZipAsync(jobId, profile);
 
         var ready = Assert.IsType<Neo4jExportResult.Ready>(result);
         using var archive = new ZipArchive(ready.Content, ZipArchiveMode.Read);
@@ -503,12 +477,9 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "organization",
-            Fields = new[] { new Field { Name = "domain_name", SemanticType = SemanticFieldType.DomainName } }
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("organization",
+            new ProfileField { Name = "domain_name", SemanticType = SemanticFieldType.DomainName, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         using (var s = new MemoryStream("id,domain_name\n1,example.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/normalized.csv", s, "text/csv");
         using (var s = new MemoryStream("left_id,right_id,similarity,fuzzy_similarity\n"u8.ToArray()))
@@ -516,7 +487,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var s = new MemoryStream("cluster_id,record_count,member_ids,domain_name\nabc,1,1,example.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", s, "text/csv");
 
-        var result = await service.OpenZipAsync(jobId);
+        var result = await service.OpenZipAsync(jobId, profile);
 
         var ready = Assert.IsType<Neo4jExportResult.Ready>(result);
         using var archive = new ZipArchive(ready.Content, ZipArchiveMode.Read);
@@ -531,12 +502,9 @@ public class Neo4jExportServiceTests : IDisposable
     {
         var (service, blobs) = Build();
         var jobId = Guid.NewGuid();
-        var config = new MatchConfiguration
-        {
-            ContentType = "spaceship",
-            Fields = new[] { new Field { Name = "email", SemanticType = SemanticFieldType.Email } }
-        };
-        await SeedJobAsync(blobs, jobId, JobState.Complete, config);
+        var profile = BuildProfile("spaceship",
+            new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
         using (var s = new MemoryStream("id,email\n1,a@x.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/normalized.csv", s, "text/csv");
         using (var s = new MemoryStream("left_id,right_id,similarity,fuzzy_similarity\n"u8.ToArray()))
@@ -544,7 +512,7 @@ public class Neo4jExportServiceTests : IDisposable
         using (var s = new MemoryStream("cluster_id,record_count,member_ids,email\nabc,1,1,a@x.com\n"u8.ToArray()))
             await blobs.UploadAsync($"{jobId}/golden_records.csv", s, "text/csv");
 
-        var result = await service.OpenZipAsync(jobId);
+        var result = await service.OpenZipAsync(jobId, profile);
 
         var ready = Assert.IsType<Neo4jExportResult.Ready>(result);
         using var archive = new ZipArchive(ready.Content, ZipArchiveMode.Read);
