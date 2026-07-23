@@ -2,17 +2,17 @@
   "contentType": "organization",
   "fields": [
     { "name": "source",            "semanticType": "SourceIdentifier", "roles": [] },
-    { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "fuzzy",   "weight": 2.0 },
-    { "name": "address_line",      "semanticType": "AddressLine",      "roles": ["Searchable","Matchable"],            "similarityEvaluator": "jaccard", "weight": 1.0 },
-    { "name": "postal_code",       "semanticType": "PostalCode",       "roles": ["Matchable"],                          "similarityEvaluator": "exact",   "weight": 1.0 }
+    { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "jaccard", "weight": 4.0 },
+    { "name": "address_line",      "semanticType": "AddressLine",      "roles": ["Searchable","Matchable"],            "similarityEvaluator": "jaccard", "weight": 0.3 },
+    { "name": "postal_code",       "semanticType": "PostalCode",       "roles": ["Matchable"],                          "similarityEvaluator": "exact",   "weight": 0.3 }
   ],
   "normalizationStrategy": "identity",
-  "blockingStrategies": ["exact-value", "token-name"],
+  "blockingStrategies": ["exact-value", "token-name", "prefix"],
   "candidateRetrievalStrategy": "linear",
   "similarityStrategy": "field-weighted",
   "scoringStrategy": "identifier-weighted",
   "decisionStrategy": "threshold",
   "clusteringStrategy": "union-find",
-  "autoMatchThreshold": 0.85,
-  "reviewThreshold": 0.70
+  "autoMatchThreshold": 0.55,
+  "reviewThreshold": 0.45
 }
