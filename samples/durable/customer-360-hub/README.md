@@ -5,6 +5,10 @@ then evolves over three incremental ingests. It is the flagship durable scenario
 exercises seeding from pre-baked artifacts, clean auto-joins with a stable cluster id,
 canonical-value changes that bump the golden version, and the human-review queue.
 
+![customer-360-hub: seed a hub, then evolve it over three incremental ingests — an auto-join by exact phone, a canonical email change that cuts golden version 2, and a borderline record that opens a review task](assets/demo.gif)
+
+> Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs).
+
 ## The story
 
 The subject is one real person — Carol Chen — whose contact details were recorded
