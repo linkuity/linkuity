@@ -126,7 +126,7 @@ strong-key mechanism this demo deliberately withholds).
 ## Repository structure
 
 ```
-examples/company-resolution/
+showcases/company-resolution/
 ├── README.md                    # this file
 ├── run-demo.ps1                 # end-to-end entry point
 ├── acquire/

@@ -1,9 +1,9 @@
 # Company-resolution hero demo tape.
 # Record with VHS (https://github.com/charmbracelet/vhs) from the repo root:
-#   vhs examples/company-resolution/assets/demo.tape
-# Produces examples/company-resolution/assets/demo.gif. Requires the .NET 10 SDK + pwsh.
+#   vhs showcases/company-resolution/assets/demo.tape
+# Produces showcases/company-resolution/assets/demo.gif. Requires the .NET 10 SDK + pwsh.
 
-Output examples/company-resolution/assets/demo.gif
+Output showcases/company-resolution/assets/demo.gif
 
 Set Shell pwsh
 Set FontSize 18
@@ -16,6 +16,6 @@ Type "# Resolve real companies across SEC EDGAR + GLEIF — no shared key"
 Enter
 Sleep 800ms
 
-Type "./examples/company-resolution/run-demo.ps1"
+Type "./showcases/company-resolution/run-demo.ps1"
 Enter
 Sleep 30s

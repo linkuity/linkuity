@@ -6,7 +6,7 @@ using Linkuity.Cli;
 
 namespace Linkuity.Cli.Tests;
 
-// Regression pin for the company-resolution hero demo (examples/company-resolution).
+// Regression pin for the company-resolution hero demo (showcases/company-resolution).
 // Runs the committed projected input through `linkuity run` in-process and asserts:
 //   (1) the golden-record count matches the pinned expectations.json,
 //   (2) NO cluster mixes two distinct companies (zero incorrect merges),
@@ -18,9 +18,9 @@ public sealed class CompanyResolutionDemoTests : IDisposable
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "examples")))
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "showcases")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root containing examples/.");
+        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root containing showcases/.");
     }
 
     private sealed record Expectations(int goldenRecordCount, int maxIncorrectMerges, string[] mustUnify);
@@ -63,7 +63,7 @@ public sealed class CompanyResolutionDemoTests : IDisposable
     [Fact]
     public async Task Demo_MatchesPinnedOutcome_WithZeroIncorrectMerges()
     {
-        var demoDir = Path.Combine(RepoRoot(), "examples", "company-resolution");
+        var demoDir = Path.Combine(RepoRoot(), "showcases", "company-resolution");
         var truth = LoadGroundTruth(Path.Combine(demoDir, "validate", "ground-truth.csv"));
         var exp = JsonSerializer.Deserialize<Expectations>(
             File.ReadAllText(Path.Combine(demoDir, "run", "expectations.json")),

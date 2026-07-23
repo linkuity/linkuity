@@ -15,7 +15,7 @@ samples/people-phone-noise/output
 samples/organizations-multi-source/output
 samples/organizations-name-noise/output
 samples/location/output
-examples/company-resolution/output
+showcases/company-resolution/output
 
 # Visual Studio
 .vs/
@@ -45,7 +45,7 @@ data/
 !docs/tutorials/cli-durable-mdm-quickstart/data/
 !docs/tutorials/cli-durable-mdm-quickstart/data/**
 # ...and the company-resolution demo caches raw acquired API responses (re-fetchable)
-examples/company-resolution/acquire/cache/
+showcases/company-resolution/acquire/cache/
 
 # OS
 .DS_Store
