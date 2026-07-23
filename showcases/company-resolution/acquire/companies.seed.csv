@@ -1,0 +1,50 @@
+canonical_key,canonical_name,ticker,include_former
+apple,Apple Inc.,AAPL,true
+microsoft,Microsoft Corporation,MSFT,false
+amazon,Amazon.com Inc.,AMZN,false
+alphabet,Alphabet Inc.,GOOGL,false
+meta,Meta Platforms Inc.,META,true
+nvidia,NVIDIA Corporation,NVDA,false
+tesla,Tesla Inc.,TSLA,false
+berkshire-hathaway,Berkshire Hathaway Inc.,BRK-B,false
+jpmorgan-chase,JPMorgan Chase & Co.,JPM,false
+visa,Visa Inc.,V,false
+johnson-and-johnson,Johnson & Johnson,JNJ,false
+walmart,Walmart Inc.,WMT,true
+procter-and-gamble,The Procter & Gamble Company,PG,false
+mastercard,Mastercard Incorporated,MA,false
+home-depot,The Home Depot Inc.,HD,false
+exxon-mobil,ExxonMobil Holdings Corporation,XOM,false
+coca-cola,The Coca-Cola Company,KO,false
+pepsico,PepsiCo Inc.,PEP,false
+broadcom,Broadcom Inc.,AVGO,false
+costco,Costco Wholesale Corporation,COST,false
+mcdonalds,McDonald's Corporation,MCD,false
+salesforce,Salesforce Inc.,CRM,false
+adobe,Adobe Inc.,ADBE,false
+netflix,Netflix Inc.,NFLX,false
+walt-disney,The Walt Disney Company,DIS,false
+cisco,Cisco Systems Inc.,CSCO,false
+intel,Intel Corporation,INTC,false
+verizon,Verizon Communications Inc.,VZ,true
+att,AT&T Inc.,T,true
+nike,NIKE Inc.,NKE,false
+oracle,Oracle Corporation,ORCL,false
+pfizer,Pfizer Inc.,PFE,false
+merck,Merck & Co. Inc.,MRK,false
+abbvie,AbbVie Inc.,ABBV,false
+bank-of-america,Bank of America Corporation,BAC,false
+wells-fargo,Wells Fargo & Company,WFC,false
+goldman-sachs,The Goldman Sachs Group Inc.,GS,false
+boeing,The Boeing Company,BA,false
+lockheed-martin,Lockheed Martin Corporation,LMT,false
+caterpillar,Caterpillar Inc.,CAT,false
+ibm,International Business Machines Corporation,IBM,false
+qualcomm,QUALCOMM Incorporated,QCOM,false
+texas-instruments,Texas Instruments Incorporated,TXN,false
+starbucks,Starbucks Corporation,SBUX,false
+ford,Ford Motor Company,F,false
+general-motors,General Motors Company,GM,false
+3m,3M Company,MMM,false
+american-express,American Express Company,AXP,false
+united-parcel-service,United Parcel Service Inc.,UPS,false

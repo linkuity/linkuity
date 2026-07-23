@@ -157,13 +157,15 @@ PostgreSQL, see [durable-postgres.md](docs/durable-postgres.md).
 - **Runtime** — native .NET 10; cross-platform and single-file deployable
 - **License** — Apache 2.0
 
-## Examples and samples
+## Showcases and samples
 
 The [`samples/`](samples/README.md) directory has small, self-contained datasets — each
 with a walkthrough and test-pinned expected results — covering multi-source people and
 organization merging, unreliable-field handling, name noise, and durable incremental
 scenarios. Start with [people-multi-source](samples/people-multi-source/README.md) (the
 28 → 10 example above).
+
+For a full end-to-end demo on real public data, see [showcases/company-resolution](showcases/company-resolution/README.md) — resolve real companies across multiple public data sources.
 
 ## Documentation
 

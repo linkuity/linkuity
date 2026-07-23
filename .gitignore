@@ -15,6 +15,7 @@ samples/people-phone-noise/output
 samples/organizations-multi-source/output
 samples/organizations-name-noise/output
 samples/location/output
+showcases/company-resolution/output
 
 # Visual Studio
 .vs/
@@ -43,6 +44,8 @@ data/
 # ...and MDM quickstart tutorial fixture data is tracked under docs/tutorials
 !docs/tutorials/cli-durable-mdm-quickstart/data/
 !docs/tutorials/cli-durable-mdm-quickstart/data/**
+# ...and the company-resolution demo caches raw acquired API responses (re-fetchable)
+showcases/company-resolution/acquire/cache/
 
 # OS
 .DS_Store

@@ -1,0 +1,5 @@
+{
+  "goldenRecordCount": 60,
+  "maxIncorrectMerges": 0,
+  "mustUnify": ["apple", "amazon", "ibm", "goldman-sachs", "wells-fargo"]
+}
