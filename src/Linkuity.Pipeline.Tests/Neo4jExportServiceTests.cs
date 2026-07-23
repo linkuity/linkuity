@@ -498,6 +498,39 @@ public class Neo4jExportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenZipAsync_MatchedToMerge_SetsPropertiesAfterMergeInsteadOfInlineNullableProperty()
+    {
+        // Regression: Neo4j rejects MERGE of a relationship whose pattern carries a null
+        // property value. fuzzy_similarity is always empty in matches.csv, so embedding it in
+        // the MERGE pattern (`MERGE (l)-[:MATCHED_TO {fuzzy_similarity: null}]-(r)`) fails at load
+        // time. Properties must be applied with SET after the MERGE.
+        var (service, blobs) = Build();
+        var jobId = Guid.NewGuid();
+        var profile = BuildProfile("organization",
+            new ProfileField { Name = "domain_name", SemanticType = SemanticFieldType.DomainName, Roles = FieldRole.Matchable });
+        await SeedJobAsync(blobs, jobId, JobState.Complete);
+        using (var s = new MemoryStream("id,domain_name\n1,example.com\n2,example.com\n"u8.ToArray()))
+            await blobs.UploadAsync($"{jobId}/normalized.csv", s, "text/csv");
+        // A row with an empty fuzzy_similarity is exactly what triggered the null-in-MERGE failure.
+        using (var s = new MemoryStream("left_id,right_id,similarity,fuzzy_similarity\n1,2,0.95,\n"u8.ToArray()))
+            await blobs.UploadAsync($"{jobId}/matches.csv", s, "text/csv");
+        using (var s = new MemoryStream("cluster_id,record_count,member_ids,domain_name\nabc,2,1|2,example.com\n"u8.ToArray()))
+            await blobs.UploadAsync($"{jobId}/golden_records.csv", s, "text/csv");
+
+        var result = await service.OpenZipAsync(jobId, profile);
+
+        var ready = Assert.IsType<Neo4jExportResult.Ready>(result);
+        using var archive = new ZipArchive(ready.Content, ZipArchiveMode.Read);
+        using var cypherReader = new StreamReader(archive.GetEntry("load.cypher")!.Open());
+        var cypherText = await cypherReader.ReadToEndAsync();
+
+        Assert.Contains("MERGE (l)-[rel:MATCHED_TO]-(r)", cypherText);
+        Assert.Contains("SET rel.similarity = toFloat(row.similarity)", cypherText);
+        // The offending inline-property MERGE form must never come back.
+        Assert.DoesNotContain("MATCHED_TO {", cypherText);
+    }
+
+    [Fact]
     public async Task OpenZipAsync_UnrecognizedContentType_FallsBackToBareEntityAndGoldenRecordLabels()
     {
         var (service, blobs) = Build();
