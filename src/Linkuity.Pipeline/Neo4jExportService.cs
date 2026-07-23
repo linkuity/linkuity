@@ -51,10 +51,9 @@ public class Neo4jExportService
             LOAD CSV WITH HEADERS FROM 'file:///matched-to.csv' AS row
             MATCH (l:Entity {id: row.left_id})
             MATCH (r:Entity {id: row.right_id})
-            MERGE (l)-[:MATCHED_TO {
-              similarity: toFloat(row.similarity),
-              fuzzy_similarity: CASE row.fuzzy_similarity WHEN '' THEN null ELSE toFloat(row.fuzzy_similarity) END
-            }]-(r);
+            MERGE (l)-[rel:MATCHED_TO]-(r)
+            SET rel.similarity = toFloat(row.similarity),
+                rel.fuzzy_similarity = CASE row.fuzzy_similarity WHEN '' THEN null ELSE toFloat(row.fuzzy_similarity) END;
 
             LOAD CSV WITH HEADERS FROM 'file:///resolved-to.csv' AS row
             MATCH (e:Entity {id: row.entity_id})
