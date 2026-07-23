@@ -47,10 +47,10 @@
     { "command": "ingest-incremental",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{nameBatchId}",
                 "input": "data/name-collision.csv", "profiles": "product.profile.json" },
-      "assert": { "stdout": { "Records added": "1", "Auto matches": "0", "Review tasks": "1", "Singleton clusters": "1" } } },
-    { "command": "review list",
+      "assert": { "stdout": { "Records added": "1", "Auto matches": "0", "Review tasks": "0", "Singleton clusters": "1" } } },
+    { "command": "cluster list",
       "args": { "project-id": "{projectId}" },
-      "assert": { "rows": [ { "where": { "reason": "review_threshold" },
-                              "expect": { "status": "open" } } ] } }
+      "assert": { "rows": [ { "where": { "member_ids~": "web-030" },
+                              "expect": { "record_count": "1" } } ] } }
   ]
 }

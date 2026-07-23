@@ -19,7 +19,7 @@
       "capture": "incBatchId" },
     { "command": "ingest-incremental",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{incBatchId}",
-                "input": "data/incremental.csv" },
+                "input": "data/incremental.csv", "profiles": "review-queue.profile.json" },
       "assert": { "stdout": { "Records added": "3", "Auto matches": "1", "Review tasks": "1", "Singleton clusters": "2" } } },
     { "command": "review list",
       "args": { "project-id": "{projectId}" },

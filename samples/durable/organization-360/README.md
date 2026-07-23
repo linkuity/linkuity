@@ -15,25 +15,26 @@ override profile to demonstrate that loaded profiles replace the built-in.
 - **Same name, same domain → auto-match.** A second `Acme Industries` (acme.com,
   Marketing) auto-merges with `Acme Industries` (acme.com, CRM) on the shared
   domain.
-- **Same name, different domain → review, not a false merge.** A different
-  `Acme Industries` (acme.io, Web) shares the name block but has no shared
-  identifier, so it lands in review and stays its own cluster — domain is the
-  deciding identity signal.
+- **Same name, different domain → kept separate, not a false merge.** A different
+  `Acme Industries` (acme.io, Web) shares only the name block; with a different domain and
+  no shared identifier it scores below the review band, so the hub does **not** merge it —
+  it becomes its own distinct cluster. Domain is the deciding identity signal.
 - **Shared email overrides differing name/domain.** `Globex International`
   (globex-intl.com) auto-merges with `Globex LLC` because the email matches.
 
 ## Override demonstration
 
-A self-contained second project ingests `data/override-acme.csv` (two records,
-both named "Acme Industries" but with distinct domain/email/phone) with
-`--profiles data/organization-override.profile.json`, which raises `reviewThreshold`
-to **0.85**.
+A self-contained second project ingests `data/override-acme.csv` — two records,
+`Acme East Corp` and `Acme West Corp`, that share the **same domain** `acme-corp.com` —
+with `--profiles data/organization-override.profile.json`, which raises `autoMatchThreshold`
+from 0.90 to **0.99**.
 
-Under the **built-in** profile (`reviewThreshold` 0.75) the same pair would score
-0.80 and land in review (one review task). With the override profile the 0.80
-score falls **below** the raised 0.85 threshold — no review task is created and
-both records remain singleton clusters. This observable difference proves that
-the loaded profile replaced the built-in rather than merging with it.
+The shared domain is a strong identifier, so the pair scores exactly **0.98**. Under the
+**built-in** profile (`autoMatchThreshold` 0.90) that clears the bar and the two records
+**auto-merge** into one cluster. With the override profile the same 0.98 now falls **below**
+the raised 0.99 auto bar and lands in the review band instead — one review task and two
+singleton clusters rather than one merged cluster. This observable difference proves that the
+loaded profile replaced the built-in rather than merging with it.
 
 ## Run it
 

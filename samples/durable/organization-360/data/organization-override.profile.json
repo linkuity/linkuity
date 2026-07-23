@@ -16,6 +16,6 @@
   "scoringStrategy": "identifier-weighted",
   "decisionStrategy": "threshold",
   "clusteringStrategy": "union-find",
-  "autoMatchThreshold": 0.90,
-  "reviewThreshold": 0.85
+  "autoMatchThreshold": 0.99,
+  "reviewThreshold": 0.75
 }

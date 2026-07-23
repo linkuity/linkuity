@@ -54,3 +54,7 @@ jobs:
 
       - name: Test
         run: dotnet test Linkuity.slnx -c Release --no-build --verbosity normal
+
+      - name: Durable sample scenarios (regression guard)
+        shell: pwsh
+        run: ./scripts/Run-AllDurableScenarios.ps1

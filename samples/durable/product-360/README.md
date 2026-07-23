@@ -18,13 +18,13 @@ built-in content type, so `--profiles product.profile.json` is passed on every
 - **GTIN auto-merge when SKU differs** — `supp-020` (source: Supplier) uses a
   region-variant SKU `ALPHA-100-EU` but shares GTIN `00012345600012` with `cat-001`.
   The GTIN identifier key is enough to auto-merge even though the SKU key misses.
-- **Same name, different identifiers → review, not a false merge** — `web-030`
+- **Same name, different identifiers → kept separate, not a false merge** — `web-030`
   (source: Web) has a completely different SKU (`ZETA-900`) and GTIN
-  (`00077777700030`) but the same `product_name` (`Widget Alpha`). The
-  `token-name` strategy creates a shared name block so the pair is evaluated; the
-  identifier-weighted scorer sees two identifier misses and one fuzzy name hit,
-  producing a score in the review band (0.75–0.90). It lands in review and stays
-  a separate cluster — the identifiers prevent a false auto-merge.
+  (`00077777700030`) but the same `product_name` (`Widget Alpha`). The `token-name`
+  strategy creates a shared name block so the pair is evaluated; the identifier-weighted
+  scorer sees two identifier misses against a single fuzzy name hit and scores the pair
+  below the review band. It does **not** merge — it becomes its own distinct cluster. The
+  differing SKU and GTIN correctly keep a knockoff from being merged into the real product.
 
 ## Final state
 
@@ -33,9 +33,9 @@ built-in content type, so `--profiles product.profile.json` is passed on every
 | Alpha cluster | cat-001, shop-010, supp-020 | SKU match, then GTIN match |
 | Beta singleton | cat-002 | no matching record |
 | Gamma singleton | cat-003 | no matching record |
-| Web singleton | web-030 | different identifiers, review task created |
+| Web singleton | web-030 | different identifiers → kept separate |
 
-4 clusters total, 1 open review task.
+4 clusters total, no false merge — `web-030` is correctly kept as its own entity.
 
 ## Run it
 
