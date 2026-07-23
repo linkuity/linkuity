@@ -38,7 +38,11 @@ foreach ($r in $resolved) {
 
     # --- GLEIF record ---
     $gleif = (Get-Content (Join-Path $CachePath "gleif\$key.json") -Raw | ConvertFrom-Json).data.attributes
-    $ga = $gleif.entity.legalAddress
+    # Prefer the real operating HQ address. GLEIF's legalAddress is frequently a shared
+    # registered-agent address (e.g. a Delaware CSC/CT "C/O ..." address) that is noise for
+    # matching; headquartersAddress is the operating address, comparable to SEC's business
+    # address. Fall back to legalAddress only if HQ is missing.
+    $ga = if ($gleif.entity.headquartersAddress -and $gleif.entity.headquartersAddress.city) { $gleif.entity.headquartersAddress } else { $gleif.entity.legalAddress }
     $gName = $gleif.entity.legalName.name
     $gAddr = Join-Address @(@($ga.addressLines) -join ' '), $ga.city, $ga.region
     $gId = "gleif-$lei"
