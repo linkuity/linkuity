@@ -81,6 +81,9 @@ differently formatted addresses (business vs legal/HQ). Examples from this datas
 
 ## How Linkuity processes it
 
+The end-to-end flow — acquire → prepare → run → validate — is sketched in the
+[pipeline diagram](assets/pipeline.md).
+
 `run/company.profile.json` uses `organization_name` as a fuzzy primary signal
 (token-name blocking, jaccard similarity, weight 4.0) plus `address_line` (jaccard,
 weight 2.5) and `postal_code` (exact, weight 0.5). **No identifier is fed to the
