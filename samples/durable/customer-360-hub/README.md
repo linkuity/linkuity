@@ -5,6 +5,10 @@ then evolves over three incremental ingests. It is the flagship durable scenario
 exercises seeding from pre-baked artifacts, clean auto-joins with a stable cluster id,
 canonical-value changes that bump the golden version, and the human-review queue.
 
+![customer-360-hub: seed a hub, then evolve it over three incremental ingests — an auto-join by exact phone, a canonical email change that cuts golden version 2, and a borderline record that opens a review task](assets/demo.gif)
+
+> Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs).
+
 ## The story
 
 The subject is one real person — Carol Chen — whose contact details were recorded
@@ -30,10 +34,26 @@ links records by reliable contact keys (exact **phone** / **email**) rather than
    `carol.chen@example.com`, which differs from the current golden value — so the golden
    record is rewritten and a **version 2** is recorded.
 
-4. **Review queue.** A Web record `web-099` (Caroline Chen) arrives. It shares only the
-   surname token `chen` with `mkt-011` — no exact phone or email — so it scores in the
-   borderline band (>= 0.75 review, < 0.90 auto). Rather than auto-merging, the hub opens
-   a **review task** with reason `review_threshold` for a human to adjudicate.
+4. **Review queue.** A Web record `web-099` (Caroline Chen) arrives. Its **name** strongly
+   matches the Carol Chen cluster — the matcher scores `Caroline`/`Carol` as an equal
+   first-name match and the surname matches `mkt-011` — but its phone and email match no
+   existing member. The project's matching profile (see below) **down-weights exact-contact
+   disagreement**, so a strong name match whose contact fields simply differ lands in the
+   borderline band (>= 0.75 review, < 0.90 auto) instead of being dropped. Rather than
+   auto-merging (which could be wrong) or discarding it (which could miss a real match), the
+   hub opens a **review task** with reason `review_threshold` for a human to adjudicate.
+
+## Matching profile
+
+The project resolves incremental batches with
+[`customer.profile.json`](customer.profile.json) (passed via `--profiles` on each
+`ingest-incremental` step). It is the built-in `person` profile with one deliberate change:
+the `email` and `phone` weights are lowered to `0.3`. In a Customer 360 hub, contact details
+drift constantly across systems, so a *matching* phone or email is still decisive — an exact
+identifier match floors the pair straight into the auto band regardless of weight, which is
+what joins `mkt-013` and `crm-010` — but a *differing* phone or email should not, on its own,
+veto an otherwise strong name match. Lowering those weights lets `web-099` surface for review
+rather than being silently discarded. Edit the weights to see the band shift.
 
 ## What the assertions prove
 

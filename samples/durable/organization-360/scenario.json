@@ -23,11 +23,11 @@
     { "command": "ingest-incremental",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{webBatchId}",
                 "input": "data/web-acme.csv" },
-      "assert": { "stdout": { "Records added": "1", "Auto matches": "0", "Review tasks": "1" } } },
-    { "command": "review list",
+      "assert": { "stdout": { "Records added": "1", "Auto matches": "0", "Review tasks": "0", "Singleton clusters": "1" } } },
+    { "command": "cluster list",
       "args": { "project-id": "{projectId}" },
-      "assert": { "rows": [ { "where": { "reason": "review_threshold" },
-                              "expect": { "status": "open" } } ] } },
+      "assert": { "rows": [ { "where": { "member_ids~": "web-020" },
+                              "expect": { "record_count": "1" } } ] } },
 
     { "command": "batch create",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "1" },
@@ -69,6 +69,6 @@
     { "command": "ingest-incremental",
       "args": { "project-id": "{overrideProjectId}", "source-id": "{overrideSourceId}", "batch-id": "{overrideBatchId}",
                 "input": "data/override-acme.csv", "profiles": "data/organization-override.profile.json" },
-      "assert": { "stdout": { "Records added": "2", "Auto matches": "0", "Review tasks": "0", "Singleton clusters": "2" } } }
+      "assert": { "stdout": { "Records added": "2", "Auto matches": "0", "Review tasks": "1", "Singleton clusters": "2" } } }
   ]
 }
