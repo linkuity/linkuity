@@ -165,6 +165,8 @@ organization merging, unreliable-field handling, name noise, and durable increme
 scenarios. Start with [people-multi-source](samples/people-multi-source/README.md) (the
 28 → 10 example above).
 
+For a full end-to-end demo on real public data, see [examples/company-resolution](examples/company-resolution/README.md) — resolve real companies across multiple public data sources.
+
 ## Documentation
 
 - [Configuration reference](docs/configuration.md) — matching profile and merge-policy schema, taxonomies
