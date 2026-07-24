@@ -27,6 +27,11 @@ public sealed class LocalBatchRunner
 
     public async Task<int> RunAsync(string[] args, CancellationToken ct)
     {
+        if (args.Length >= 2 &&
+            string.Equals(args[0], "match", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "blocking", StringComparison.OrdinalIgnoreCase))
+            return await BlockingAuditCommands.RunAsync(args, ct);
+
         if (args.Length > 0 && !string.Equals(args[0], "run", StringComparison.OrdinalIgnoreCase))
             return await RunMetadataCommandAsync(args, ct);
 
