@@ -114,4 +114,51 @@ public class BlockingAuditServiceTests
         var result = NewService().Audit(new[] { Org("a", "MICROSOFT CORP") }, OrgProfile);
         Assert.Null(result.Reachability);
     }
+
+    [Fact]
+    public void Audit_WithGroundTruth_ComputesRecall_AndFlagsMissedPair()
+    {
+        // Two true entities:
+        //   apple: two records that DO collide (prefix:appl + name:inc) -> reachable
+        //   boeing: THE BOEING COMPANY vs BOEING CO -> prefix theb/boei, name company/co -> NO shared key
+        var records = new[]
+        {
+            Org("apple-1", "APPLE INC"),
+            Org("apple-2", "APPLE INCORPORATED"),
+            Org("boe-gleif", "THE BOEING COMPANY"),
+            Org("boe-sec", "BOEING CO")
+        };
+        var groundTruth = new Dictionary<string, string>
+        {
+            ["apple-1"] = "apple", ["apple-2"] = "apple",
+            ["boe-gleif"] = "boeing", ["boe-sec"] = "boeing"
+        };
+
+        var report = NewService().Audit(records, OrgProfile, groundTruth).Reachability!;
+
+        Assert.Equal(2, report.TrueMatchPairs);            // one apple pair, one boeing pair
+        Assert.Equal(1, report.ReachablePairs);            // apple only
+        Assert.Equal(0.5, report.Recall, 3);
+        var missed = Assert.Single(report.MissedPairs);
+        Assert.Equal("boeing", missed.CanonicalKey);
+        Assert.Contains("prefix:theb", missed.LeftKeys.Concat(missed.RightKeys));
+        Assert.Contains("prefix:boei", missed.LeftKeys.Concat(missed.RightKeys));
+    }
+
+    [Fact]
+    public void Audit_Attribution_MarksLoadBearingStrategyUnique()
+    {
+        // apple-1/apple-2 share "prefix:appl" (prefix only) and "name:inc"/"name:incorporated" differ,
+        // so the ONLY shared key comes from prefix -> prefix is uniquely load-bearing for this pair.
+        var records = new[] { Org("apple-1", "APPLE INC"), Org("apple-2", "APPLE INCORPORATED") };
+        var groundTruth = new Dictionary<string, string> { ["apple-1"] = "apple", ["apple-2"] = "apple" };
+
+        var report = NewService().Audit(records, OrgProfile, groundTruth).Reachability!;
+
+        var prefix = report.Attribution.Single(a => a.StrategyName == "prefix");
+        Assert.Equal(1, prefix.ReachablePairsContributed);
+        Assert.Equal(1, prefix.UniquelyReachablePairs);
+        var tokenName = report.Attribution.Single(a => a.StrategyName == "token-name");
+        Assert.Equal(0, tokenName.ReachablePairsContributed);
+    }
 }

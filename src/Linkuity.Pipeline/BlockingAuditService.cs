@@ -102,10 +102,79 @@ public sealed class BlockingAuditService
             ? blocks.Where(b => b.Size > cap).ToList()
             : (IReadOnlyList<BlockingBlock>)[];
 
-        // Reachability is filled in Task 2.
-        BlockingReachabilityReport? reachability = null;
+        var reachability = groundTruth is null
+            ? null
+            : ComputeReachability(bySource, profile.BlockingStrategies, groundTruth);
 
         return new BlockingAuditResult(
             records.Count, profile.BlockingStrategies.ToList(), perRecord, blocks, structural, capHazards, reachability);
+    }
+
+    private static BlockingReachabilityReport ComputeReachability(
+        IReadOnlyDictionary<string, RecordBlocking> bySource,
+        IReadOnlyList<string> strategyNames,
+        IReadOnlyDictionary<string, string> groundTruth)
+    {
+        // Group present, labeled records by their canonical (true-entity) key.
+        var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (sourceId, canonical) in groundTruth)
+        {
+            if (!bySource.ContainsKey(sourceId)) continue; // labeled record not in this record set
+            (groups.TryGetValue(canonical, out var list) ? list : groups[canonical] = new List<string>()).Add(sourceId);
+        }
+
+        var truePairs = 0;
+        var reachablePairs = 0;
+        var missed = new List<MissedPair>();
+        var contributed = new Dictionary<string, int>(StringComparer.Ordinal);
+        var unique = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var (canonical, membersRaw) in groups)
+        {
+            var members = membersRaw.OrderBy(x => x, StringComparer.Ordinal).ToList();
+            for (var i = 0; i < members.Count; i++)
+                for (var j = i + 1; j < members.Count; j++)
+                {
+                    truePairs++;
+                    var left = bySource[members[i]];
+                    var right = bySource[members[j]];
+                    var shared = left.AllKeys.Intersect(right.AllKeys, KeyComparer).ToList();
+                    if (shared.Count == 0)
+                    {
+                        missed.Add(new MissedPair(members[i], members[j], canonical, left.AllKeys, right.AllKeys));
+                        continue;
+                    }
+                    reachablePairs++;
+
+                    // Which strategies carry a shared key on BOTH sides.
+                    var perSharedKeyStrategies = new List<HashSet<string>>(shared.Count);
+                    var carrying = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var key in shared)
+                    {
+                        var carriers = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (var name in strategyNames)
+                            if (left.KeysByStrategy[name].Contains(key, KeyComparer) &&
+                                right.KeysByStrategy[name].Contains(key, KeyComparer))
+                                carriers.Add(name);
+                        perSharedKeyStrategies.Add(carriers);
+                        foreach (var c in carriers) carrying.Add(c);
+                    }
+
+                    foreach (var s in carrying)
+                    {
+                        contributed[s] = contributed.GetValueOrDefault(s) + 1;
+                        // Load-bearing: without s, no shared key is carried by any other strategy.
+                        var survivesWithoutS = perSharedKeyStrategies.Any(set => set.Any(x => x != s));
+                        if (!survivesWithoutS)
+                            unique[s] = unique.GetValueOrDefault(s) + 1;
+                    }
+                }
+        }
+
+        var attribution = strategyNames
+            .Select(s => new StrategyAttribution(s, contributed.GetValueOrDefault(s), unique.GetValueOrDefault(s)))
+            .ToList();
+        var recall = truePairs == 0 ? 0.0 : (double)reachablePairs / truePairs;
+        return new BlockingReachabilityReport(truePairs, reachablePairs, recall, missed, attribution);
     }
 }
