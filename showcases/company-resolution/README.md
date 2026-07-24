@@ -92,6 +92,23 @@ matcher** — CIK/LEI live only in the ground truth. The auto-match threshold (0
 tuned so incorrect merges are zero across this dataset. See
 [docs/configuration.md](../../docs/configuration.md).
 
+### Auditing blocking recall
+
+Blocking is the ceiling on recall: two records are only ever compared if they share a
+blocking key. To measure that ceiling for this dataset against the held-out crosswalk:
+
+    dotnet run --project ../../src/Linkuity.Cli -- match blocking audit \
+        --input run/companies.csv \
+        --profile run/company.profile.json \
+        --ground-truth validate/ground-truth.csv
+
+This reports the recall ceiling (currently **87.5%**), the true-match pairs that
+share no key (e.g. `THE BOEING COMPANY` vs `BOEING CO`), per-strategy attribution, and
+the largest blocks. `--min-recall <x>` makes it exit non-zero below a threshold, so it
+can pin a baseline in CI. It also runs against a durable project with
+`--metadata <store.json>` or `--metadata-store postgres --connection-string <cs>`
+(both with `--project-id <guid>`). Run it directly with `./run-demo.ps1 -AuditBlocking`.
+
 ## Run it
 
 Prerequisite: the .NET 10 SDK and PowerShell 7.

@@ -11,6 +11,9 @@
   Also emit neo4j-export.zip (graph of golden orgs + source records).
 .PARAMETER UserAgent
   SEC User-Agent, required only with -Refresh.
+.PARAMETER AuditBlocking
+  Also run `match blocking audit` against the run input after validation, to report
+  the blocking recall ceiling.
 .EXAMPLE
   ./run-demo.ps1
 .EXAMPLE
@@ -20,7 +23,8 @@
 param(
     [switch]$Refresh,
     [switch]$Neo4j,
-    [string]$UserAgent
+    [string]$UserAgent,
+    [switch]$AuditBlocking
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,4 +55,15 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "linkuity run failed ($LASTEXITCODE)"; exi
 
 Write-Step "Validating against held-out ground truth"
 & (Join-Path $here 'validate\Test-Resolution.ps1')
-exit $LASTEXITCODE
+$validateExitCode = $LASTEXITCODE
+
+if ($AuditBlocking) {
+    Write-Host "`n== Blocking audit (recall ceiling) =="
+    $groundTruth = Join-Path $here 'validate\ground-truth.csv'
+    dotnet run --project $cli -- match blocking audit `
+        --input $inputCsv `
+        --profile $profile `
+        --ground-truth $groundTruth
+}
+
+exit $validateExitCode
