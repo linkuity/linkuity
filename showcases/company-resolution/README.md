@@ -3,8 +3,9 @@
 Resolve real companies across two independent public systems — using nothing but
 their names and addresses.
 
-Recording: generate a terminal recording with `vhs assets/demo.tape` (produces
-`assets/demo.gif`).
+![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 60 golden organizations, then scoring 100% precision / 80.6% recall / F1 89.2% with zero incorrect merges against a held-out CIK/LEI crosswalk](assets/demo.gif)
+
+> Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs) — re-record with `vhs assets/demo.tape`.
 
 ## What this proves
 
