@@ -8,7 +8,7 @@ Output showcases/company-resolution/assets/demo.gif
 Set Shell pwsh
 Set FontSize 18
 Set Width 1200
-Set Height 700
+Set Height 760
 Set Padding 20
 Set TypingSpeed 40ms
 
