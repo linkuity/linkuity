@@ -162,7 +162,7 @@ public class LocalBatchRunnerBlockingTests
     }
 
     [Fact]
-    public async Task Audit_MinRecallAboveActual_ExitsNonZero()
+    public async Task Audit_MinRecallAboveActual_ExitsOneForGateFailure()
     {
         var (csv, profile, gt) = WriteFixture(); // actual recall is 0.5 (apple reachable, boeing missed)
 
@@ -172,7 +172,22 @@ public class LocalBatchRunnerBlockingTests
             "--input", csv, "--profile", profile, "--ground-truth", gt, "--min-recall", "0.9"
         ]);
 
-        Assert.NotEqual(0, exit);
+        Assert.Equal(1, exit);
+    }
+
+    [Fact]
+    public async Task Audit_MinRecallNaN_Exits2WithMessage()
+    {
+        var (csv, profile, gt) = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(
+        [
+            "match", "blocking", "audit",
+            "--input", csv, "--profile", profile, "--ground-truth", gt, "--min-recall", "NaN"
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--min-recall", err);
     }
 
     [Fact]

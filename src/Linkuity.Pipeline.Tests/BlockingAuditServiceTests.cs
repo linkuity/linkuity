@@ -146,6 +146,39 @@ public class BlockingAuditServiceTests
     }
 
     [Fact]
+    public void Audit_MissedPairs_AreSortedDeterministically_ByCanonicalKeyThenRecordIds()
+    {
+        // Three canonical groups, each a 2-record pair that shares no blocking key
+        // (different last token AND different first-4-char prefix AND different full
+        // normalized value -> exact-value doesn't apply to organization_name at all).
+        // Ground truth is populated in "zulu", "alpha", "mike" order, so natural/dictionary
+        // enumeration order differs from the expected sorted (ordinal) order: alpha, mike, zulu.
+        var records = new[]
+        {
+            Org("zulu-1", "ZEBRA CORP"), Org("zulu-2", "YAK LIMITED"),
+            Org("alpha-1", "ACME HOLDINGS"), Org("alpha-2", "QUASAR TRADING"),
+            Org("mike-1", "MERCURY SYSTEMS"), Org("mike-2", "NOVA BUILDERS")
+        };
+        var groundTruth = new Dictionary<string, string>
+        {
+            ["zulu-1"] = "zulu", ["zulu-2"] = "zulu",
+            ["alpha-1"] = "alpha", ["alpha-2"] = "alpha",
+            ["mike-1"] = "mike", ["mike-2"] = "mike"
+        };
+
+        var report = NewService().Audit(records, OrgProfile, groundTruth).Reachability!;
+
+        // Every intended pair genuinely shares no blocking key -> all three are missed.
+        Assert.Equal(3, report.MissedPairs.Count);
+        Assert.Equal(3, report.TrueMatchPairs);
+        Assert.Equal(0, report.ReachablePairs);
+
+        Assert.Equal(
+            new[] { "alpha", "mike", "zulu" },
+            report.MissedPairs.Select(m => m.CanonicalKey).ToList());
+    }
+
+    [Fact]
     public void Audit_Attribution_MarksLoadBearingStrategyUnique()
     {
         // apple-1/apple-2 share "prefix:appl" (prefix only) and "name:inc"/"name:incorporated" differ,

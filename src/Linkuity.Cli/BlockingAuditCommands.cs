@@ -165,7 +165,8 @@ public static class BlockingAuditCommands
 
         if (options.TryGetValue("min-recall", out var minRaw))
         {
-            if (!double.TryParse(minRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var min))
+            if (!double.TryParse(minRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var min)
+                || !double.IsFinite(min))
             {
                 await Console.Error.WriteLineAsync($"Invalid --min-recall value: {minRaw}");
                 return 2;

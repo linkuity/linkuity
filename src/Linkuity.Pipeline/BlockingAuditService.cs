@@ -175,6 +175,16 @@ public sealed class BlockingAuditService
             .Select(s => new StrategyAttribution(s, contributed.GetValueOrDefault(s), unique.GetValueOrDefault(s)))
             .ToList();
         var recall = truePairs == 0 ? 0.0 : (double)reachablePairs / truePairs;
+
+        // Deterministic order: missed was appended while enumerating a Dictionary, so its
+        // natural order is not guaranteed stable across runtimes. The CSV formatter emits
+        // these rows for diffing runs across config changes.
+        missed = missed
+            .OrderBy(m => m.CanonicalKey, StringComparer.Ordinal)
+            .ThenBy(m => m.LeftSourceRecordId, StringComparer.Ordinal)
+            .ThenBy(m => m.RightSourceRecordId, StringComparer.Ordinal)
+            .ToList();
+
         return new BlockingReachabilityReport(truePairs, reachablePairs, recall, missed, attribution);
     }
 }
