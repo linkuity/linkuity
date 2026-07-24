@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching.Canonicalization;
 using Linkuity.Matching.Phonetics;
 using Linkuity.Matching.Profiles;
 
@@ -8,12 +9,12 @@ namespace Linkuity.Matching.Strategies.Defaults;
 /// Phonetic blocking via Double Metaphone, selected by semantic type and the
 /// Blocking role, so spelling variants of a name collapse to a shared key. The
 /// token chosen per field mirrors the Python double-metaphone path: last token of
-/// a full name, first non-stopword token of an organization name, the whole value
-/// of a last name. Emits "phonetic:{primary}" and "phonetic:{alternate}".
+/// a full name, first token of the canonical form of an organization name (see OrganizationNameCanonicalizer),
+/// the whole value of a last name. Emits "phonetic:{primary}" and "phonetic:{alternate}".
 /// </summary>
 public sealed class PhoneticBlockingStrategy : IBlockingStrategy
 {
-    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase) { "the", "a", "an" };
+    private static readonly OrganizationNameCanonicalizer OrgCanonicalizer = new();
 
     public string Name => "phonetic";
 
@@ -46,6 +47,9 @@ public sealed class PhoneticBlockingStrategy : IBlockingStrategy
 
     private static string SelectToken(string value, SemanticFieldType type)
     {
+        if (type == SemanticFieldType.OrganizationName)
+            return OrgCanonicalizer.Canonicalize(value).FirstOrDefault() ?? "";
+
         var tokens = MatchKey.Tokens(value).ToList();
         if (tokens.Count == 0)
             return "";
@@ -53,7 +57,6 @@ public sealed class PhoneticBlockingStrategy : IBlockingStrategy
         return type switch
         {
             SemanticFieldType.FullName => tokens[^1],
-            SemanticFieldType.OrganizationName => tokens.FirstOrDefault(t => !Stopwords.Contains(t)) ?? tokens[0],
             _ => tokens[0]
         };
     }
