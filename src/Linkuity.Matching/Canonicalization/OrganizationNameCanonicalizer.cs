@@ -7,7 +7,7 @@ namespace Linkuity.Matching.Canonicalization;
 /// Organization-name canonicalization for blocking: uppercase, period/apostrophe
 /// deletion, ampersand-initial collapse (AT &amp; T -> ATT), punctuation folding,
 /// leading-article drop, and repeated trailing legal-suffix stripping against a
-/// curated international list. Never returns empty for non-blank input.
+/// curated international list. Returns empty only when the input has no alphanumeric content (blank or punctuation-only placeholders like "-"); suffix stripping itself never empties a real name.
 /// </summary>
 public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
 {

@@ -7,6 +7,6 @@ namespace Linkuity.Matching.Canonicalization;
 /// </summary>
 public interface ITokenCanonicalizer
 {
-    /// <summary>Uppercase canonical tokens in name order. Empty only for blank input.</summary>
+    /// <summary>Uppercase canonical tokens in name order. Empty only when the input has no alphanumeric content.</summary>
     IReadOnlyList<string> Canonicalize(string value);
 }

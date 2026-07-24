@@ -82,6 +82,9 @@ public class OrganizationNameCanonicalizerTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void Canonicalize_BlankInput_ReturnsEmpty(string raw)
+    [InlineData("-")]
+    [InlineData("...")]
+    [InlineData("***")]
+    public void Canonicalize_NoAlphanumericContent_ReturnsEmpty(string raw)
         => Assert.Empty(C(raw));
 }
