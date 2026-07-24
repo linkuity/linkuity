@@ -160,4 +160,48 @@ public class LocalBatchRunnerBlockingTests
         Assert.Equal(0, exit);
         Assert.Contains("SKIPPED", output);
     }
+
+    [Fact]
+    public async Task Audit_MinRecallAboveActual_ExitsNonZero()
+    {
+        var (csv, profile, gt) = WriteFixture(); // actual recall is 0.5 (apple reachable, boeing missed)
+
+        var (exit, _, _) = await RunAsync(
+        [
+            "match", "blocking", "audit",
+            "--input", csv, "--profile", profile, "--ground-truth", gt, "--min-recall", "0.9"
+        ]);
+
+        Assert.NotEqual(0, exit);
+    }
+
+    [Fact]
+    public async Task Audit_MinRecallBelowActual_ExitsZero()
+    {
+        var (csv, profile, gt) = WriteFixture();
+
+        var (exit, _, _) = await RunAsync(
+        [
+            "match", "blocking", "audit",
+            "--input", csv, "--profile", profile, "--ground-truth", gt, "--min-recall", "0.4"
+        ]);
+
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public async Task Audit_FormatCsv_EmitsMachineRows()
+    {
+        var (csv, profile, gt) = WriteFixture();
+
+        var (exit, output, _) = await RunAsync(
+        [
+            "match", "blocking", "audit",
+            "--input", csv, "--profile", profile, "--ground-truth", gt, "--format", "csv"
+        ]);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("section,key,size,strategies", output); // block table header
+        Assert.Contains("missed,", output);                     // missed-pair rows tagged
+    }
 }

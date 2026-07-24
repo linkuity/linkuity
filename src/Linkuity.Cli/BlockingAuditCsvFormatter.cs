@@ -1,0 +1,37 @@
+using System.Globalization;
+using System.Text;
+using Linkuity.Pipeline;
+
+namespace Linkuity.Cli;
+
+/// <summary>Renders a BlockingAuditResult as machine-readable rows for diffing runs.</summary>
+public static class BlockingAuditCsvFormatter
+{
+    public static string Format(BlockingAuditResult result)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("section,key,size,strategies");
+        foreach (var b in result.Blocks)
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"block,{Escape(b.Key)},{b.Size},{Escape(string.Join("|", b.StrategyNames))}");
+        foreach (var b in result.CapHazards)
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"cap_hazard,{Escape(b.Key)},{b.Size},{Escape(string.Join("|", b.StrategyNames))}");
+
+        if (result.Reachability is { } r)
+        {
+            sb.AppendLine();
+            sb.AppendLine("section,left,right,canonical,left_keys,right_keys");
+            foreach (var m in r.MissedPairs)
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"missed,{Escape(m.LeftSourceRecordId)},{Escape(m.RightSourceRecordId)},{Escape(m.CanonicalKey)}," +
+                    $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}");
+        }
+        return sb.ToString();
+    }
+
+    private static string Escape(string value)
+        => value.Contains(',') || value.Contains('"')
+            ? $"\"{value.Replace("\"", "\"\"")}\""
+            : value;
+}

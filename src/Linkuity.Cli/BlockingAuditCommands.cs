@@ -157,7 +157,33 @@ public static class BlockingAuditCommands
         int? maxCandidates = options.TryGetValue("max-candidates", out var mc) && int.TryParse(mc, out var mcVal) ? mcVal : null;
 
         var result = service.Audit(records, profile, groundTruth, maxCandidates);
-        Console.Write(BlockingAuditTextFormatter.Format(result));
+
+        var format = options.TryGetValue("format", out var fmt) ? fmt : "text";
+        Console.Write(string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
+            ? BlockingAuditCsvFormatter.Format(result)
+            : BlockingAuditTextFormatter.Format(result));
+
+        if (options.TryGetValue("min-recall", out var minRaw))
+        {
+            if (!double.TryParse(minRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var min))
+            {
+                await Console.Error.WriteLineAsync($"Invalid --min-recall value: {minRaw}");
+                return 2;
+            }
+            if (result.Reachability is null)
+            {
+                await Console.Error.WriteLineAsync("--min-recall requires --ground-truth.");
+                return 2;
+            }
+            if (result.Reachability.Recall < min)
+            {
+                await Console.Error.WriteLineAsync(
+                    string.Format(CultureInfo.InvariantCulture,
+                        "Recall {0:P1} is below the required minimum {1:P1}.", result.Reachability.Recall, min));
+                return 1;
+            }
+        }
+
         return 0;
     }
 
