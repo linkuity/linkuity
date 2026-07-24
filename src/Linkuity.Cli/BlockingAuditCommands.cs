@@ -65,19 +65,53 @@ public static class BlockingAuditCommands
         return 2;
     }
 
-    // ---- Source resolution (CSV in this task; store adapters added in Task 4) ----
+    // ---- Source resolution: CSV, File-store, or Postgres-store ----
 
     private static async Task<IReadOnlyList<EntityRecord>> LoadRecordsAsync(
         IReadOnlyDictionary<string, string> options, CancellationToken ct)
     {
-        if (options.TryGetValue("input", out var csvPath) && !string.IsNullOrWhiteSpace(csvPath))
+        var hasCsv = options.TryGetValue("input", out var csvPath) && !string.IsNullOrWhiteSpace(csvPath);
+        var hasMetadata = options.TryGetValue("metadata", out var metaPath) && !string.IsNullOrWhiteSpace(metaPath);
+        var isPostgres = options.TryGetValue("metadata-store", out var storeType)
+                         && string.Equals(storeType, "postgres", StringComparison.OrdinalIgnoreCase);
+
+        var sourceCount = (hasCsv ? 1 : 0) + (hasMetadata ? 1 : 0) + (isPostgres ? 1 : 0);
+        if (sourceCount != 1)
+            throw new ArgumentException(
+                "Exactly one record source is required: --input <csv>, --metadata <path>, " +
+                "or --metadata-store postgres --connection-string <cs> (all store sources need --project-id).");
+
+        if (hasCsv)
         {
             if (!File.Exists(csvPath))
                 throw new FileNotFoundException($"Input CSV not found: {csvPath}", csvPath);
-            return ReadCsv(csvPath);
+            return ReadCsv(csvPath!);
         }
 
-        throw new ArgumentException("Exactly one record source is required: --input <csv> (or a durable store).");
+        var projectId = ParseProjectId(options);
+
+        if (hasMetadata)
+        {
+            var store = new Linkuity.Infrastructure.Local.FileMetadataStore(
+                new Linkuity.Infrastructure.Local.FileMetadataStoreOptions { DatabasePath = metaPath! });
+            return await store.ListEntityRecordsAsync(projectId, ct);
+        }
+
+        // Postgres
+        if (!options.TryGetValue("connection-string", out var cs) || string.IsNullOrWhiteSpace(cs))
+            throw new ArgumentException("Postgres source requires --connection-string.");
+        Linkuity.Infrastructure.Postgres.DbUpMigrator.EnsureSchema(cs);
+        var pg = new Linkuity.Infrastructure.Postgres.PostgresMetadataStore(
+            new Linkuity.Infrastructure.Postgres.PostgresMetadataStoreOptions { ConnectionString = cs },
+            engine: null, profileProvider: null, indexedRetrieval: null);
+        return await pg.ListEntityRecordsAsync(projectId, ct);
+    }
+
+    private static Guid ParseProjectId(IReadOnlyDictionary<string, string> options)
+    {
+        if (!options.TryGetValue("project-id", out var raw) || !Guid.TryParse(raw, out var id))
+            throw new ArgumentException("A valid --project-id <guid> is required for store sources.");
+        return id;
     }
 
     private static IReadOnlyList<EntityRecord> ReadCsv(string path)

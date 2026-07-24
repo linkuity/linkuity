@@ -125,4 +125,39 @@ public class LocalBatchRunnerBlockingTests
         Assert.Equal(2, exit);
         Assert.Contains("source", err, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task Audit_FileStoreSource_ReadsAllProjectRecords()
+    {
+        var (_, profile, _) = WriteFixture();
+        var storePath = Path.Combine(Path.GetTempPath(), "linkuity-blk-store-" + Guid.NewGuid().ToString("N") + ".json");
+
+        var store = new Linkuity.Infrastructure.Local.FileMetadataStore(
+            new Linkuity.Infrastructure.Local.FileMetadataStoreOptions { DatabasePath = storePath });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Blk", "organization", null, now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "SEC", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        Linkuity.Core.Models.EntityRecord Rec(string srid, string name) => new()
+        {
+            Id = Guid.NewGuid(), ProjectId = project.Id, SourceId = source.Id, IngestBatchId = batch.Id,
+            SourceRecordId = srid,
+            Fields = new Dictionary<string, string> { ["organization_name"] = name },
+            CreatedAt = now
+        };
+        await store.SaveCompletedBatchAsync(
+            new Linkuity.Core.Models.CompletedBatchMetadata(
+                [Rec("boe-gleif", "THE BOEING COMPANY"), Rec("boe-sec", "BOEING CO")], [], [], [], []),
+            CancellationToken.None);
+
+        var (exit, output, _) = await RunAsync(
+        [
+            "match", "blocking", "explain",
+            "--metadata", storePath, "--project-id", project.Id.ToString(),
+            "--profile", profile, "--left", "boe-gleif", "--right", "boe-sec"
+        ]);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("SKIPPED", output);
+    }
 }
