@@ -18,6 +18,11 @@ public static class BlockingAuditCsvFormatter
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"cap_hazard,{Escape(b.Key)},{b.Size},{Escape(string.Join("|", b.StrategyNames))}");
 
+        if (result.Suppression is { } sup)
+            foreach (var b in sup.SuppressedBlocks)
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"suppressed,{Escape(b.Key)},{b.Size},{Escape(string.Join("|", b.StrategyNames))}");
+
         if (result.Reachability is { } r)
         {
             sb.AppendLine();
@@ -26,6 +31,11 @@ public static class BlockingAuditCsvFormatter
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"missed,{Escape(m.LeftSourceRecordId)},{Escape(m.RightSourceRecordId)},{Escape(m.CanonicalKey)}," +
                     $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}");
+            if (result.Suppression is { EffectiveReachability: { } er })
+                foreach (var m in BlockingAuditTextFormatter.LostToSuppression(r, er))
+                    sb.AppendLine(CultureInfo.InvariantCulture,
+                        $"suppression_missed,{Escape(m.LeftSourceRecordId)},{Escape(m.RightSourceRecordId)},{Escape(m.CanonicalKey)}," +
+                        $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}");
         }
         return sb.ToString();
     }

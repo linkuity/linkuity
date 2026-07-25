@@ -137,6 +137,19 @@ public static class BlockingAuditCommands
         return records;
     }
 
+    /// <summary>--max-block-size flag > profile maxBlockSize > off. Null Error means valid.</summary>
+    private static (int? Value, string? Error) ResolveMaxBlockSize(
+        IReadOnlyDictionary<string, string> options, MatchingProfile profile)
+    {
+        if (options.TryGetValue("max-block-size", out var raw))
+        {
+            if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value < 1)
+                return (null, $"Invalid --max-block-size value: {raw}");
+            return (value, null);
+        }
+        return (profile.MaxBlockSize, null);
+    }
+
     // ---- audit ----
 
     private static async Task<int> AuditAsync(
@@ -156,7 +169,14 @@ public static class BlockingAuditCommands
 
         int? maxCandidates = options.TryGetValue("max-candidates", out var mc) && int.TryParse(mc, out var mcVal) ? mcVal : null;
 
-        var result = service.Audit(records, profile, groundTruth, maxCandidates);
+        var (maxBlockSize, maxBlockSizeError) = ResolveMaxBlockSize(options, profile);
+        if (maxBlockSizeError is not null)
+        {
+            await Console.Error.WriteLineAsync(maxBlockSizeError);
+            return 2;
+        }
+
+        var result = service.Audit(records, profile, groundTruth, maxCandidates, maxBlockSize);
 
         var format = options.TryGetValue("format", out var fmt) ? fmt : "text";
         Console.Write(string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
@@ -171,16 +191,17 @@ public static class BlockingAuditCommands
                 await Console.Error.WriteLineAsync($"Invalid --min-recall value: {minRaw}");
                 return 2;
             }
-            if (result.Reachability is null)
+            var gating = result.Suppression?.EffectiveReachability ?? result.Reachability;
+            if (gating is null)
             {
                 await Console.Error.WriteLineAsync("--min-recall requires --ground-truth.");
                 return 2;
             }
-            if (result.Reachability.Recall < min)
+            if (gating.Recall < min)
             {
                 await Console.Error.WriteLineAsync(
                     string.Format(CultureInfo.InvariantCulture,
-                        "Recall {0:P1} is below the required minimum {1:P1}.", result.Reachability.Recall, min));
+                        "Recall {0:P1} is below the required minimum {1:P1}.", gating.Recall, min));
                 return 1;
             }
         }
@@ -211,8 +232,13 @@ public static class BlockingAuditCommands
         BlockingAuditService service, IReadOnlyList<EntityRecord> records, MatchingProfile profile,
         IReadOnlyDictionary<string, string> options)
     {
-        var result = service.Audit(records, profile);
+        var (maxBlockSize, maxBlockSizeError) = ResolveMaxBlockSize(options, profile);
+        if (maxBlockSizeError is not null) { Console.Error.WriteLine(maxBlockSizeError); return 2; }
+
+        var result = service.Audit(records, profile, groundTruth: null, maxCandidates: null, maxBlockSize);
         var byId = result.PerRecord.ToDictionary(r => r.SourceRecordId, StringComparer.Ordinal);
+        var suppressedSizes = (result.Suppression?.SuppressedBlocks ?? [])
+            .ToDictionary(b => b.Key, b => b.Size, StringComparer.OrdinalIgnoreCase);
 
         if (options.TryGetValue("left", out var left) && options.TryGetValue("right", out var right))
         {
@@ -220,11 +246,18 @@ public static class BlockingAuditCommands
             if (!byId.TryGetValue(right, out var r)) { Console.Error.WriteLine($"Unknown record: {right}"); return 2; }
 
             var shared = l.AllKeys.Intersect(r.AllKeys, StringComparer.OrdinalIgnoreCase).ToList();
+            var active = shared.Where(k => !suppressedSizes.ContainsKey(k)).ToList();
+            var suppressed = shared.Where(suppressedSizes.ContainsKey).ToList();
+
             Console.WriteLine(BlockingAuditTextFormatter.FormatRecord(l));
             Console.WriteLine(BlockingAuditTextFormatter.FormatRecord(r));
-            Console.WriteLine(shared.Count > 0
-                ? $"WOULD COMPARE (shares {string.Join(", ", shared)})"
-                : "SKIPPED (no shared key)");
+            if (active.Count > 0)
+                Console.WriteLine($"WOULD COMPARE (shares {string.Join(", ", active)})");
+            else if (suppressed.Count > 0)
+                Console.WriteLine(
+                    $"SKIPPED (all shared keys suppressed: {string.Join(", ", suppressed.Select(k => $"{k} (size {suppressedSizes[k]} > {result.Suppression!.MaxBlockSize})"))})");
+            else
+                Console.WriteLine("SKIPPED (no shared key)");
             return 0;
         }
 
