@@ -64,7 +64,7 @@ if ($AuditBlocking) {
         --input $inputCsv `
         --profile $profile `
         --ground-truth $groundTruth `
-        --min-recall 0.87
+        --min-recall 0.88
     if ($LASTEXITCODE -ne 0 -and $validateExitCode -eq 0) { $validateExitCode = $LASTEXITCODE }
 }
 

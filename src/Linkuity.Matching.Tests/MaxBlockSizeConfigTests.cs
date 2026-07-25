@@ -53,9 +53,14 @@ public class MaxBlockSizeConfigTests
     }
 
     [Fact]
-    public void BuiltInProfiles_LeaveMaxBlockSizeUnset()
+    public void BuiltInProfiles_OnlyOrganizationSetsMaxBlockSize()
     {
         foreach (var p in Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.BuiltInProfiles())
-            Assert.Null(p.MaxBlockSize);
+        {
+            if (p.ContentType == "organization")
+                Assert.Equal(50, p.MaxBlockSize); // 2c: loose keys ship with suppression ON
+            else
+                Assert.Null(p.MaxBlockSize);
+        }
     }
 }

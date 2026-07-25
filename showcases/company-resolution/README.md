@@ -3,7 +3,7 @@
 Resolve real companies across two independent public systems — using nothing but
 their names and addresses.
 
-![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 60 golden organizations, then scoring 100% precision / 77.8% recall / F1 87.5% with zero incorrect merges against a held-out CIK/LEI crosswalk](assets/demo.gif)
+![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 59 golden organizations, then scoring 100% precision / 79.2% recall / F1 88.4% with zero incorrect merges against a held-out CIK/LEI crosswalk](assets/demo.gif)
 
 > Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs) — re-record with `vhs assets/demo.tape`.
 
@@ -12,13 +12,13 @@ their names and addresses.
 [SEC EDGAR](https://www.sec.gov/) and [GLEIF](https://www.gleif.org/) describe the
 same companies independently, and **share no common identifier** — SEC keys on CIK,
 GLEIF on LEI. Given 107 source records that only agree on a fuzzy company name and a
-postal address, Linkuity reconciles them into 60 golden organizations, then we prove
+postal address, Linkuity reconciles them into 59 golden organizations, then we prove
 it got them right against a CIK↔LEI crosswalk the matcher never saw.
 
 - Correctly unified: **39** companies
 - Left separate (honest hard cases): **10**
 - Incorrectly merged: **0**
-- Pairwise precision / recall: **100.0% / 77.8%** (F1 87.5%)
+- Pairwise precision / recall: **100.0% / 79.2%** (F1 88.4%)
 
 ## The datasets
 
@@ -71,10 +71,10 @@ differently formatted addresses (business vs legal/HQ). Examples from this datas
   `BOEING CO, 929 LONG BRIDGE DRIVE, ARLINGTON, VA 22202` (the real Arlington HQ).
   The name pattern (`THE X COMPANY` vs `X CO`) and address divergence present a classic
   article/suffix/word-order blocking challenge; the same pattern splits Coca-Cola,
-  Procter & Gamble, and Walt Disney. With fingerprint + phonetic + prefix blocking,
-  all four pairs now become candidates: Coca-Cola and Procter & Gamble correctly unify
-  (pinned in expectations.json mustUnify), while Boeing and Walt Disney score below
-  the 0.41 auto-merge threshold, so they remain separate.
+  Procter & Gamble, and Walt Disney. With fingerprint + phonetic + token + acronym +
+  n-gram blocking, all four pairs now become candidates: Coca-Cola and Procter &
+  Gamble correctly unify (pinned in expectations.json mustUnify), while Boeing and
+  Walt Disney score below the 0.41 auto-merge threshold, so they remain separate.
 - **Verizon** (left separate) — SEC carries a retired filer name, `BELL ATLANTIC CORP`,
   at the same address as `VERIZON COMMUNICATIONS INC.` (`1095 AVENUE OF THE AMERICAS,
   NEW YORK, NY 10036`). Name and address alone can't bridge a genuine corporate
@@ -88,11 +88,11 @@ The end-to-end flow — acquire → prepare → run → validate — is sketched
 [pipeline diagram](assets/pipeline.md).
 
 `run/company.profile.json` uses `organization_name` as a fuzzy primary signal
-(fingerprint + phonetic + prefix blocking, jaccard similarity, weight 4.0) plus `address_line` (jaccard,
-weight 2.5) and `postal_code` (exact, weight 0.5). **No identifier is fed to the
-matcher** — CIK/LEI live only in the ground truth. The auto-match threshold (0.41) is
-tuned so incorrect merges are zero across this dataset. See
-[docs/configuration.md](../../docs/configuration.md).
+(exact-value + fingerprint + phonetic + token + acronym + n-gram blocking, jaccard
+similarity, weight 4.0) plus `address_line` (jaccard, weight 2.5) and `postal_code`
+(exact, weight 0.5). **No identifier is fed to the matcher** — CIK/LEI live only in
+the ground truth. The auto-match threshold (0.41) is tuned so incorrect merges are
+zero across this dataset. See [docs/configuration.md](../../docs/configuration.md).
 
 ### Auditing blocking recall
 
@@ -104,18 +104,22 @@ blocking key. To measure that ceiling for this dataset against the held-out cros
         --profile run/company.profile.json \
         --ground-truth validate/ground-truth.csv
 
-This reports the recall ceiling (currently **87.5%**), the true-match pairs that
-share no key, per-strategy attribution, and the largest blocks. The ceiling number is
-unchanged, but its composition is fixed: the 4 article/suffix/word-order pairs
-(`boeing`, `coca-cola`, `procter-and-gamble`, `walt-disney`) are now reachable, and all
-9 remaining missed pairs are former-corporate-name renames with zero name overlap —
-AT&T/SBC ↔ Southwestern Bell, Meta ↔ Facebook, Verizon ↔ Bell Atlantic — out of reach
-for name-based blocking by construction; they need identifier or acronym keys (future
-work). The candidate-pair workload drops from 1,761 to 71 (largest block 56 → 5).
-`--min-recall <x>` makes it exit non-zero below a threshold; `./run-demo.ps1
--AuditBlocking` pins **0.87** as the CI gate. It also runs against a durable project
-with `--metadata <store.json>` or `--metadata-store postgres --connection-string <cs>`
-(both with `--project-id <guid>`).
+This reports the recall ceiling, the true-match pairs that share no key, per-strategy
+attribution, and the largest blocks. The loose token/acronym/n-gram keys widen the raw
+ceiling to 94.4%, but the busiest n-gram key (`ngram:inc`, shared by dozens of
+`Inc`/`Incorporated` records) is capacity-suppressed by `maxBlockSize: 50` — the
+profile's first shipping use of that cap — to keep candidate volume sane, which gives
+an **effective ceiling of 88.9% (64/72)**. All 8 remaining missed pairs are pure
+corporate-rename cases with zero name-token overlap — AT&T/SBC ↔ Southwestern Bell,
+Meta ↔ Facebook, Verizon ↔ Bell Atlantic — out of reach for name-based blocking by
+construction; closing them needs identifier-enabled profiles (CIK/LEI), which this
+showcase deliberately forgoes to keep the resolution honestly name+address-only. The
+candidate-pair workload rises from 71 (4-strategy, no cap) to 2,563 (6-strategy,
+capped at 50) — a real cost of the wider recall, though `maxBlockSize` keeps the worst
+single block from growing unbounded. `--min-recall <x>` makes it exit non-zero below a
+threshold; `./run-demo.ps1 -AuditBlocking` pins **0.88** as the CI gate. It also runs
+against a durable project with `--metadata <store.json>` or `--metadata-store postgres
+--connection-string <cs>` (both with `--project-id <guid>`).
 
 ## Run it
 
@@ -129,7 +133,7 @@ Prerequisite: the .NET 10 SDK and PowerShell 7.
 
 ## Expected output
 
-`60` golden records in `output/golden-records.csv`, e.g.:
+`59` golden records in `output/golden-records.csv`, e.g.:
 
 ```
 cluster_id,record_count,member_ids,address_line,organization_name,postal_code

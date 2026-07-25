@@ -44,4 +44,20 @@ public class FingerprintBlockingTests
             TestProfiles.Person);
         Assert.Empty(keys);
     }
+
+    [Fact]
+    public void Fingerprint_HyphenVariant_CollidesWithJoinedForm()
+    {
+        Assert.Equal(["fp:mart wal", "fp:walmart"], Keys("WAL-MART INC").OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal(["fp:walmart"], Keys("WALMART INC"));
+    }
+
+    [Fact]
+    public void Fingerprint_HyphenSubsetName_EmitsBothVariants()
+        => Assert.Equal(["fp:mart stores wal", "fp:stores walmart"],
+            Keys("WAL-MART STORES INC").OrderBy(k => k, StringComparer.Ordinal));
+
+    [Fact]
+    public void Fingerprint_NonHyphenName_StillSingleKey()
+        => Assert.Equal(["fp:disney walt"], Keys("THE WALT DISNEY COMPANY"));
 }

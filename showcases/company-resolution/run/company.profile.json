@@ -7,7 +7,8 @@
     { "name": "postal_code",       "semanticType": "PostalCode",       "roles": ["Matchable"],                          "similarityEvaluator": "exact",   "weight": 0.5 }
   ],
   "normalizationStrategy": "identity",
-  "blockingStrategies": ["exact-value", "fingerprint", "phonetic", "prefix"],
+  "maxBlockSize": 50,
+  "blockingStrategies": ["exact-value", "fingerprint", "phonetic", "token", "acronym", "ngram"],
   "candidateRetrievalStrategy": "linear",
   "similarityStrategy": "field-weighted",
   "scoringStrategy": "identifier-weighted",
