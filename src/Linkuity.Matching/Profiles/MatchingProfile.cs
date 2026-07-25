@@ -30,6 +30,18 @@ public sealed class MatchingProfile
     public double ReviewFloorGate { get; init; } = 0.75;
 
     /// <summary>
+    /// Optional blocking-key suppression threshold: keys whose block size EXCEEDS this value
+    /// stop driving candidate generation (a block exactly at the threshold stays active).
+    /// Unset (null): the indexed/Lucene path derives its threshold from MaxCandidates (a block
+    /// bigger than what retrieval can return is already truncated), and the linear path applies
+    /// no suppression (completeness is its contract). Set it comfortably above the largest
+    /// legitimate same-entity cluster expected in the data — a threshold below that cuts true
+    /// recall, not junk. Measure with `match blocking audit --max-block-size` before committing
+    /// a value.
+    /// </summary>
+    public int? MaxBlockSize { get; init; }
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.
@@ -47,6 +59,7 @@ public sealed class MatchingProfile
         ClusteringStrategy = ClusteringStrategy,
         AutoMatchThreshold = AutoMatchThreshold,
         ReviewThreshold = ReviewThreshold,
-        ReviewFloorGate = ReviewFloorGate
+        ReviewFloorGate = ReviewFloorGate,
+        MaxBlockSize = MaxBlockSize
     };
 }
