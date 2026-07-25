@@ -7,9 +7,10 @@ namespace Linkuity.Pipeline.Tests;
 
 public class BlockingAuditServiceTests
 {
-    // Explicit 3-strategy org profile (exact-value + token-name + prefix), matching the
-    // company-resolution showcase. NOT the built-in "organization" profile, which is
-    // BlockingStrategies = ["exact-value","token-name"] (no prefix) — these tests depend on prefix.
+    // Explicit LEGACY org profile (exact-value + token-name + prefix), pinned as a fixture:
+    // these tests exercise the audit instrument's ability to DETECT missed pairs, so they
+    // deliberately keep the pre-2a strategy set with its known Boeing miss. The built-in
+    // "organization" profile is now ["exact-value","fingerprint","phonetic","prefix"].
     private static readonly MatchingProfile OrgProfile = new()
     {
         ContentType = "organization",
@@ -26,6 +27,34 @@ public class BlockingAuditServiceTests
         ],
         NormalizationStrategy = "identity",
         BlockingStrategies = ["exact-value", "token-name", "prefix"],
+        CandidateRetrievalStrategy = "blocking-linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.41,
+        ReviewThreshold = 0.31
+    };
+
+    // The 2a replacement set (user-approved 4-strategy form). The same Boeing pair that
+    // OrgProfile (old set) pins as MISSED must be reachable under this profile — the
+    // measured flip 2a exists to make.
+    private static readonly MatchingProfile NewOrgProfile = new()
+    {
+        ContentType = "organization",
+        Fields =
+        [
+            new ProfileField
+            {
+                Name = "organization_name",
+                SemanticType = SemanticFieldType.OrganizationName,
+                Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking,
+                SimilarityEvaluator = "jaccard",
+                Weight = 4.0
+            }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value", "fingerprint", "phonetic", "prefix"],
         CandidateRetrievalStrategy = "blocking-linear",
         SimilarityStrategy = "field-weighted",
         ScoringStrategy = "identifier-weighted",
@@ -193,5 +222,30 @@ public class BlockingAuditServiceTests
         Assert.Equal(1, prefix.UniquelyReachablePairs);
         var tokenName = report.Attribution.Single(a => a.StrategyName == "token-name");
         Assert.Equal(0, tokenName.ReachablePairsContributed);
+    }
+
+    [Fact]
+    public void Audit_NewStrategySet_ReachesBoeingAndSubsetPairs()
+    {
+        var records = new[]
+        {
+            Org("boe-gleif", "THE BOEING COMPANY"),
+            Org("boe-sec", "BOEING CO"),
+            Org("app-long", "APPLE COMPUTER INC"),
+            Org("app-short", "APPLE INC")
+        };
+        var groundTruth = new Dictionary<string, string>
+        {
+            ["boe-gleif"] = "boeing", ["boe-sec"] = "boeing",
+            ["app-long"] = "apple", ["app-short"] = "apple"
+        };
+
+        var result = NewService().Audit(records, NewOrgProfile, groundTruth);
+
+        Assert.NotNull(result.Reachability);
+        Assert.Equal(2, result.Reachability!.TrueMatchPairs);
+        Assert.Equal(2, result.Reachability.ReachablePairs); // boeing via fp:, apple via phonetic: (and prefix:)
+        Assert.Empty(result.Reachability.MissedPairs);
+        Assert.Equal(1.0, result.Reachability.Recall);
     }
 }

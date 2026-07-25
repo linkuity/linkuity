@@ -63,7 +63,9 @@ if ($AuditBlocking) {
     dotnet run --project $cli -- match blocking audit `
         --input $inputCsv `
         --profile $profile `
-        --ground-truth $groundTruth
+        --ground-truth $groundTruth `
+        --min-recall 0.87
+    if ($LASTEXITCODE -ne 0 -and $validateExitCode -eq 0) { $validateExitCode = $LASTEXITCODE }
 }
 
 exit $validateExitCode

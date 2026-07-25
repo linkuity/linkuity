@@ -29,10 +29,30 @@ public class PhoneticBlockingTests
     }
 
     [Fact]
-    public void Phonetic_Organization_EncodesFirstNonStopwordToken()
+    public void Phonetic_Organization_EncodesFirstCanonicalToken()
     {
         var keys = Strategy.GenerateKeys(TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "The Acme Holdings" }), TestProfiles.Person);
         var expected = DoubleMetaphone.Encode("Acme");
+
+        Assert.Contains($"phonetic:{expected.Primary}", keys);
+    }
+
+    [Fact]
+    public void Phonetic_Organization_SubsetNames_ShareKey()
+    {
+        // The prefix-unique showcase class: APPLE COMPUTER INC vs APPLE INC must share a phonetic key so coverage does not depend on prefix alone.
+        var longer = Strategy.GenerateKeys(TestRecords.Person("a", new Dictionary<string, string> { ["organization_name"] = "APPLE COMPUTER INC" }), TestProfiles.Person);
+        var shorter = Strategy.GenerateKeys(TestRecords.Person("b", new Dictionary<string, string> { ["organization_name"] = "APPLE INC" }), TestProfiles.Person);
+
+        Assert.NotEmpty(longer);
+        Assert.NotEmpty(longer.Intersect(shorter));
+    }
+
+    [Fact]
+    public void Phonetic_Organization_AmpersandInitials_UseCollapsedToken()
+    {
+        var keys = Strategy.GenerateKeys(TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "AT&T Inc" }), TestProfiles.Person);
+        var expected = DoubleMetaphone.Encode("ATT");
 
         Assert.Contains($"phonetic:{expected.Primary}", keys);
     }

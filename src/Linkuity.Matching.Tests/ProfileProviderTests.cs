@@ -66,7 +66,7 @@ public class ProfileProviderTests
         var profile = DefaultMatchingProfileProvider.CreateOrganizationProfile();
         Assert.Equal("organization", profile.ContentType);
         Assert.Equal("identity", profile.NormalizationStrategy);
-        Assert.Equal(["exact-value", "token-name"], profile.BlockingStrategies);
+        Assert.Equal(["exact-value", "fingerprint", "phonetic", "prefix"], profile.BlockingStrategies);
         Assert.Equal("field-weighted", profile.SimilarityStrategy);
         Assert.Equal("identifier-weighted", profile.ScoringStrategy);
         Assert.Equal("union-find", profile.ClusteringStrategy);

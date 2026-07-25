@@ -24,6 +24,7 @@ public static class MatchingServiceCollectionExtensions
         services.AddSingleton<IBlockingStrategy, ExactValueBlockingStrategy>();
         services.AddSingleton<IBlockingStrategy, TokenNameBlockingStrategy>();
         services.AddSingleton<IBlockingStrategy, PrefixBlockingStrategy>();
+        services.AddSingleton<IBlockingStrategy, FingerprintBlockingStrategy>();
         services.AddSingleton<IBlockingStrategy, NGramBlockingStrategy>();
         services.AddSingleton<IBlockingStrategy, PhoneticBlockingStrategy>();
         services.AddSingleton<IBlockingStrategy>(_ => CompositeBlockingStrategy.DobLastNamePhonetic());
