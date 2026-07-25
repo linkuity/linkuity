@@ -17,9 +17,11 @@ namespace Linkuity.Matching.Strategies.Defaults;
 /// </summary>
 public sealed class BlockingAwareLinearRetrievalStrategy : ICandidateRetrievalStrategy
 {
-    // Corpus key frequencies, weak-keyed on the corpus instance: batch matching calls
-    // Retrieve once per record over the same corpus collection, so the counting pass
-    // runs once per batch and is reclaimed with the corpus.
+    // Corpus key frequencies, weak-keyed on the corpus INSTANCE (identity, not content):
+    // callers that pass the same collection across Retrieve calls pay the counting pass
+    // once, and the entry is reclaimed with the corpus. Precondition: a cached corpus
+    // must not be mutated between Retrieve calls — frequencies would silently go stale.
+    // Every current caller materializes a fresh list per call/batch, which is always safe.
     private static readonly ConditionalWeakTable<IReadOnlyCollection<EntityRecord>, Dictionary<string, int>> FrequencyCache = new();
 
     public string Name => "blocking-linear";
