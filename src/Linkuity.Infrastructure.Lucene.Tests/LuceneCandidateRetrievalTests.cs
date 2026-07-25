@@ -180,8 +180,12 @@ public class LuceneCandidateRetrievalTests
         var incoming = LuceneTestRecords.Person("c", new Dictionary<string, string> { ["last_name"] = "Smith" });
         var candidates = index.Retrieve(incoming, NoCorpus, Profile);
 
-        Assert.True(candidates.Count <= 3, $"expected <= 3 candidates, got {candidates.Count}");
-        Assert.Equal(3, candidates.Count);
+        // Blocking-2b: with no explicit MaxBlockSize on the profile, the suppression threshold
+        // defaults to MaxCandidates (3). The 10-way "Smith" block's DocFreq (10) exceeds that
+        // derived threshold, so every blocking key it produces is suppressed and retrieval
+        // returns nothing. This used to assert a silent Top-3 truncation of the 10-way block;
+        // that block is now explicitly suppressed instead (by design - see BlockingKeySuppressionPolicy).
+        Assert.Empty(candidates);
     }
 
     [Fact]

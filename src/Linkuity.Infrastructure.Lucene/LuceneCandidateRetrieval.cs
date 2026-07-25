@@ -105,11 +105,12 @@ public sealed class LuceneCandidateRetrieval : IIndexedCandidateRetrievalStrateg
     {
         ArgumentNullException.ThrowIfNull(record);
 
-        var query = CandidateQueryBuilder.Build(record, _options);
+        var searcher = AcquireSearcher();
+        var maxBlockSize = profile.MaxBlockSize ?? _options.MaxCandidates;
+        var query = CandidateQueryBuilder.Build(record, _options, searcher.IndexReader, maxBlockSize);
         if (query is null)
             return [];
 
-        var searcher = AcquireSearcher();
         var hits = searcher.Search(query, _options.MaxCandidates);
 
         var results = new List<EntityRecord>(hits.ScoreDocs.Length);

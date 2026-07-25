@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching.Blocking;
 using Lucene.Net.Index;
 using Lucene.Net.Search;
 
@@ -9,20 +10,29 @@ namespace Linkuity.Infrastructure.Lucene;
 /// exact blocking-key term clauses (high boost), phonetic term clauses (medium boost),
 /// and fuzzy name clauses (low boost). Every clause is SHOULD; Lucene relevance only
 /// orders candidates for Top-N selection and is never used as the match score.
+/// Keys whose live block size (IndexReader.DocFreq — the inverted index is the
+/// frequency store) exceeds maxBlockSize are suppressed entirely, including their
+/// derived phonetic/fuzzy clauses: a block bigger than what Top-N can return was
+/// already being truncated arbitrarily.
 /// </summary>
 internal static class CandidateQueryBuilder
 {
     private const string PhoneticPrefix = "phonetic:";
     private const string NamePrefix = "name:";
 
-    public static Query? Build(EntityRecord record, LuceneCandidateRetrievalOptions options)
+    public static Query? Build(EntityRecord record, LuceneCandidateRetrievalOptions options, IndexReader reader, int maxBlockSize)
     {
+        var policy = new BlockingKeySuppressionPolicy(maxBlockSize);
         var query = new BooleanQuery();
         var added = false;
 
         foreach (var key in record.BlockingKeys)
         {
-            query.Add(new TermQuery(new Term(LuceneFields.BlockingKey, key)) { Boost = options.BlockingKeyBoost }, Occur.SHOULD);
+            var term = new Term(LuceneFields.BlockingKey, key);
+            if (policy.IsSuppressed(key, reader.DocFreq(term)))
+                continue;
+
+            query.Add(new TermQuery(term) { Boost = options.BlockingKeyBoost }, Occur.SHOULD);
             added = true;
 
             if (key.StartsWith(PhoneticPrefix, StringComparison.Ordinal))
