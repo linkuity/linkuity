@@ -6,15 +6,16 @@ namespace Linkuity.Matching.Tests;
 
 public class NGramBlockingTests
 {
+    private static readonly IBlockingStrategy Strategy = new NGramBlockingStrategy(3);
+
     [Fact]
-    public void NGram_EmitsTrigramsOfNormalizedValue()
+    public void NGram_EmitsTrigramsOfEachToken()
     {
-        IBlockingStrategy strategy = new NGramBlockingStrategy(3);
         var record = TestRecords.Person("r", new Dictionary<string, string> { ["last_name"] = "Smith" });
 
-        var keys = strategy.GenerateKeys(record, TestProfiles.Person);
+        var keys = Strategy.GenerateKeys(record, TestProfiles.Person);
 
-        // "smith" -> smi, mit, ith
+        // "smith" is a single token -> smi, mit, ith
         Assert.Contains("ngram:smi", keys);
         Assert.Contains("ngram:mit", keys);
         Assert.Contains("ngram:ith", keys);
@@ -24,28 +25,39 @@ public class NGramBlockingTests
     [Fact]
     public void NGram_VariantsShareSomeGrams()
     {
-        IBlockingStrategy strategy = new NGramBlockingStrategy(3);
-        var smith = strategy.GenerateKeys(TestRecords.Person("a", new Dictionary<string, string> { ["last_name"] = "Smith" }), TestProfiles.Person);
-        var smyth = strategy.GenerateKeys(TestRecords.Person("b", new Dictionary<string, string> { ["last_name"] = "Smithe" }), TestProfiles.Person);
+        var smith = Strategy.GenerateKeys(TestRecords.Person("a", new Dictionary<string, string> { ["last_name"] = "Smith" }), TestProfiles.Person);
+        var smyth = Strategy.GenerateKeys(TestRecords.Person("b", new Dictionary<string, string> { ["last_name"] = "Smithe" }), TestProfiles.Person);
 
         Assert.NotEmpty(smith.Intersect(smyth));
     }
 
     [Fact]
-    public void NGram_UsesWholeValueWhenShorterThanN()
+    public void NGram_UsesWholeTokenWhenShorterThanN()
     {
-        IBlockingStrategy strategy = new NGramBlockingStrategy(3);
         var record = TestRecords.Person("r", new Dictionary<string, string> { ["last_name"] = "Ng" });
 
-        Assert.Equal(["ngram:ng"], strategy.GenerateKeys(record, TestProfiles.Person));
+        Assert.Equal(["ngram:ng"], Strategy.GenerateKeys(record, TestProfiles.Person));
     }
 
     [Fact]
     public void NGram_IgnoresIdentifierFields()
     {
-        IBlockingStrategy strategy = new NGramBlockingStrategy(3);
         var record = TestRecords.Person("r", new Dictionary<string, string> { ["email"] = "alice@example.com" });
 
-        Assert.Empty(strategy.GenerateKeys(record, TestProfiles.Person));
+        Assert.Empty(Strategy.GenerateKeys(record, TestProfiles.Person));
+    }
+
+    [Fact]
+    public void NGram_NeverSpansWordBoundaries()
+    {
+        // SERVICE|INC concatenated would yield the junk gram "ein" (SERVIC-E,IN-C), which
+        // falsely collides with BOEING's genuine "ein". Per-token gramming must not emit it.
+        var keys = Strategy.GenerateKeys(
+            TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "UNITED PARCEL SERVICE INC" }),
+            TestProfiles.Person);
+
+        Assert.DoesNotContain("ngram:ein", keys);
+        Assert.Contains("ngram:ser", keys); // within-word grams still present
+        Assert.Contains("ngram:inc", keys); // short token emits itself
     }
 }

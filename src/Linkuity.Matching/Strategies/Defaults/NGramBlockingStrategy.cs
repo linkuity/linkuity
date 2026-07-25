@@ -6,7 +6,10 @@ namespace Linkuity.Matching.Strategies.Defaults;
 /// <summary>
 /// N-gram blocking: distinct character n-grams of name/text fields, selected by
 /// semantic type and the Blocking role. Groups records that share substrings even
-/// when full tokens differ. Emits "ngram:{gram}".
+/// when full tokens differ. Grams are generated PER TOKEN: word boundaries are never
+/// spanned, since a gram straddling two tokens (e.g. the tail of one word concatenated
+/// with the head of the next) is meaningless and only creates false candidate pairs.
+/// Tokens no longer than n emit themselves whole. Emits "ngram:{gram}".
 /// </summary>
 public sealed class NGramBlockingStrategy : IBlockingStrategy
 {
@@ -30,16 +33,18 @@ public sealed class NGramBlockingStrategy : IBlockingStrategy
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (_, value) in BlockingFields.Select(record, profile, IsTextType))
         {
-            var normalized = MatchKey.Normalize(value);
-            if (normalized.Length == 0)
-                continue;
-            if (normalized.Length <= _n)
+            foreach (var token in MatchKey.Tokens(value))
             {
-                keys.Add($"ngram:{normalized}");
-                continue;
+                if (token.Length == 0)
+                    continue;
+                if (token.Length <= _n)
+                {
+                    keys.Add($"ngram:{token}");
+                    continue;
+                }
+                for (var i = 0; i + _n <= token.Length; i++)
+                    keys.Add($"ngram:{token.Substring(i, _n)}");
             }
-            for (var i = 0; i + _n <= normalized.Length; i++)
-                keys.Add($"ngram:{normalized.Substring(i, _n)}");
         }
         return keys.ToList();
     }
