@@ -112,14 +112,15 @@ public sealed class DefaultMatchingProfileProvider : IMatchingProfileProvider
             new ProfileField { Name = "postal_code", SemanticType = SemanticFieldType.PostalCode, Roles = FieldRole.Matchable, SimilarityEvaluator = "exact", Weight = 1.0 }
         ],
         NormalizationStrategy = "identity",
-        BlockingStrategies = ["exact-value", "fingerprint", "phonetic", "prefix"],
+        BlockingStrategies = ["exact-value", "fingerprint", "phonetic", "token", "acronym", "ngram"],
         CandidateRetrievalStrategy = "linear",
         SimilarityStrategy = "field-weighted",
         ScoringStrategy = "identifier-weighted",
         DecisionStrategy = "threshold",
         ClusteringStrategy = "union-find",
         AutoMatchThreshold = 0.90,
-        ReviewThreshold = 0.75
+        ReviewThreshold = 0.75,
+        MaxBlockSize = 50
     };
 
     /// <summary>

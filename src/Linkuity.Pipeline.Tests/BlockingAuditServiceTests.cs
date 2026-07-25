@@ -10,7 +10,7 @@ public class BlockingAuditServiceTests
     // Explicit LEGACY org profile (exact-value + token-name + prefix), pinned as a fixture:
     // these tests exercise the audit instrument's ability to DETECT missed pairs, so they
     // deliberately keep the pre-2a strategy set with its known Boeing miss. The built-in
-    // "organization" profile is now ["exact-value","fingerprint","phonetic","prefix"].
+    // "organization" profile is now ["exact-value","fingerprint","phonetic","token","acronym","ngram"] with maxBlockSize 50.
     private static readonly MatchingProfile OrgProfile = new()
     {
         ContentType = "organization",
@@ -37,8 +37,8 @@ public class BlockingAuditServiceTests
     };
 
     // The 2a replacement set (user-approved 4-strategy form). The same Boeing pair that
-    // OrgProfile (old set) pins as MISSED must be reachable under this profile — the
-    // measured flip 2a exists to make.
+    // OrgProfile (old set) pins as MISSED must be reachable under this profile. The built-in
+    // "organization" profile is now ["exact-value","fingerprint","phonetic","token","acronym","ngram"] with maxBlockSize 50.
     private static readonly MatchingProfile NewOrgProfile = new()
     {
         ContentType = "organization",
