@@ -6,9 +6,11 @@ using Linkuity.Pipeline;
 namespace Linkuity.Pipeline.Tests;
 
 /// <summary>
-/// The 2c robustness classes, pinned reachable under the shipping org strategy set WITH
-/// suppression active — data shapes the showcase lacks (hyphen splits, subset/reorder,
-/// typos, acronyms) that loose keys + 2b make reachable.
+/// The 2c robustness classes, pinned reachable under the shipping org strategy set with
+/// the profile's maxBlockSize threaded through (suppression reporting active; blocks in
+/// these two-record fixtures never exceed it). Each class also asserts its headline
+/// strategy CONTRIBUTES to the pair via audit attribution, so reverting that strategy
+/// fails the test even where older strategies also connect the pair.
 /// </summary>
 public class BlockingLooseKeyTests
 {
@@ -23,7 +25,7 @@ public class BlockingLooseKeyTests
         CreatedAt = DateTimeOffset.UnixEpoch
     };
 
-    private static void AssertPairReachable(string leftName, string rightName)
+    private static void AssertPairReachable(string leftName, string rightName, string mustContribute)
     {
         var records = new[] { Org("l", leftName), Org("r", rightName) };
         var groundTruth = new Dictionary<string, string> { ["l"] = "x", ["r"] = "x" };
@@ -36,23 +38,27 @@ public class BlockingLooseKeyTests
         Assert.Equal(1, effective.TrueMatchPairs);
         Assert.Empty(effective.MissedPairs);
         Assert.Equal(1.0, effective.Recall);
+        // The class's headline strategy must be a real contributor: reverting it fails
+        // this test even where other strategies also connect the pair.
+        Assert.Contains(effective.Attribution,
+            a => a.StrategyName == mustContribute && a.ReachablePairsContributed == 1);
     }
 
     [Fact]
     public void HyphenClass_WalmartSplitAndSubset_Reachable()
-        => AssertPairReachable("WAL-MART STORES INC", "WALMART INC");
+        => AssertPairReachable("WAL-MART STORES INC", "WALMART INC", mustContribute: "token");
 
     [Fact]
     public void SubsetReorderClass_SharedRareToken_Reachable()
-        => AssertPairReachable("ZETA GLOBAL INC", "GLOBAL ZETA HOLDINGS");
+        => AssertPairReachable("ZETA GLOBAL INC", "GLOBAL ZETA HOLDINGS", mustContribute: "token");
 
     [Fact]
     public void TypoClass_TrigramOverlap_Reachable()
-        => AssertPairReachable("MICROSFT CORP", "MICROSOFT CORPORATION");
+        => AssertPairReachable("MICROSFT CORP", "MICROSOFT CORPORATION", mustContribute: "ngram");
 
     [Fact]
     public void AcronymClass_SbcSouthwesternBell_Reachable()
-        => AssertPairReachable("SBC COMMUNICATIONS INC", "SOUTHWESTERN BELL CORP");
+        => AssertPairReachable("SBC COMMUNICATIONS INC", "SOUTHWESTERN BELL CORP", mustContribute: "acronym");
 
     [Fact]
     public void OrgProfile_ShipsSixStrategiesWithMaxBlockSize()
