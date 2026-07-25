@@ -44,7 +44,43 @@ public static class BlockingAuditTextFormatter
                 sb.AppendLine(CultureInfo.InvariantCulture, $"  {b.Key} (size {b.Size})");
         }
 
+        if (result.Suppression is { } sup)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"Suppressed keys (block size > {sup.MaxBlockSize}): {sup.SuppressedBlocks.Count}");
+            foreach (var b in sup.SuppressedBlocks)
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  {b.Key} (size {b.Size}) [{string.Join(",", b.StrategyNames)}]");
+            if (sup.NoActiveKeyRecordIds.Count > 0)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"Records with no active keys (blocking singletons): {sup.NoActiveKeyRecordIds.Count}");
+                foreach (var id in sup.NoActiveKeyRecordIds)
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  {id}");
+            }
+            if (sup.EffectiveReachability is { } er && result.Reachability is { } raw)
+            {
+                var lost = LostToSuppression(raw, er);
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"Effective recall ceiling: {er.Recall:P1} ({er.ReachablePairs}/{er.TrueMatchPairs}) - pairs lost to suppression: {lost.Count}");
+                foreach (var m in lost)
+                    sb.AppendLine(CultureInfo.InvariantCulture,
+                        $"  [{m.CanonicalKey}] {m.LeftSourceRecordId} vs {m.RightSourceRecordId} | " +
+                        $"left={{{string.Join(",", m.LeftKeys)}}} right={{{string.Join(",", m.RightKeys)}}}");
+            }
+        }
+
         return sb.ToString();
+    }
+
+    /// <summary>Pairs missed under suppression that the raw key sets reached: suppression's recall cost.</summary>
+    public static IReadOnlyList<MissedPair> LostToSuppression(BlockingReachabilityReport raw, BlockingReachabilityReport effective)
+    {
+        var rawMissed = raw.MissedPairs
+            .Select(m => (m.LeftSourceRecordId, m.RightSourceRecordId))
+            .ToHashSet();
+        return effective.MissedPairs
+            .Where(m => !rawMissed.Contains((m.LeftSourceRecordId, m.RightSourceRecordId)))
+            .ToList(); // already deterministic: ComputeReachability sorts missed pairs
     }
 
     public static string FormatRecord(RecordBlocking record)

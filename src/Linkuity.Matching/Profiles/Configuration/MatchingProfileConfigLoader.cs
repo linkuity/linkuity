@@ -132,6 +132,12 @@ public sealed class MatchingProfileConfigLoader
         var reviewFloorGate = document.ReviewFloorGate ?? 0.75;
         RequireRange(reviewFloorGate, "reviewFloorGate", source);
 
+        // Optional suppression threshold (2b). Absent -> path defaults (indexed: MaxCandidates;
+        // linear: no suppression). Validated only for a sane lower bound.
+        if (document.MaxBlockSize is { } maxBlockSize && maxBlockSize < 1)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'maxBlockSize' ({maxBlockSize}) must be at least 1.");
+
         return new MatchingProfile
         {
             ContentType = contentType,
@@ -145,7 +151,8 @@ public sealed class MatchingProfileConfigLoader
             ClusteringStrategy = clustering,
             AutoMatchThreshold = auto,
             ReviewThreshold = review,
-            ReviewFloorGate = reviewFloorGate
+            ReviewFloorGate = reviewFloorGate,
+            MaxBlockSize = document.MaxBlockSize
         };
     }
 

@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching.Blocking;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -26,7 +27,8 @@ public sealed class BlockingAuditService
         IReadOnlyList<EntityRecord> records,
         MatchingProfile profile,
         IReadOnlyDictionary<string, string>? groundTruth = null,
-        int? maxCandidates = null)
+        int? maxCandidates = null,
+        int? maxBlockSize = null)
     {
         ArgumentNullException.ThrowIfNull(records);
         ArgumentNullException.ThrowIfNull(profile);
@@ -106,9 +108,44 @@ public sealed class BlockingAuditService
             ? null
             : ComputeReachability(bySource, profile.BlockingStrategies, groundTruth);
 
+        BlockingSuppressionReport? suppression = null;
+        if (maxBlockSize is { } max)
+        {
+            var policy = new BlockingKeySuppressionPolicy(max);
+            var suppressedBlocks = blocks.Where(b => policy.IsSuppressed(b.Key, b.Size)).ToList();
+            var suppressedKeys = suppressedBlocks.Select(b => b.Key).ToHashSet(KeyComparer);
+
+            var noActive = perRecord
+                .Where(rb => rb.AllKeys.Count > 0 && rb.AllKeys.All(suppressedKeys.Contains))
+                .Select(rb => rb.SourceRecordId)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+
+            BlockingReachabilityReport? effective = null;
+            if (groundTruth is not null)
+            {
+                var filteredBySource = bySource.ToDictionary(
+                    kv => kv.Key,
+                    kv => FilterSuppressed(kv.Value, suppressedKeys),
+                    StringComparer.Ordinal);
+                effective = ComputeReachability(filteredBySource, profile.BlockingStrategies, groundTruth);
+            }
+
+            suppression = new BlockingSuppressionReport(max, suppressedBlocks, noActive, effective);
+        }
+
         return new BlockingAuditResult(
-            records.Count, profile.BlockingStrategies.ToList(), perRecord, blocks, structural, capHazards, reachability);
+            records.Count, profile.BlockingStrategies.ToList(), perRecord, blocks, structural, capHazards, reachability, suppression);
     }
+
+    private static RecordBlocking FilterSuppressed(RecordBlocking rb, HashSet<string> suppressedKeys)
+        => new(
+            rb.SourceRecordId,
+            rb.KeysByStrategy.ToDictionary(
+                kv => kv.Key,
+                kv => (IReadOnlyList<string>)kv.Value.Where(k => !suppressedKeys.Contains(k)).ToList(),
+                StringComparer.Ordinal),
+            rb.AllKeys.Where(k => !suppressedKeys.Contains(k)).ToList());
 
     private static BlockingReachabilityReport ComputeReachability(
         IReadOnlyDictionary<string, RecordBlocking> bySource,
