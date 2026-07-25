@@ -189,6 +189,31 @@ public class LuceneCandidateRetrievalTests
     }
 
     [Fact]
+    public void Retrieve_CapsUnionOfActiveKeys_AtMaxCandidates()
+    {
+        using var index = new LuceneCandidateRetrieval(
+            new LuceneCandidateRetrievalOptions { IndexDirectory = LuceneTestRecords.TempDir(), MaxCandidates = 3 });
+        // Six candidates arrive via three DISTINCT keys whose own blocks (DocFreq 2 each) sit
+        // under the derived suppression threshold (MaxCandidates 3) — nothing is suppressed,
+        // so the Top-N cap is what limits the result set.
+        index.Index(LuceneTestRecords.Person("e1", new Dictionary<string, string> { ["email"] = "cap@example.com" }));
+        index.Index(LuceneTestRecords.Person("e2", new Dictionary<string, string> { ["email"] = "cap@example.com" }));
+        index.Index(LuceneTestRecords.Person("p1", new Dictionary<string, string> { ["phone"] = "+15550001111" }));
+        index.Index(LuceneTestRecords.Person("p2", new Dictionary<string, string> { ["phone"] = "+15550001111" }));
+        index.Index(LuceneTestRecords.Person("n1", new Dictionary<string, string> { ["last_name"] = "Zabriskie" }));
+        index.Index(LuceneTestRecords.Person("n2", new Dictionary<string, string> { ["last_name"] = "Zabriskie" }));
+        index.Commit();
+
+        var incoming = LuceneTestRecords.Person("in", new Dictionary<string, string>
+        {
+            ["email"] = "cap@example.com", ["phone"] = "+15550001111", ["last_name"] = "Zabriskie"
+        });
+        var candidates = index.Retrieve(incoming, NoCorpus, Profile);
+
+        Assert.Equal(3, candidates.Count); // capped by MaxCandidates, not emptied by suppression
+    }
+
+    [Fact]
     public void Constructor_CreatesFreshIndexDirectory_WhenItDoesNotExist()
     {
         // A path that does not yet exist on disk — the constructor must create it, not crash.
