@@ -8,7 +8,8 @@ public sealed record BlockingAuditResult(
     IReadOnlyList<BlockingBlock> Blocks,
     BlockingStructuralStats Structural,
     IReadOnlyList<BlockingBlock> CapHazards,
-    BlockingReachabilityReport? Reachability);
+    BlockingReachabilityReport? Reachability,
+    BlockingSuppressionReport? Suppression = null);
 
 /// <summary>One record's blocking keys, grouped by the strategy that produced them.</summary>
 public sealed record RecordBlocking(
@@ -55,3 +56,16 @@ public sealed record StrategyAttribution(
     string StrategyName,
     int ReachablePairsContributed,
     int UniquelyReachablePairs);
+
+/// <summary>
+/// What frequency-aware suppression at MaxBlockSize would do to this record set: which
+/// keys stop driving candidacy, which records are left with no active key (blocking
+/// singletons), and the EFFECTIVE reachability computed over active keys only (null
+/// without ground truth). Compare with the raw <see cref="BlockingReachabilityReport"/>
+/// to read suppression's recall cost.
+/// </summary>
+public sealed record BlockingSuppressionReport(
+    int MaxBlockSize,
+    IReadOnlyList<BlockingBlock> SuppressedBlocks,
+    IReadOnlyList<string> NoActiveKeyRecordIds,
+    BlockingReachabilityReport? EffectiveReachability);
