@@ -40,8 +40,7 @@ public class PhoneticBlockingTests
     [Fact]
     public void Phonetic_Organization_SubsetNames_ShareKey()
     {
-        // The prefix-unique showcase class: APPLE COMPUTER INC vs APPLE INC must share
-        // a phonetic key once prefix is dropped from the org profile.
+        // The prefix-unique showcase class: APPLE COMPUTER INC vs APPLE INC must share a phonetic key so coverage does not depend on prefix alone.
         var longer = Strategy.GenerateKeys(TestRecords.Person("a", new Dictionary<string, string> { ["organization_name"] = "APPLE COMPUTER INC" }), TestProfiles.Person);
         var shorter = Strategy.GenerateKeys(TestRecords.Person("b", new Dictionary<string, string> { ["organization_name"] = "APPLE INC" }), TestProfiles.Person);
 

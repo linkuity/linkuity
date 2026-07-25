@@ -69,10 +69,12 @@ differently formatted addresses (business vs legal/HQ). Examples from this datas
 - **Boeing** (left separate) — GLEIF `THE BOEING COMPANY, 2711 Centerville Road Suite
   400, Wilmington, US-DE 19808` (a Delaware registered-agent address) vs SEC
   `BOEING CO, 929 LONG BRIDGE DRIVE, ARLINGTON, VA 22202` (the real Arlington HQ).
-  Both the name pattern (`THE X COMPANY` vs `X CO`) and the address diverge — the same
-  "THE X COMPANY" (GLEIF) vs "X CO" (SEC) split also splits Coca-Cola, Procter &
-  Gamble, and Walt Disney in this dataset. These pairs never even become match
-  candidates.
+  The name pattern (`THE X COMPANY` vs `X CO`) and address divergence present a classic
+  article/suffix/word-order blocking challenge; the same pattern splits Coca-Cola,
+  Procter & Gamble, and Walt Disney. With fingerprint + phonetic + prefix blocking,
+  all four pairs now become candidates: Coca-Cola and Procter & Gamble correctly unify
+  (pinned in expectations.json mustUnify), while Boeing and Walt Disney score below
+  the 0.41 auto-merge threshold, so they remain separate.
 - **Verizon** (left separate) — SEC carries a retired filer name, `BELL ATLANTIC CORP`,
   at the same address as `VERIZON COMMUNICATIONS INC.` (`1095 AVENUE OF THE AMERICAS,
   NEW YORK, NY 10036`). Name and address alone can't bridge a genuine corporate
@@ -86,7 +88,7 @@ The end-to-end flow — acquire → prepare → run → validate — is sketched
 [pipeline diagram](assets/pipeline.md).
 
 `run/company.profile.json` uses `organization_name` as a fuzzy primary signal
-(token-name blocking, jaccard similarity, weight 4.0) plus `address_line` (jaccard,
+(fingerprint + phonetic + prefix blocking, jaccard similarity, weight 4.0) plus `address_line` (jaccard,
 weight 2.5) and `postal_code` (exact, weight 0.5). **No identifier is fed to the
 matcher** — CIK/LEI live only in the ground truth. The auto-match threshold (0.41) is
 tuned so incorrect merges are zero across this dataset. See

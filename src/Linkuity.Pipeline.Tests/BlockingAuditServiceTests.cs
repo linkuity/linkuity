@@ -244,7 +244,7 @@ public class BlockingAuditServiceTests
 
         Assert.NotNull(result.Reachability);
         Assert.Equal(2, result.Reachability!.TrueMatchPairs);
-        Assert.Equal(2, result.Reachability.ReachablePairs); // boeing via fp:, apple via phonetic:
+        Assert.Equal(2, result.Reachability.ReachablePairs); // boeing via fp:, apple via phonetic: (and prefix:)
         Assert.Empty(result.Reachability.MissedPairs);
         Assert.Equal(1.0, result.Reachability.Recall);
     }
