@@ -34,7 +34,32 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
     [GeneratedRegex(@"([A-Z0-9]+) *& *([A-Z0-9]+)")]
     private static partial Regex AmpersandJoin();
 
-    public IReadOnlyList<string> Canonicalize(string value)
+    public IReadOnlyList<string> Canonicalize(string value) => Core(value, stripSuffixes: true);
+
+    /// <summary>
+    /// The same pipeline with trailing-suffix stripping skipped — acronym generation needs
+    /// suffix initials (the C in SBC comes from CORP, which Canonicalize strips).
+    /// </summary>
+    public IReadOnlyList<string> CanonicalizeKeepingSuffixes(string value) => Core(value, stripSuffixes: false);
+
+    /// <summary>
+    /// Primary tokens plus, when different, the hyphen-joined variant (hyphens deleted like
+    /// periods, so WAL-MART tokenizes as WALMART). Consumers wanting reach (fingerprint,
+    /// token keys) iterate variants; single-token consumers (phonetic) use Canonicalize.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<string>> Variants(string value)
+    {
+        var primary = Canonicalize(value);
+        if (string.IsNullOrWhiteSpace(value) || !value.Contains('-'))
+            return [primary];
+
+        var joined = Canonicalize(value.Replace("-", ""));
+        return joined.Count == 0 || joined.SequenceEqual(primary, StringComparer.Ordinal)
+            ? [primary]
+            : [primary, joined];
+    }
+
+    private static List<string> Core(string value, bool stripSuffixes)
     {
         if (string.IsNullOrWhiteSpace(value))
             return [];
@@ -47,7 +72,8 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
             return [];
 
         DropLeadingArticle(tokens);
-        StripTrailingSuffixes(tokens);
+        if (stripSuffixes)
+            StripTrailingSuffixes(tokens);
         return tokens;
     }
 

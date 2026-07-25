@@ -87,4 +87,69 @@ public class OrganizationNameCanonicalizerTests
     [InlineData("***")]
     public void Canonicalize_NoAlphanumericContent_ReturnsEmpty(string raw)
         => Assert.Empty(C(raw));
+
+    // ---- 2c: Variants + CanonicalizeKeepingSuffixes ----
+
+    [Fact]
+    public void Variants_HyphenatedName_EmitsPrimaryAndJoined()
+    {
+        var variants = Canonicalizer.Variants("WAL-MART STORES INC");
+        Assert.Equal(2, variants.Count);
+        Assert.Equal(new[] { "WAL", "MART", "STORES" }, variants[0]);
+        Assert.Equal(new[] { "WALMART", "STORES" }, variants[1]);
+    }
+
+    [Fact]
+    public void Variants_NoHyphen_SingleVariant()
+    {
+        var variants = Canonicalizer.Variants("THE BOEING COMPANY");
+        var only = Assert.Single(variants);
+        Assert.Equal(new[] { "BOEING" }, only);
+    }
+
+    [Fact]
+    public void Variants_HyphenWithIdenticalOutcome_SingleVariant()
+    {
+        // COCA-COLA vs COCACOLA differ, so two variants; but a name where joining changes
+        // nothing must not duplicate. "X-" trailing hyphen: primary [X], joined [X].
+        var variants = Canonicalizer.Variants("X- INC");
+        var only = Assert.Single(variants);
+        Assert.Equal(new[] { "X" }, only);
+    }
+
+    [Fact]
+    public void Variants_PunctuationOnly_SinglePrimaryEmptyVariant()
+    {
+        var variants = Canonicalizer.Variants("-");
+        var only = Assert.Single(variants);
+        Assert.Empty(only);
+    }
+
+    [Fact]
+    public void Variants_DefaultInterfaceImplementation_WrapsCanonicalize()
+    {
+        ITokenCanonicalizer fake = new SingleTokenCanonicalizer();
+        var variants = fake.Variants("anything");
+        var only = Assert.Single(variants);
+        Assert.Equal(new[] { "FIXED" }, only);
+    }
+
+    private sealed class SingleTokenCanonicalizer : ITokenCanonicalizer
+    {
+        public IReadOnlyList<string> Canonicalize(string value) => ["FIXED"];
+    }
+
+    [Fact]
+    public void KeepingSuffixes_RetainsTrailingLegalSuffix()
+        => Assert.Equal(new[] { "SOUTHWESTERN", "BELL", "CORP" },
+            Canonicalizer.CanonicalizeKeepingSuffixes("SOUTHWESTERN BELL CORP"));
+
+    [Fact]
+    public void KeepingSuffixes_StillDropsLeadingArticle()
+        => Assert.Equal(new[] { "BOEING", "COMPANY" },
+            Canonicalizer.CanonicalizeKeepingSuffixes("The Boeing Company"));
+
+    [Fact]
+    public void KeepingSuffixes_BlankInput_ReturnsEmpty()
+        => Assert.Empty(Canonicalizer.CanonicalizeKeepingSuffixes("   "));
 }
