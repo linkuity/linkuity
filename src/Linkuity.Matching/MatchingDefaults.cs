@@ -30,6 +30,7 @@ public static class MatchingDefaults
                 new TokenNameBlockingStrategy(),
                 new PrefixBlockingStrategy(),
                 new FingerprintBlockingStrategy(),
+                new TokenBlockingStrategy(),
                 new NGramBlockingStrategy(),
                 new PhoneticBlockingStrategy(),
                 CompositeBlockingStrategy.DobLastNamePhonetic()
