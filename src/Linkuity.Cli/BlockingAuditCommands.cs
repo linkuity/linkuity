@@ -170,7 +170,7 @@ public static class BlockingAuditCommands
                 Console.WriteLine($"WOULD COMPARE (shares {string.Join(", ", active)})");
             else if (suppressed.Count > 0)
                 Console.WriteLine(
-                    $"SKIPPED (all shared keys suppressed: {string.Join(", ", suppressed.Select(k => $"{k} (size {suppressedSizes[k]} > {result.Suppression!.MaxBlockSize})"))})");
+                    $"SKIPPED (all shared keys suppressed: {string.Join(", ", suppressed.Select(k => $"{k} (size {suppressedSizes[k]}, corpus frequency {suppressedSizes[k] - 1} > {result.Suppression!.MaxBlockSize})"))})");
             else
                 Console.WriteLine("SKIPPED (no shared key)");
             return 0;

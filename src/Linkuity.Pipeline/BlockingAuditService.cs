@@ -112,7 +112,10 @@ public sealed class BlockingAuditService
         if (maxBlockSize is { } max)
         {
             var policy = new BlockingKeySuppressionPolicy(max);
-            var suppressedBlocks = blocks.Where(b => policy.IsSuppressed(b.Key, b.Size)).ToList();
+            // Engine parity: blocking-linear counts key frequency over a corpus that
+            // excludes the query record, so a full block of size S has per-query
+            // frequency S-1. A block of exactly max+1 stays active.
+            var suppressedBlocks = blocks.Where(b => policy.IsSuppressed(b.Key, b.Size - 1)).ToList();
             var suppressedKeys = suppressedBlocks.Select(b => b.Key).ToHashSet(KeyComparer);
 
             var noActive = perRecord
