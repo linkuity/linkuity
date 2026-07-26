@@ -221,4 +221,155 @@ public class LocalBatchRunnerScoringTests
         Assert.Contains("audit", err, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("explain", err, StringComparison.OrdinalIgnoreCase);
     }
+
+    // ---- Task 4: CSV formatter + `match scoring explain` ----
+
+    // Same org profile/blocking as WriteFixture, but with a fourth record (a4, unlabeled
+    // in ground truth) so the CSV output exercises all three empty-column cases in one
+    // run: a2-a4/a1-a4 are reachable-but-unlabeled (empty is_true), a1-a2 is a reachable
+    // true pair, and a1-a3/a2-a3 are unreachable true pairs (all three ids labeled "apex";
+    // a3 "APEX MINERALS" shares no blocking key with a1/a2/a4 "APEX ENERGY").
+    private static (string Csv, string Profile, string GroundTruth) WriteCsvFixture()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "linkuity-scoring-csv-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        var csv = Path.Combine(dir, "companies.csv");
+        File.WriteAllText(csv,
+            "\"id\",\"organization_name\"\n" +
+            "\"a1\",\"APEX ENERGY\"\n" +
+            "\"a2\",\"APEX ENERGY\"\n" +
+            "\"a3\",\"APEX MINERALS\"\n" +
+            "\"a4\",\"APEX ENERGY\"\n");
+
+        var profile = Path.Combine(dir, "org.profile.json");
+        File.WriteAllText(profile, """
+        {
+          "contentType": "organization",
+          "fields": [
+            { "name": "organization_name", "semanticType": "OrganizationName",
+              "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "jaccard", "weight": 4.0 },
+            { "name": "address_line", "semanticType": "AddressLine",
+              "roles": ["Searchable","Matchable"], "similarityEvaluator": "jaccard", "weight": 2.5 },
+            { "name": "postal_code", "semanticType": "PostalCode",
+              "roles": ["Matchable"], "similarityEvaluator": "exact", "weight": 0.5 }
+          ],
+          "normalizationStrategy": "identity",
+          "blockingStrategies": ["exact-value","token-name"],
+          "candidateRetrievalStrategy": "blocking-linear",
+          "similarityStrategy": "field-weighted",
+          "scoringStrategy": "identifier-weighted",
+          "decisionStrategy": "threshold",
+          "clusteringStrategy": "union-find",
+          "autoMatchThreshold": 0.41,
+          "reviewThreshold": 0.31
+        }
+        """);
+
+        var gt = Path.Combine(dir, "ground-truth.csv");
+        File.WriteAllText(gt,
+            "\"record_id\",\"canonical_key\"\n" +
+            "\"a1\",\"apex\"\n\"a2\",\"apex\"\n\"a3\",\"apex\"\n");
+
+        return (csv, profile, gt);
+    }
+
+    [Fact]
+    public async Task ScoringAudit_CsvFormat_PairIdentityOrdered()
+    {
+        var (csv, profile, gt) = WriteCsvFixture();
+
+        var (exit, output, _) = await RunAsync(
+        [
+            "match", "scoring", "audit",
+            "--input", csv, "--profile", profile, "--ground-truth", gt, "--format", "csv"
+        ]);
+
+        Assert.Equal(0, exit);
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.TrimEnd('\r')).ToList();
+
+        Assert.Equal(
+            "left_id,right_id,score,rank,engine_band,would_be_band,is_true,reachable,comparable," +
+            "sim_address_line,sim_organization_name,sim_postal_code",
+            lines[0]);
+
+        var dataRows = lines.Skip(1).Select(l => l.Split(',')).ToList();
+
+        // Candidate pairs (reachable): (a1,a2), (a1,a4), (a2,a4) via the shared exact-value/
+        // token-name blocking keys. Ground truth labels a1/a2/a3 all "apex", so (a1,a3) and
+        // (a2,a3) are additional true pairs that never shared a blocking key (unreachable).
+        // Pair-identity order over the union: (a1,a2) < (a1,a3) < (a1,a4) < (a2,a3) < (a2,a4).
+        var pairIds = dataRows.Select(r => (r[0], r[1])).ToList();
+        Assert.Equal(
+            new[] { ("a1", "a2"), ("a1", "a3"), ("a1", "a4"), ("a2", "a3"), ("a2", "a4") },
+            pairIds);
+
+        // a1-a3: unreachable true pair -> empty score, empty rank, reachable=false, would_be_band populated.
+        var unreachable = dataRows.Single(r => r[0] == "a1" && r[1] == "a3");
+        Assert.Equal("", unreachable[2]); // score
+        Assert.Equal("", unreachable[3]); // rank
+        Assert.Equal("unreachable", unreachable[4]); // engine_band
+        Assert.NotEqual("", unreachable[5]); // would_be_band
+        Assert.Equal("true", unreachable[6]); // is_true
+        Assert.Equal("false", unreachable[7]); // reachable
+
+        // a1-a4: reachable, but a4 is unlabeled -> empty is_true.
+        var unlabeled = dataRows.Single(r => r[0] == "a1" && r[1] == "a4");
+        Assert.Equal("true", unlabeled[7]); // reachable
+        Assert.Equal("", unlabeled[6]); // is_true
+        Assert.NotEqual("", unlabeled[2]); // score present
+    }
+
+    [Fact]
+    public async Task ScoringExplain_KnownPair_PrintsBreakdownAndKeys()
+    {
+        // a1/a2 are identical "APEX ENERGY" and share blocking keys -> a candidate pair.
+        var (csv, profile, _) = WriteFixture();
+
+        var (exit, output, _) = await RunAsync(
+        [
+            "match", "scoring", "explain",
+            "--input", csv, "--profile", profile, "--left", "a1", "--right", "a2"
+        ]);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("APEX ENERGY", output); // field values, side by side
+        Assert.Contains("jaccard", output); // evaluator name
+        Assert.Contains("sim ", output); // per-field sim line
+        Assert.Contains("score ", output); // final score line
+        Assert.Contains("shared keys:", output);
+    }
+
+    [Fact]
+    public async Task ScoringExplain_UnreachablePair_SaysNotReachable_StillScores()
+    {
+        // a1 "APEX ENERGY" vs a3 "APEX MINERALS" share no blocking key.
+        var (csv, profile, _) = WriteFixture();
+
+        var (exit, output, _) = await RunAsync(
+        [
+            "match", "scoring", "explain",
+            "--input", csv, "--profile", profile, "--left", "a1", "--right", "a3"
+        ]);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("not reachable", output);
+        Assert.Contains("score ", output); // offline score still printed
+    }
+
+    [Fact]
+    public async Task ScoringExplain_UnknownId_Exit2()
+    {
+        var (csv, profile, _) = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(
+        [
+            "match", "scoring", "explain",
+            "--input", csv, "--profile", profile, "--left", "nope", "--right", "a1"
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("nope", err);
+    }
 }

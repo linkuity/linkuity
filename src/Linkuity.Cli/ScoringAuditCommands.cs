@@ -154,12 +154,81 @@ public static class ScoringAuditCommands
         return map;
     }
 
-    // Explain lands in Task 4.
     private static int Explain(
         ScoringAuditService service, IReadOnlyList<Linkuity.Core.Models.EntityRecord> records,
         MatchingProfile profile, IReadOnlyDictionary<string, string> options)
     {
-        Console.Error.WriteLine("match scoring explain is implemented in Task 4.");
-        return 2;
+        if (!options.TryGetValue("left", out var left) || !options.TryGetValue("right", out var right))
+        {
+            Console.Error.WriteLine("Provide --left <id> --right <id>.");
+            return 2;
+        }
+        var byId = records.ToDictionary(r => r.SourceRecordId, StringComparer.Ordinal);
+        if (!byId.ContainsKey(left)) { Console.Error.WriteLine($"Unknown record: {left}"); return 2; }
+        if (!byId.ContainsKey(right)) { Console.Error.WriteLine($"Unknown record: {right}"); return 2; }
+
+        var (maxBlockSize, maxErr) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
+        if (maxErr is not null) { Console.Error.WriteLine(maxErr); return 2; }
+
+        var result = service.Audit(records, profile, groundTruth: null, maxBlockSize);
+        var (lo, hi) = ScoringAuditService.Canonical(left, right);
+        var pair = result.Pairs.FirstOrDefault(p =>
+            p.LeftSourceRecordId == lo && p.RightSourceRecordId == hi);
+
+        // Field values side by side.
+        foreach (var field in profile.Fields.Where(f => f.Roles.HasFlag(FieldRole.Matchable)))
+        {
+            byId[left].Fields.TryGetValue(field.Name, out var lv);
+            byId[right].Fields.TryGetValue(field.Name, out var rv);
+            Console.WriteLine($"{field.Name} ({field.SimilarityEvaluator ?? "exact"}, w {field.Weight}): " +
+                $"'{lv ?? ""}' vs '{rv ?? ""}'");
+        }
+
+        if (pair is null)
+        {
+            // Not a candidate: not reachable. Score it offline for the diagnosis.
+            var offline = service.Audit(records, profile,
+                groundTruth: new Dictionary<string, string>(StringComparer.Ordinal)
+                    { [left] = "x", [right] = "x" },
+                maxBlockSize)
+                .Pairs.First(p => p.LeftSourceRecordId == lo && p.RightSourceRecordId == hi);
+            Console.WriteLine("not reachable under this profile's blocking (no shared active key)");
+            PrintScore(offline.OfflineScore ?? offline.Score, offline.WouldBeBand ?? offline.EngineBand, offline);
+            return 0;
+        }
+
+        var sharedKeys = SharedActiveKeys(records, profile, left, right, maxBlockSize);
+        Console.WriteLine($"shared keys: {(sharedKeys.Count > 0 ? string.Join(", ", sharedKeys) : "(none)")}");
+        PrintScore(pair.Score, pair.EngineBand, pair);
+        return 0;
+
+        static void PrintScore(double? score, ScoreBand band, ScoredPair p)
+        {
+            foreach (var c in p.Breakdown)
+                Console.WriteLine(
+                    $"  {c.Signal}: sim {c.Value.ToString("F4", CultureInfo.InvariantCulture)} x " +
+                    $"w {c.Weight.ToString(CultureInfo.InvariantCulture)} -> " +
+                    $"{c.Contribution.ToString("F4", CultureInfo.InvariantCulture)}");
+            var weighted = p.Breakdown.Sum(c => c.Contribution);
+            if (score is { } s && s > weighted + 1e-9)
+                Console.WriteLine(s >= 0.98 ? "identifier floor (0.98) fired" : "review floor (0.80) fired");
+            Console.WriteLine(
+                $"score {(score is { } v ? v.ToString("F4", CultureInfo.InvariantCulture) : "n/a")} -> {band}");
+        }
+    }
+
+    private static IReadOnlyList<string> SharedActiveKeys(
+        IReadOnlyList<Linkuity.Core.Models.EntityRecord> records, MatchingProfile profile,
+        string left, string right, int? maxBlockSize)
+    {
+        var blocking = new BlockingAuditService(MatchingDefaults.CreateRegistry())
+            .Audit(records, profile, groundTruth: null, maxCandidates: null, maxBlockSize: null);
+        var byId = blocking.PerRecord.ToDictionary(r => r.SourceRecordId, StringComparer.Ordinal);
+        var blockSizes = blocking.Blocks.ToDictionary(b => b.Key, b => b.Size, StringComparer.OrdinalIgnoreCase);
+        return byId[left].AllKeys
+            .Intersect(byId[right].AllKeys, StringComparer.OrdinalIgnoreCase)
+            .Where(k => maxBlockSize is not { } max || blockSizes[k] - 1 <= max) // engine parity
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 }
