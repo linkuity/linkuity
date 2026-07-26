@@ -11,8 +11,9 @@ namespace Linkuity.Pipeline;
 /// distinct observed scores, miss decomposition, and per-field diagnostics. Pure and
 /// I/O-free; the CLI supplies records and ground truth. Fidelity scope is the batch
 /// path ONLY (BatchMatchingService force-rewrites retrieval to blocking-linear);
-/// durable/Lucene retrieval is not modeled. See
-/// docs/superpowers/specs/2026-07-26-scoring-audit-instrument-design.md.
+/// durable/Lucene retrieval is not modeled. Normalization is applied to both sides,
+/// matching the batch path only under identity normalization (a documented v1 caveat).
+/// See docs/superpowers/specs/2026-07-26-scoring-audit-instrument-design.md.
 /// </summary>
 public sealed class ScoringAuditService
 {
@@ -61,9 +62,11 @@ public sealed class ScoringAuditService
                 $"Thresholds must satisfy 0 <= review < auto <= 1 (auto={auto}, review={review}).");
         var overridden = autoThresholdOverride is not null || reviewThresholdOverride is not null;
 
-        // Normalize once for scoring. The batch path normalizes only the query side of
-        // each comparison; under the identity normalization every org profile uses the
-        // two are identical, and the parity test pins the batch equivalence.
+        // Normalize all records once for scoring. The batch path normalizes only the
+        // QUERY side of each comparison and leaves the corpus side raw; under the
+        // 'identity' normalization every org profile uses, the two behaviors are
+        // identical (pinned by the batch-parity test). Non-identity profiles would
+        // diverge here — a known, documented v1 caveat.
         var normalization = _registry.Normalization[profile.NormalizationStrategy];
         var bySource = records
             .Select(r => normalization.Normalize(r, profile))
@@ -181,11 +184,96 @@ public sealed class ScoringAuditService
         }
     }
 
-    // Task 2 fills this in. Until then: no ground truth -> everything null/empty.
     private (ScoringCoverage?, ScoringMetrics?, MissDecomposition?, IReadOnlyList<ThresholdSweepRow>,
         IReadOnlyList<ScoredPair>, IReadOnlyList<ScoredPair>, IReadOnlyList<ScoredPair>)
         AnalyzeGroundTruth(int recordCount, TruthContext truth, HashSet<(string, string)> candidateIds,
             List<ScoredPair> pairs, Func<string, string, bool, bool?, ScoredPair> score,
             double auto, double review)
-        => (null, null, null, [], [], [], []);
+    {
+        if (!truth.HasTruth)
+            return (null, null, null, [], [], [], []);
+
+        // 1. True pairs from labeled groups; offline-score the unreachable ones.
+        var truePairIds = new HashSet<(string, string)>();
+        foreach (var group in truth.Groups())
+            for (var i = 0; i < group.Count; i++)
+                for (var j = i + 1; j < group.Count; j++)
+                    truePairIds.Add(Canonical(group[i], group[j]));
+
+        var unreachableTrue = truePairIds
+            .Where(p => !candidateIds.Contains(p))
+            .OrderBy(p => p.Item1, StringComparer.Ordinal).ThenBy(p => p.Item2, StringComparer.Ordinal)
+            .Select(p => score(p.Item1, p.Item2, false, true))
+            .ToList();
+
+        // 2. Labeled candidate pairs drive metrics and the sweep.
+        var labeledCandidates = pairs.Where(p => p.IsTrue is not null).ToList();
+        var unlabeledEndpointPairs = pairs.Count - labeledCandidates.Count;
+        var coverage = new ScoringCoverage(
+            RecordCount: recordCount,
+            LabeledRecordCount: truth.LabeledRecordCount,
+            SkippedGroundTruthRows: truth.SkippedRows,
+            UnlabeledEndpointPairs: unlabeledEndpointPairs);
+
+        static double? Ratio(int num, int den) => den == 0 ? null : (double)num / den;
+
+        var predicted = labeledCandidates.Where(p => p.Comparable && p.EngineBand == ScoreBand.Auto).ToList();
+        var tp = predicted.Count(p => p.IsTrue == true);
+        var precision = Ratio(tp, predicted.Count);
+        var recall = Ratio(tp, truePairIds.Count);
+        double? f1 = precision is { } pr && recall is { } re && pr + re > 0
+            ? 2 * pr * re / (pr + re) : null;
+
+        var trueReachableNotAuto = labeledCandidates
+            .Where(p => p.IsTrue == true && p.EngineBand != ScoreBand.Auto).ToList();
+        var reviewCapture = Ratio(
+            trueReachableNotAuto.Count(p => p.EngineBand == ScoreBand.Review),
+            trueReachableNotAuto.Count);
+
+        var metrics = new ScoringMetrics(
+            labeledCandidates.Count, truePairIds.Count, predicted.Count, tp,
+            precision, recall, f1, reviewCapture);
+
+        // 3. Miss decomposition: every true pair exactly once.
+        var trueCandidates = labeledCandidates.Where(p => p.IsTrue == true).ToList();
+        var misses = new MissDecomposition(
+            TruePairs: truePairIds.Count,
+            AutoMatched: trueCandidates.Count(p => p.EngineBand == ScoreBand.Auto),
+            Unreachable: unreachableTrue.Count,
+            NonComparable: trueCandidates.Count(p => p.EngineBand == ScoreBand.NonComparable),
+            InReview: trueCandidates.Count(p => p.EngineBand == ScoreBand.Review),
+            BelowReview: trueCandidates.Count(p => p.EngineBand == ScoreBand.NoMatch));
+
+        // 4. Sweep: distinct observed scores of labeled comparable reachable pairs,
+        // plus the effective auto threshold. Offline scores never participate.
+        var sweepPop = labeledCandidates.Where(p => p.Comparable && p.Score is not null).ToList();
+        var cuts = sweepPop.Select(p => p.Score!.Value).Append(auto)
+            .Distinct().OrderBy(c => c).ToList();
+        var sweep = cuts.Select(cut =>
+        {
+            var pp = sweepPop.Where(p => p.Score!.Value >= cut).ToList();
+            var stp = pp.Count(p => p.IsTrue == true);
+            var sp = Ratio(stp, pp.Count);
+            var sr = Ratio(stp, truePairIds.Count);
+            double? sf = sp is { } a && sr is { } b && a + b > 0 ? 2 * a * b / (a + b) : null;
+            return new ThresholdSweepRow(cut, pp.Count, stp, sp, sr, sf, cut == auto);
+        }).ToList();
+
+        // 5. Diagnostics (full ordered lists; the CLI applies --top).
+        var trueBelowAuto = trueCandidates
+            .Where(p => p.EngineBand != ScoreBand.Auto)
+            .Concat(unreachableTrue)
+            .OrderByDescending(p => p.EffectiveScore ?? -1)
+            .ThenBy(p => p.LeftSourceRecordId, StringComparer.Ordinal)
+            .ThenBy(p => p.RightSourceRecordId, StringComparer.Ordinal)
+            .ToList();
+        var falseHazards = labeledCandidates
+            .Where(p => p.IsTrue == false && p.Comparable && p.Score >= review)
+            .OrderByDescending(p => p.Score)
+            .ThenBy(p => p.LeftSourceRecordId, StringComparer.Ordinal)
+            .ThenBy(p => p.RightSourceRecordId, StringComparer.Ordinal)
+            .ToList();
+
+        return (coverage, metrics, misses, sweep, trueBelowAuto, falseHazards, unreachableTrue);
+    }
 }
