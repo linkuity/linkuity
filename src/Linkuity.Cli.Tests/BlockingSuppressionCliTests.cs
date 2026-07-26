@@ -75,7 +75,7 @@ public class BlockingSuppressionCliTests
             "--ground-truth", gt, "--max-block-size", "4");
 
         Assert.Equal(0, exit);
-        Assert.Contains("Suppressed keys (block size > 4): 1", output);
+        Assert.Contains("Suppressed keys (corpus frequency > 4): 1", output);
         Assert.Contains("name:inc (size 6)", output);
         Assert.Contains("Effective recall ceiling: 50.0 % (1/2)", output);
         Assert.Contains("pairs lost to suppression: 1", output);
