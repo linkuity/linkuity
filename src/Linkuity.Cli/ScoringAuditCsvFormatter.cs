@@ -55,7 +55,7 @@ public static class ScoringAuditCsvFormatter
         return sb.ToString();
     }
 
-    private static string BandName(ScoreBand band) => band switch
+    internal static string BandName(ScoreBand band) => band switch
     {
         ScoreBand.Auto => "auto",
         ScoreBand.Review => "review",

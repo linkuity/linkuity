@@ -180,7 +180,7 @@ public static class ScoringAuditCommands
         {
             byId[left].Fields.TryGetValue(field.Name, out var lv);
             byId[right].Fields.TryGetValue(field.Name, out var rv);
-            Console.WriteLine($"{field.Name} ({field.SimilarityEvaluator ?? "exact"}, w {field.Weight}): " +
+            Console.WriteLine($"{field.Name} ({field.SimilarityEvaluator ?? "exact"}, w {field.Weight.ToString(CultureInfo.InvariantCulture)}): " +
                 $"'{lv ?? ""}' vs '{rv ?? ""}'");
         }
 
@@ -213,7 +213,7 @@ public static class ScoringAuditCommands
             if (score is { } s && s > weighted + 1e-9)
                 Console.WriteLine(s >= 0.98 ? "identifier floor (0.98) fired" : "review floor (0.80) fired");
             Console.WriteLine(
-                $"score {(score is { } v ? v.ToString("F4", CultureInfo.InvariantCulture) : "n/a")} -> {band}");
+                $"score {(score is { } v ? v.ToString("F4", CultureInfo.InvariantCulture) : "n/a")} -> {ScoringAuditCsvFormatter.BandName(band)}");
         }
     }
 
