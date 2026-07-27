@@ -92,11 +92,12 @@ public sealed class DefaultMatchingProfileProvider : IMatchingProfileProvider
 
     /// <summary>
     /// The default organization profile: a faithful C# rendering of the canonical
-    /// organization configuration. Mirrors the person durable strategy selections
-    /// (identity normalization, field-weighted similarity, identifier-weighted
-    /// scoring, exact-value, fingerprint, phonetic, token, acronym, and ngram blocking with maxBlockSize 50, 0.90/0.75 thresholds). Domain,
-    /// email, and phone are the strong identifiers; <c>source</c> is a non-matching
-    /// source identifier.
+    /// organization configuration. Shares the person profile's durable strategy
+    /// selections (identity normalization, field-weighted similarity,
+    /// identifier-weighted scoring, 0.90/0.75 thresholds) but blocks on exact-value,
+    /// fingerprint, phonetic, token, acronym, and ngram keys with maxBlockSize 50.
+    /// Domain, email, and phone are the strong identifiers; <c>source</c> is a
+    /// non-matching source identifier.
     /// </summary>
     public static MatchingProfile CreateOrganizationProfile() => new()
     {
