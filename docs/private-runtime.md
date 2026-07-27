@@ -85,7 +85,7 @@ Operational tuning knobs:
 - **`ingest-incremental --batch-size <n>`** — ingest a large CSV in `n`-record chunks. This bounds the working set of each `SaveIncrementalIngestAsync` call (candidate loads, resolution, mutations, DB round-trips) to `n` records; note the input CSV itself is currently read into memory up front, so it does not yet bound the raw-file read.
 - **`--ingest-parallelism <n>` (default = all cores; on)** — degree of parallelism for the per-record matching loop on the Postgres path. Concurrent Lucene retrieval uses per-thread committed readers and leaner candidate reconstruction (measured 3.33× vs sequential at 20 cores), so parallel edge production is on by default; set to 1 to force sequential. Outcome-neutral (conformance parity at DOP=8).
 
-For what these knobs *do* — the candidate limit's recall/work trade-off, hot blocking keys, and the two-levers point — see [`docs/how-matching-works.md`](how-matching-works.md) (Tuning and troubleshooting).
+For what these knobs *do* — the candidate limit's recall/work trade-off, hot blocking keys, and the levers for fixing a crowded candidate set (including the profile-level `maxBlockSize` cap) — see [`docs/how-matching-works.md`](how-matching-works.md) (Tuning and troubleshooting).
 
 To reproduce or extend the scale numbers, use the `Linkuity.Mdm.Benchmarks` harness (`generate` + `measure`). Note that absolute per-batch throughput measured on a Windows/Docker dev box is dominated by PostgreSQL checkpoint/fsync I/O variance; measure on a native Linux PostgreSQL for production-representative throughput. The *scaling shape* (flat per-batch time, bounded memory) is environment-independent and is the property to validate.
 
