@@ -359,6 +359,21 @@ public class LocalBatchRunnerScoringTests
     }
 
     [Fact]
+    public async Task ScoringExplain_SamePairTwice_Exit2()
+    {
+        var (csv, profile, _) = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(
+        [
+            "match", "scoring", "explain",
+            "--input", csv, "--profile", profile, "--left", "a1", "--right", "a1"
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("a1", err);
+    }
+
+    [Fact]
     public async Task ScoringExplain_UnknownId_Exit2()
     {
         var (csv, profile, _) = WriteFixture();

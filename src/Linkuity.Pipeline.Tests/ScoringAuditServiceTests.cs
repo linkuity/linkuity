@@ -198,6 +198,28 @@ public class ScoringAuditServiceTests
         Assert.Contains("field-weighted", ex.Message);
     }
 
+    [Fact]
+    public void NonIdentityNormalization_IsRejectedWithClearError()
+    {
+        var profile = new MatchingProfile
+        {
+            ContentType = "organization",
+            Fields = OrgProfile().Fields,
+            NormalizationStrategy = "semantic-field",
+            BlockingStrategies = ["exact-value", "token"],
+            CandidateRetrievalStrategy = "blocking-linear",
+            SimilarityStrategy = "field-weighted",
+            ScoringStrategy = "identifier-weighted",
+            DecisionStrategy = "threshold",
+            ClusteringStrategy = "union-find",
+            AutoMatchThreshold = 0.41,
+            ReviewThreshold = 0.31
+        };
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NewService().Audit([Rec("x", "ACME")], profile));
+        Assert.Contains("identity", ex.Message);
+    }
+
     [Theory]
     [InlineData(0.41, 0.41)]  // review == auto -> invalid (loader requires strict)
     [InlineData(0.3, 0.5)]    // review > auto after override

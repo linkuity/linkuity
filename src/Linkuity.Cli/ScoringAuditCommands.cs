@@ -166,6 +166,12 @@ public static class ScoringAuditCommands
         var byId = records.ToDictionary(r => r.SourceRecordId, StringComparer.Ordinal);
         if (!byId.ContainsKey(left)) { Console.Error.WriteLine($"Unknown record: {left}"); return 2; }
         if (!byId.ContainsKey(right)) { Console.Error.WriteLine($"Unknown record: {right}"); return 2; }
+        if (string.Equals(left, right, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                $"--left and --right must name two different records (got '{left}' twice).");
+            return 2;
+        }
 
         var (maxBlockSize, maxErr) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
         if (maxErr is not null) { Console.Error.WriteLine(maxErr); return 2; }
@@ -191,7 +197,13 @@ public static class ScoringAuditCommands
                 groundTruth: new Dictionary<string, string>(StringComparer.Ordinal)
                     { [left] = "x", [right] = "x" },
                 maxBlockSize)
-                .Pairs.First(p => p.LeftSourceRecordId == lo && p.RightSourceRecordId == hi);
+                .Pairs.FirstOrDefault(p => p.LeftSourceRecordId == lo && p.RightSourceRecordId == hi);
+            if (offline is null)
+            {
+                // Defensive: should be unreachable after the left == right guard above.
+                Console.Error.WriteLine($"Unable to score pair '{left}' vs '{right}'.");
+                return 2;
+            }
             Console.WriteLine("not reachable under this profile's blocking (no shared active key)");
             PrintScore(offline.OfflineScore ?? offline.Score, offline.WouldBeBand ?? offline.EngineBand, offline);
             return 0;

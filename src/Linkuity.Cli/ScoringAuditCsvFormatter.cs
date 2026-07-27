@@ -24,7 +24,7 @@ public static class ScoringAuditCsvFormatter
         var ranks = new Dictionary<(string, string), int>();
         var rank = 0;
         foreach (var p in result.Pairs
-            .Where(p => p.Score is not null)
+            .Where(p => p.Score is not null && p.Comparable)
             .OrderByDescending(p => p.Score)
             .ThenBy(p => p.LeftSourceRecordId, StringComparer.Ordinal)
             .ThenBy(p => p.RightSourceRecordId, StringComparer.Ordinal))
@@ -40,7 +40,7 @@ public static class ScoringAuditCsvFormatter
             var sims = p.Breakdown.ToDictionary(c => c.Signal, c => c.Value, StringComparer.Ordinal);
             sb.Append(CultureInfo.InvariantCulture,
                 $"{p.LeftSourceRecordId},{p.RightSourceRecordId}," +
-                $"{(p.Score is { } s ? s.ToString("F6", CultureInfo.InvariantCulture) : "")}," +
+                $"{(p.Score is { } s && p.Comparable ? s.ToString("F6", CultureInfo.InvariantCulture) : "")}," +
                 $"{(ranks.TryGetValue((p.LeftSourceRecordId, p.RightSourceRecordId), out var r) ? r : "")}," +
                 $"{BandName(p.EngineBand)}," +
                 $"{(p.WouldBeBand is { } w ? BandName(w) : "")}," +

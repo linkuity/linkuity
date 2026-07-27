@@ -40,7 +40,7 @@ public static class ScoringAuditTextFormatter
         }
 
         // 3. Score distribution (0.05 display buckets over candidate pairs)
-        var scored = result.Pairs.Where(p => p.Score is not null).ToList();
+        var scored = result.Pairs.Where(p => p.Score is not null && p.Comparable).ToList();
         if (scored.Count > 0)
         {
             sb.AppendLine("Score distribution (candidate pairs; true/false/unlabeled per bucket):");
@@ -90,8 +90,8 @@ public static class ScoringAuditTextFormatter
                 ? p.Score!.Value.ToString("F4", CultureInfo.InvariantCulture)
                 : $"offline {p.OfflineScore!.Value.ToString("F4", CultureInfo.InvariantCulture)}";
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"  {p.LeftSourceRecordId} vs {p.RightSourceRecordId}: {scoreText} [{p.EngineBand}" +
-                $"{(p.WouldBeBand is { } w ? $" -> would be {w}" : "")}]");
+                $"  {p.LeftSourceRecordId} vs {p.RightSourceRecordId}: {scoreText} [{ScoringAuditCsvFormatter.BandName(p.EngineBand)}" +
+                $"{(p.WouldBeBand is { } w ? $" -> would be {ScoringAuditCsvFormatter.BandName(w)}" : "")}]");
             foreach (var c in p.Breakdown)
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"    {c.Signal}: sim {c.Value:F4} x w {c.Weight} -> {c.Contribution:F4}");

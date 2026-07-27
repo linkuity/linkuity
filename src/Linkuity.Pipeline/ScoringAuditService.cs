@@ -11,8 +11,9 @@ namespace Linkuity.Pipeline;
 /// distinct observed scores, miss decomposition, and per-field diagnostics. Pure and
 /// I/O-free; the CLI supplies records and ground truth. Fidelity scope is the batch
 /// path ONLY (BatchMatchingService force-rewrites retrieval to blocking-linear);
-/// durable/Lucene retrieval is not modeled. Normalization is applied to both sides,
-/// matching the batch path only under identity normalization (a documented v1 caveat).
+/// durable/Lucene retrieval is not modeled. Normalization is applied to both sides and
+/// blocking keys are generated from normalized records, matching the batch path only
+/// under identity normalization; non-identity profiles are rejected (enforced v1 guard).
 /// See docs/superpowers/specs/2026-07-26-scoring-audit-instrument-design.md.
 /// </summary>
 public sealed class ScoringAuditService
@@ -48,6 +49,12 @@ public sealed class ScoringAuditService
             throw new ArgumentException(
                 "Scoring audit v1 requires scoringStrategy 'weighted' or 'identifier-weighted' " +
                 $"(profile has '{profile.ScoringStrategy}').");
+        if (!string.Equals(profile.NormalizationStrategy, "identity", StringComparison.Ordinal))
+            throw new ArgumentException(
+                "Scoring audit v1 requires normalizationStrategy 'identity' (profile has " +
+                $"'{profile.NormalizationStrategy}'): the audit normalizes both sides and keys, " +
+                "while the batch path normalizes only the query side — non-identity profiles " +
+                "would silently diverge from the batch-fidelity claim.");
 
         var duplicate = records
             .GroupBy(r => r.SourceRecordId, StringComparer.Ordinal)
@@ -64,9 +71,9 @@ public sealed class ScoringAuditService
 
         // Normalize all records once for scoring. The batch path normalizes only the
         // QUERY side of each comparison and leaves the corpus side raw; under the
-        // 'identity' normalization every org profile uses, the two behaviors are
-        // identical (pinned by the batch-parity test). Non-identity profiles would
-        // diverge here — a known, documented v1 caveat.
+        // 'identity' normalization enforced above, the two behaviors are identical
+        // (pinned by the batch-parity test). Non-identity profiles are rejected by
+        // the guard above rather than silently diverging here.
         var normalization = _registry.Normalization[profile.NormalizationStrategy];
         var bySource = records
             .Select(r => normalization.Normalize(r, profile))
