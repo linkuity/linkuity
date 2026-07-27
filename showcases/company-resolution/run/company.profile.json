@@ -2,7 +2,7 @@
   "contentType": "organization",
   "fields": [
     { "name": "source",            "semanticType": "SourceIdentifier", "roles": [] },
-    { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "jaccard", "weight": 4.0 },
+    { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Searchable","Matchable","Blocking"], "similarityEvaluator": "canonical-jaccard", "weight": 4.0 },
     { "name": "address_line",      "semanticType": "AddressLine",      "roles": ["Searchable","Matchable"],            "similarityEvaluator": "jaccard", "weight": 2.5 },
     { "name": "postal_code",       "semanticType": "PostalCode",       "roles": ["Matchable"],                          "similarityEvaluator": "exact",   "weight": 0.5 }
   ],
