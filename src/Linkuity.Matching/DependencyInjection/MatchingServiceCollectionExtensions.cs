@@ -43,6 +43,7 @@ public static class MatchingServiceCollectionExtensions
         services.AddSingleton<ISimilarityEvaluator, ExactSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, FuzzyTextSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, JaccardSimilarityEvaluator>();
+        services.AddSingleton<ISimilarityEvaluator, CanonicalJaccardSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, NGramSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, NumericSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, DateSimilarityEvaluator>();
