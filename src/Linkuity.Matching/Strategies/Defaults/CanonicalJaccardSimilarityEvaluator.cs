@@ -11,7 +11,9 @@ namespace Linkuity.Matching.Strategies.Defaults;
 /// "THE BOEING COMPANY" and "BOEING CO" score 1.0 while "THE WALT DISNEY COMPANY"
 /// vs "THE BOEING COMPANY" scores 0.0 (shared THE/COMPANY no longer count). Fields
 /// without a registered canonicalizer get the raw-token semantics of
-/// <see cref="JaccardSimilarityEvaluator"/>. Returns null when either side yields
+/// <see cref="JaccardSimilarityEvaluator"/>. Canonically identical names that differ
+/// only in token boundaries (AMAZON.COM vs AMAZON COM) score 1.0 via a compressed-form
+/// equality check before the Jaccard comparison. Returns null when either side yields
 /// no tokens (non-comparable).
 /// </summary>
 public sealed class CanonicalJaccardSimilarityEvaluator : ISimilarityEvaluator
@@ -25,13 +27,22 @@ public sealed class CanonicalJaccardSimilarityEvaluator : ISimilarityEvaluator
         if (!TokenCanonicalizers.Default.TryGetValue(field.SemanticType, out var canonicalizer))
             return RawFallback.Evaluate(left, right, field);
 
-        var leftTokens = canonicalizer.Canonicalize(left).ToHashSet(StringComparer.Ordinal);
-        var rightTokens = canonicalizer.Canonicalize(right).ToHashSet(StringComparer.Ordinal);
+        var leftTokens = canonicalizer.Canonicalize(left);
+        var rightTokens = canonicalizer.Canonicalize(right);
         if (leftTokens.Count == 0 || rightTokens.Count == 0)
             return null;
 
-        var intersection = leftTokens.Intersect(rightTokens, StringComparer.Ordinal).Count();
-        var union = leftTokens.Union(rightTokens, StringComparer.Ordinal).Count();
+        // Second representation (a compressed-name check, as entity-resolution
+        // engines like Senzing use): identical canonical characters once token
+        // boundaries are gone means the same name tokenized differently
+        // (AMAZON.COM -> AMAZONCOM vs AMAZON COM), invisible to set Jaccard.
+        if (string.Concat(leftTokens) == string.Concat(rightTokens))
+            return 1.0;
+
+        var leftSet = leftTokens.ToHashSet(StringComparer.Ordinal);
+        var rightSet = rightTokens.ToHashSet(StringComparer.Ordinal);
+        var intersection = leftSet.Intersect(rightSet, StringComparer.Ordinal).Count();
+        var union = leftSet.Union(rightSet, StringComparer.Ordinal).Count();
         return (double)intersection / union;
     }
 }

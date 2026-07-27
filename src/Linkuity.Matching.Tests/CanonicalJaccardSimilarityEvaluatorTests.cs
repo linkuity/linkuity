@@ -108,6 +108,26 @@ public class CanonicalJaccardSimilarityEvaluatorTests
     }
 
     [Fact]
+    public void PeriodFusedNames_ScoreOneViaSquashEquality()
+    {
+        // The canonicalizer deletes periods, fusing AMAZON.COM into one token
+        // AMAZONCOM; token-set Jaccard alone would score 0.0 against {AMAZON, COM}.
+        // The squashed (concatenated) canonical forms are identical, so this is
+        // the same name tokenized differently -> 1.0.
+        var evaluator = new CanonicalJaccardSimilarityEvaluator();
+        Assert.Equal(1.0, evaluator.Evaluate("AMAZON.COM, INC.", "AMAZON COM INC", OrgField())!.Value, 10);
+    }
+
+    [Fact]
+    public void SquashEquality_IsOrderSensitive()
+    {
+        // {WALMART} vs {MART, WAL}: concatenations WALMART vs MARTWAL differ, so
+        // the squash rule does not fire and Jaccard scores 0.
+        var evaluator = new CanonicalJaccardSimilarityEvaluator();
+        Assert.Equal(0.0, evaluator.Evaluate("WALMART", "MART WAL", OrgField())!.Value, 10);
+    }
+
+    [Fact]
     public void Name_IsCanonicalJaccard()
     {
         Assert.Equal("canonical-jaccard", new CanonicalJaccardSimilarityEvaluator().Name);
