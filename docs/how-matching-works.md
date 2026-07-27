@@ -170,10 +170,14 @@ all-to-all. Most tuning problems trace back to this balance (see
 **How a record's keys are produced.** Key creation is entirely **profile-driven** —
 there are no hardcoded field names in the engine. The engine loops over the strategy
 names the profile lists in `blockingStrategies`, runs each one, and takes the
-**union** of the keys they produce (duplicates removed). The built-in `person` and
-`organization` profiles both use `["exact-value", "token-name"]`. Four more
-strategies — `prefix`, `ngram`, `phonetic`, and `dob-lastname-phonetic` — ship
-registered but **off by default**; a profile opts into one by naming it.
+**union** of the keys they produce (duplicates removed). The built-in `person`
+profile uses `["exact-value", "token-name"]`. The built-in `organization` profile
+uses a wider set — `["exact-value", "fingerprint", "phonetic", "token", "acronym",
+"ngram"]` plus `maxBlockSize: 50` — because organization names carry more variation
+(legal suffixes, abbreviations, acronyms, rebrand history) than person names do; see
+below. A few more strategies — `prefix` and `dob-lastname-phonetic` — ship
+registered but **off by default** for both built-ins; any profile opts into one by
+naming it.
 
 Every strategy chooses which fields it operates on through a three-part test. A
 field participates only when **all three** hold:
@@ -183,7 +187,7 @@ field participates only when **all three** hold:
 3. the record has a **non-empty value** for it.
 
 So as the profile author you control, per field, *whether* it blocks (the role) and
-*what kind* of value it is (the semantic type). The two built-in strategies:
+*what kind* of value it is (the semantic type). The built-in strategies:
 
 - **`exact-value`** keys off fields that are an exact-identifier semantic type
   (`Email`, `Phone`, `DomainName`, `DateOfBirth`) **or** carry the `Identifier`
@@ -192,11 +196,51 @@ So as the profile author you control, per field, *whether* it blocks (the role) 
 - **`token-name`** keys off name-ish types (`LastName`, `FullName`,
   `OrganizationName`, `ProductName`), takes the **last token** of the value, and
   emits `"name:{lastToken}"`.
+- **`fingerprint`**, **`token`**, and **`acronym`** key off `OrganizationName`
+  specifically, and share an **organization-name canonicalizer**: uppercase, drop a
+  leading article (`THE`/`A`/`AN`), and strip a curated list of trailing
+  legal-entity suffixes (`INC`, `CORP`, `CORPORATION`, `CO`, `COMPANY`, `LLC`, and
+  ~40 more — deliberately excluding `GROUP`/`GRUPO`/`INTERNATIONAL`/`GLOBAL`, which
+  carry real meaning). This is what lets `THE BOEING COMPANY` and `BOEING CO` — an
+  article plus two different suffix spellings — resolve to the same canonical form,
+  `BOEING`:
+  - **`fingerprint`** emits one key per sorted, deduped set of canonical tokens
+    (`fp:{tokens}`), plus a hyphen-collapsed variant (so `WAL-MART` and `WALMART`
+    key alike).
+  - **`token`** emits one key **per canonical token** (`token:{t}`, minimum length
+    2) — deliberately loose (the "many strict keys" model), safe only because
+    `maxBlockSize` (below) caps how large any single token's block can grow.
+  - **`acronym`** emits initials-based keys (`acr:{initials}`) in both directions —
+    generating initials from the name (`SOUTHWESTERN BELL CORP` → `sbc`) and
+    recognizing short all-alphabetic tokens as potential acronyms already present
+    (`SBC` → `sbc`) — so a company and its own acronym co-block.
+- **`ngram`** emits trigrams **per token** (never spanning a word boundary — a gram
+  that straddles two words, like the `ein` at the end of `SERVICE` and the start of
+  `INC`, is meaningless and only manufactures false candidates), tolerant of typos
+  and minor misspellings.
+- **`phonetic`** groups names that sound alike regardless of spelling.
 
 Values are run through the match-key normalizer (lowercase, keep only letters and
 digits) before becoming keys, which is why `Jane@Acme.com` and `jane@acme.com`
 land on the same block, and a value that is empty after normalization produces no
 key.
+
+**Blocking-key suppression (`maxBlockSize`).** Looser strategies like `token` and
+`ngram` buy recall at a cost: a common token (`ngram:inc`, shared by every `Inc`/
+`Incorporated` record) can generate an enormous block, which is expensive to score
+and rarely useful (a block that big is not selective evidence of anything). A
+profile can set `maxBlockSize` to an absolute cap: any blocking key shared by more
+than that many records is **suppressed entirely** — it contributes zero candidates,
+rather than being ranked and truncated like `MaxCandidates` does. This is a
+different lever from the candidate cap (see [Candidate retrieval and the candidate
+limit](#candidate-retrieval-and-the-candidate-limit)): `MaxCandidates` bounds *how
+many* candidates a query returns, ranked best-first; `maxBlockSize` decides whether
+a *specific key* is trustworthy enough to contribute at all. A record usually
+produces several keys, so losing one suppressed key rarely means losing all its
+candidates — it means falling back on its other keys. `match blocking audit`
+reports both the raw ceiling (ignoring suppression) and the **effective** ceiling
+(what's actually reachable after it), plus which keys got suppressed and the pairs
+that suppression alone put out of reach, so you can see exactly what the cap cost.
 
 **Worked-example step.** With the `person` profile, `email`, `phone`, and
 `date_of_birth` are exact-identifier fields with the `Blocking` role, and
@@ -230,12 +274,14 @@ shares no email or phone key with them — that is exactly why, later, it will b
 review-floor gate on its own.
 
 **Where it's configured.** Per field: the `Blocking` role and the `semanticType`.
-Per profile: the `blockingStrategies` list. See [The profile model](#the-profile-model).
+Per profile: the `blockingStrategies` list and, optionally, `maxBlockSize`. See
+[The profile model](#the-profile-model).
 
 **Tuning note.** A key shared by a large crowd (a "hot" or coarse key like a common
 surname) is the usual root cause of both wasted work and missed or noisy matches;
-the fix is usually a more selective blocking strategy, not a bigger candidate cap.
-This is developed in [Tuning and troubleshooting](#tuning-and-troubleshooting).
+the fix is usually a more selective blocking strategy or a `maxBlockSize` cap, not
+a bigger candidate cap. This is developed in [Tuning and
+troubleshooting](#tuning-and-troubleshooting).
 
 ## Candidate retrieval and the candidate limit
 
@@ -294,10 +340,13 @@ Smiths that share only `name:smith`, and would still be scored.
 **Where it's configured / tuning note.** `--max-candidates` on the CLI, or
 `Linkuity:Postgres:MaxCandidates` in configuration (default 50). Raise it for
 legitimately high-multiplicity entities or very common blocking values; lower it
-only to bound a blocking key you've *proven* is hot. Crucially, a crowded candidate
-set has **two** possible fixes — raise the cap **or** make the blocking keys more
-selective — and the blocking-key design is often the better one. That "two levers"
-point is developed in [Tuning and troubleshooting](#tuning-and-troubleshooting).
+only to bound a blocking key you've *proven* is hot — or, for a single known-hot
+key, reach for `maxBlockSize` instead (it suppresses that key specifically rather
+than lowering the cap for every query; see [Blocking](#blocking)). Crucially, a
+crowded candidate set has more than one possible fix — raise the cap, make the
+blocking keys more selective, or suppress the one offending key — and the
+blocking-key design is often the better one. This point is developed in [Tuning and
+troubleshooting](#tuning-and-troubleshooting).
 
 ## Similarity and weighted scoring
 
@@ -623,8 +672,12 @@ profile.
     and how a `Sku`/`Gtin` does the same in other domains **with no engine change**.
   - **`similarityEvaluator`** and **`weight`** — how the field is compared and how
     much it counts (see [Similarity and weighted scoring](#similarity-and-weighted-scoring)).
-- **`blockingStrategies`** — which blocking strategies run (built-ins:
-  `exact-value`, `token-name`).
+- **`blockingStrategies`** — which blocking strategies run. Built-ins include
+  `exact-value`, `token-name`, `fingerprint`, `token`, `acronym`, `ngram`,
+  `phonetic`, `prefix`, and `dob-lastname-phonetic` — see [Blocking](#blocking)
+  for what each does and which the built-in profiles use.
+- **`maxBlockSize`** (optional) — caps how many records a single blocking key may
+  match before it's suppressed entirely; see [Blocking](#blocking).
 - **Strategy selections** — `normalizationStrategy`, `candidateRetrievalStrategy`,
   `similarityStrategy`, `scoringStrategy`, `decisionStrategy`, `clusteringStrategy`.
 - **`autoMatchThreshold`** and **`reviewThreshold`** — the decision bands.
@@ -701,7 +754,9 @@ will save them. Common causes and fixes:
 - **A hot key is cutting real duplicates before scoring** — only relevant when a
   single key is shared by more than `MaxCandidates` records. Fix by raising
   `--max-candidates`, *or* by making blocking more selective so the crowd shrinks
-  (see two levers below).
+  (see [The levers](#the-levers) below). If the same key is *also* past
+  `maxBlockSize`, it's suppressed rather than truncated — check `match blocking
+  audit` before assuming a raised cap will help.
 - **Thresholds too high.** Lower `autoMatchThreshold` cautiously — but prefer adding
   a reliable `Identifier` field, which auto-matches via the 0.98 floor without
   loosening everything.
@@ -736,32 +791,43 @@ it is exactly why John Smith (r4) produced *no* review tasks in our example: sha
 the gate, so he was a clean no-match rather than three review chores.
 
 For the pairs that *do* clear the gate on a coarse key, the cure is rarely a
-threshold change; it is **more selective blocking**. Split the crowd with:
+threshold change; it is **more selective blocking, or capping the key**. Options:
 
 - an **`Identifier`** field (email, phone, a code) so real duplicates share a
   precise key instead of only the surname, or
 - the composite **`dob-lastname-phonetic`** strategy, which keys on date-of-birth
   *and* a phonetic surname together — two attributes must align, so the block is far
-  smaller than surname alone.
+  smaller than surname alone, or
+- **`maxBlockSize`**, which suppresses one specific key past a frequency threshold
+  instead of redesigning blocking around it — the right tool when you've found one
+  known-hot key (a common surname, a legal-suffix ngram) rather than a systemic
+  coarseness problem. Use `match blocking audit` to find which keys are the biggest
+  blocks before reaching for either fix.
 
 Raising the gate itself (toward `reviewThreshold`) tightens review precision further,
 at the cost of dropping weakly-evidenced true matches out of review; see the
 `reviewFloorGate` note under [The profile model](#the-profile-model).
 
-### The two levers
+### The levers
 
-When a candidate set is crowded, remember there are **two** ways to fix it, not one:
+When a candidate set is crowded, there are **three** ways to fix it, not one:
 
 1. **Raise `MaxCandidates`** — consider more of the crowd (more recall, more work).
 2. **Make the blocking keys more selective** — shrink the crowd itself (add an
    identifier, a composite strategy like `dob-lastname-phonetic`, or a `prefix`/
    `ngram` strategy so a big block splits into several small ones).
+3. **Set `maxBlockSize`** — suppress one specific oversized key rather than redesign
+   around it; the record falls back on its other keys instead of contributing this
+   one to any candidate set. Cheaper than (2) when the problem is one hot key, not a
+   systemically coarse strategy; unlike (2), it can *cost* recall on the pairs whose
+   only shared key was the suppressed one — `match blocking audit`'s effective-vs-raw
+   ceiling reports exactly that cost.
 
 The candidate cap is the lever people reach for first, but the **blocking-key design
 is usually the better fix**: a smaller, more precise block improves both recall
 *and* cost, while raising the cap only trades cost for recall. Reach for the cap when
-an entity legitimately has high multiplicity; reach for blocking when a key is merely
-coarse.
+an entity legitimately has high multiplicity; reach for blocking (or a
+`maxBlockSize` cap on the one offending key) when a key is merely coarse.
 
 ### Throughput and memory (`--batch-size`)
 

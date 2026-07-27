@@ -252,7 +252,8 @@ built-ins, override semantics) applies identically to both paths; see
 | `fields[].weight` | Relative weight in weighted scoring (default 1.0). |
 | `fields[].evaluatorOptions` | Optional per-evaluator settings, e.g. `{ "ngram.size": "3" }`. |
 | `normalizationStrategy` | e.g. `identity`, `semantic-field`. |
-| `blockingStrategies[]` | e.g. `exact-value`, `token-name`, `prefix`, `ngram`, `phonetic`. |
+| `blockingStrategies[]` | e.g. `exact-value`, `token-name`, `prefix`, `ngram`, `phonetic`, `fingerprint`, `token`, `acronym`. |
+| `maxBlockSize` | Optional cap: a blocking key shared by more than this many records is suppressed (contributes no candidates). Distinct from the retrieval-time `MaxCandidates` cap. |
 | `candidateRetrievalStrategy` | e.g. `linear` (the durable store overrides this with its index-backed retrieval per ingest). |
 | `similarityStrategy` / `scoringStrategy` / `decisionStrategy` / `clusteringStrategy` | e.g. `field-weighted` / `identifier-weighted` / `threshold` / `union-find`. |
 | `autoMatchThreshold` / `reviewThreshold` | Decision bands in `[0,1]`, with auto ≥ review. |

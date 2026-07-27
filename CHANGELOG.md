@@ -8,7 +8,40 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- `match scoring audit` and `match scoring explain` CLI commands: score every
+  blocked candidate pair under a profile (batch blocking-linear fidelity) and
+  report band outcomes, direct-edge precision/recall/F1 against a held-out
+  ground truth, a threshold sweep over distinct observed scores, a
+  blocking-miss vs scoring-miss decomposition, and per-field diagnostics for
+  under-scored true pairs and near-threshold false pairs. `--format csv` emits
+  a pair-identity-sorted table built for diffing runs across a config change.
+- `match blocking audit` and `match blocking explain` CLI commands: measure the
+  blocking-recall ceiling against a held-out ground truth (raw and, when
+  `maxBlockSize` is set, suppression-adjusted "effective" ceiling), with
+  per-strategy attribution, missed-pair listing, and a `--min-recall` CI gate.
+- Three new organization blocking strategies — `fingerprint` (canonicalized,
+  sorted token-set key), `token` (per-token rare-key blocking), and `acronym`
+  (initials-based key, e.g. `SOUTHWESTERN BELL CORP` ↔ `SBC`) — plus an
+  organization-name canonicalizer (drops leading articles, strips a curated
+  list of trailing legal-entity suffixes) feeding `fingerprint` and `token`.
+- `maxBlockSize` profile field: an absolute cap on how many records a single
+  blocking key may match before it's suppressed entirely (distinct from
+  `MaxCandidates`, which caps ranked retrieval per query, not key frequency).
+  Off by default; the built-in `organization` profile and the
+  company-resolution showcase are the first consumers (`50`).
+
 ### Changed
+- The built-in `organization` matching profile now blocks on
+  `["exact-value", "fingerprint", "phonetic", "token", "acronym", "ngram"]`
+  with `maxBlockSize: 50`, replacing the previous
+  `["exact-value", "token-name"]`. This is a **behavior change** for anyone
+  relying on the built-in organization profile's default blocking (custom
+  `*.profile.json` files are unaffected). The built-in `person` profile is
+  unchanged. See `docs/how-matching-works.md` and
+  `showcases/company-resolution/README.md` for the measured effect (recall
+  ceiling 87.5% → 88.9% effective / 94.4% raw on the company-resolution
+  benchmark).
 - **Breaking:** `match-config.json` is retired. Batch `linkuity run` and
   `POST /run` now take a **matching profile** (`--profile` / `profile` — a
   built-in name like `person`/`organization`, or a `*.profile.json` file) and an
@@ -30,6 +63,14 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 - HTTP API now completes batch matches end-to-end via synchronous `POST /run`
   (multipart `profile` + optional `merge-policy` + `file` → golden records CSV),
   sharing the CLI's batch engine.
+
+### Fixed
+- Blocking-audit suppression boundary aligned with the engine's corpus-frequency
+  count: the engine (`blocking-linear`) counts a key's frequency over a corpus
+  that excludes the query record, so a full block of exactly `maxBlockSize + 1`
+  records stays active. The audit previously suppressed on whole-block size and
+  wrongly reported such blocks as suppressed. Report wording now states the
+  corpus-frequency criterion. (Showcase effective ceiling unchanged at 88.9%.)
 
 ### Removed
 - The multi-step job API (`/jobs/*`), the in-process/Azure Service Bus dispatch

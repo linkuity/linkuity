@@ -2,7 +2,15 @@
 
 *What it takes to link two authoritative company registries that were never designed to be joined — and how to prove you got it right, on real public data, with zero false merges on this held-out 49-company benchmark.*
 
-![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 60 golden organizations, then scoring 100% precision / 80.6% recall / F1 89.2% with zero incorrect merges against a held-out CIK/LEI crosswalk](demo.gif)
+> **Updated 2026-07-25.** Since this was first published, Linkuity's blocking layer
+> went through three follow-on rounds (an organization-name canonicalizer, frequency-aware
+> key suppression, and looser rare-token/acronym/n-gram keys). The numbers, the blocking
+> walkthrough, and the screen recording and Neo4j graphs below have all been re-captured
+> against that current state — including a corrected Boeing story: it's no longer a pure
+> blocking miss, it's a pair that blocking now *reaches* but scoring still correctly holds
+> apart (see "What a left-separate case looks like in the graph" below).
+
+![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 59 golden organizations, then scoring 100% precision / 79.2% recall / F1 88.4% with zero incorrect merges against a held-out CIK/LEI crosswalk](demo.gif)
 
 ## The JOIN you can't write
 
@@ -44,7 +52,8 @@ Entity resolution is not one algorithm; it's a pipeline of them. Linkuity's stag
     { "name": "postal_code", "semanticType": "PostalCode",
       "roles": ["Matchable"], "similarityEvaluator": "exact", "weight": 0.5 }
   ],
-  "blockingStrategies": ["exact-value", "token-name", "prefix"],
+  "blockingStrategies": ["exact-value", "fingerprint", "phonetic", "token", "acronym", "ngram"],
+  "maxBlockSize": 50,
   "similarityStrategy": "field-weighted",
   "scoringStrategy": "identifier-weighted",
   "clusteringStrategy": "union-find",
@@ -59,19 +68,20 @@ Read top to bottom, that says: match organizations on name (heavily), address (m
 
 You cannot compare all 107 records to each other and call it a day at this scale — but at real scale (millions of records) the O(n²) comparison is fatal, so every entity-resolution system starts with **blocking**: cheaply bucketing records by a key, and only comparing records that share a bucket. Linkuity's batch path always runs blocking-gated retrieval — a pair that shares no blocking key is **never scored, never even considered.**
 
-That single sentence is the most important thing to understand about entity resolution, so let's make it concrete. This profile uses two name-based blocking strategies:
+That single sentence is the most important thing to understand about entity resolution, so let's make it concrete. This profile runs six blocking strategies over the organization name, most of them keying off a shared **canonicalizer**: uppercase, drop leading articles (`THE`), and strip a curated list of trailing legal-entity suffixes (`CO`, `COMPANY`, `INC`, `CORP`, `CORPORATION`, and ~40 more) before generating keys. The headline strategies:
 
-- **`prefix`** — the first 4 characters of the normalized name. `MICROSOFT CORP` normalizes to `microsoftcorp` → `micr`; `MICROSOFT CORPORATION` → `microsoftcorporation` → `micr`. Same bucket. The abbreviation difference that would defeat an exact join is invisible to a 4-character prefix.
-- **`token-name`** — the last token of the name. `APPLE INC` → `inc`; `APPLE COMPUTER INC` → `inc`. Same bucket.
+- **`fingerprint`** — the sorted, deduped set of canonical tokens. `MICROSOFT CORP` and `MICROSOFT CORPORATION` both canonicalize to `MICROSOFT` (the suffix strips off), so they land on the identical key. `THE BOEING COMPANY` and `BOEING CO` both canonicalize to `BOEING` — the leading article and the trailing suffix are exactly what this strategy is built to see through.
+- **`token`** — one key per canonical token (minimum length 2), deliberately loose — a Splink-style "many strict keys" model that's safe because a frequency cap (below) keeps any one token-key from exploding.
+- **`acronym`** — generates and recognizes initials, so `SOUTHWESTERN BELL CORP` and `SBC` share a key even though they don't share a single token.
+- **`ngram`**, **`phonetic`**, **`exact-value`** — trigram, phonetic, and exact-identifier keys, rounding out recall for typos, transliteration, and shared domains/emails/phones.
 
-Between them, all five Apple records land together (they share the prefix `appl`), Microsoft's two records meet (`micr`), IBM's meet (`inte`), and the matcher gets its chance to compare them.
+Between them, all five Apple records land together, Microsoft's two records meet on `fingerprint:MICROSOFT`, IBM's meet, and — the case the original version of this article used as the headline blocking *failure* — **Boeing's two records now land together too.** GLEIF's `THE BOEING COMPANY` and SEC's `BOEING CO` both canonicalize to `BOEING`, share the `fingerprint` key, and the matcher gets its chance to score them. The same fix reaches Coca-Cola, Procter & Gamble, and Walt Disney.
 
-Now watch the same mechanism *fail*, on purpose and instructively. GLEIF lists Boeing as `THE BOEING COMPANY`; SEC lists it as `BOEING CO`. To a human these are obviously the same company. To the blocker:
+So does that mean Boeing merges? **No — and that's the more interesting lesson.** Boeing gets compared now, but it doesn't come close to merging: `jaccard` on `organization_name` scores `THE BOEING COMPANY` vs `BOEING CO` at **0.25** (one shared token, `boeing`, out of four distinct ones — `the`, `boeing`, `company`, `co`), and `jaccard` on `address_line` scores SEC's real Arlington, VA headquarters against GLEIF's registered-agent address in Wilmington, DE at **0.0** (no shared tokens at all). Weighted: `(4.0×0.25 + 2.5×0 + 0.5×0) / 7.0 ≈ 0.14` — well under even the 0.31 review floor, let alone the 0.41 auto-merge bar. Notice what canonicalization *didn't* do here: it's a **blocking-only** concept — the `jaccard` evaluator scores the raw field value, article and suffix words included, so `THE`/`COMPANY` on one side and `CO` on the other still count as real, unmatched tokens against the name similarity. Canonicalization got the pair *compared*; it did nothing for how similar they *score*. **This is no longer a blocking problem — it's a scoring/address problem**, and it's a cleaner diagnosis than "the pair was never compared": blocking did its job; the address signal (and the raw-token name similarity) is the honest bottleneck now. Walt Disney has the same shape. (More on this class of problem — and why a shared *registered-agent* address is closer to noise than signal — in the next section.)
 
-- prefix: `theboeingcompany` → `theb` versus `boeingco` → `boei`. **Different bucket.**
-- token-name: last token `company` versus `co`. **Different bucket.**
+No amount of clever scoring saves a pair that blocking never presents to it, which is still the core lesson — it's just that fewer pairs hit that wall now. **Your blocking keys are a hard ceiling on your recall**, and Linkuity ships an instrument for measuring exactly where that ceiling sits: `match blocking audit` reports the reachable/unreachable pairs against a held-out ground truth, per-strategy attribution, and the busiest blocks, so "the matcher missed an obvious pair" stops being a guessing game. Widening blocking has a real cost, though — the candidate-pair workload for this dataset rises from 71 pairs (the original 3-strategy set) to 2,563 (6 strategies) — so the profile also sets `maxBlockSize: 50`: any blocking key shared by more than 50 records is suppressed entirely rather than left to blow up the candidate set (the busiest offender here, `ngram:inc`, shared by dozens of `Inc`/`Incorporated` records, is exactly what this caps). That trades a small amount of raw reachability (94.4%) for a bounded, still-high **effective** ceiling (88.9%) — the honest number after the cap is applied.
 
-The leading article word "The" shifts every prefix and the suffix abbreviation splits the last token, so **Boeing's two records share no blocking key and are never compared.** The same `THE X COMPANY` vs `X CO` pattern also separates Coca-Cola, Procter & Gamble, and Walt Disney in this dataset. No amount of clever scoring can save them, because scoring never runs on that pair. **Your blocking keys are a hard ceiling on your recall.** Every entity-resolution project lives or dies here, and the failure is silent — the pair simply never appears, so nothing logs "I declined to match these." (The fix is equally instructive: broaden the blocking — e.g. strip leading stop-words like "The", or add a phonetic or n-gram key — trading a larger candidate set for higher recall. This showcase leaves the gap visible rather than papering over it.)
+Of the 72 true-match pairs in this dataset, the 8 that remain genuinely unreachable by any name-based key are pure corporate renames with zero token overlap — AT&T/SBC ↔ Southwestern Bell, Meta ↔ Facebook, Verizon ↔ Bell Atlantic. Closing those needs an identifier field (CIK/LEI), which this showcase deliberately withholds; see the "Precision-first tuning" section below.
 
 ### Stage 2 — Similarity and scoring
 
@@ -90,7 +100,7 @@ The weighted score falls into one of three bands: **auto-merge** (≥ 0.41), **r
 
 Each cluster is then merged into one **golden record** via a field-level source-priority policy. Here `organization_name` prefers GLEIF's legal name, while `address_line` and `postal_code` prefer SEC's business address — so the golden Apple record reads `Apple Inc.` (from GLEIF) at `ONE APPLE PARK WAY, CUPERTINO, CA` (from SEC). The golden record is a **composite, not a copy** of any single source.
 
-![Apple Inc. golden organization resolved from five source records across SEC and GLEIF, with the MATCHED_TO edges that drove the clustering](golden-graph.png)
+![Apple Inc. golden organization resolved from five source records across SEC and GLEIF, each linked to the shared golden record by a RESOLVED_TO edge](golden-graph.png)
 
 ## The part most demos skip: proving it
 
@@ -98,32 +108,34 @@ It is easy to build a resolver that produces confident-looking output. It is the
 
 ```
 ==> Company-resolution scorecard
-    golden records : 60  (expected 60)
+    golden records : 59  (expected 59)
     companies      : 49
-    correctly unified : 38
-    left separate     : 11
+    correctly unified : 39
+    left separate     : 10
     incorrect merges  : 0
-    precision 100.0%  recall 80.6%  F1 89.2%
+    precision 100.0%  recall 79.2%  F1 88.4%
 ```
 
-Read that carefully. 107 records collapsed into **60 golden organizations** (not the ideal 49 — 11 companies were left split). Of the pairs the matcher *did* merge on this held-out set, **zero were wrong** (100% pairwise precision). Of the pairs it *should* have merged, it caught 80.6% (recall). Because the crosswalk is never referenced by the profile, a passing scorecard proves genuine name-and-address resolution — not an ID lookup wearing a fuzzy-matching costume.
+Read that carefully. 107 records collapsed into **59 golden organizations** (not the ideal 49 — 10 companies were left split). Of the pairs the matcher *did* merge on this held-out set, **zero were wrong** (100% pairwise precision). Of the pairs it *should* have merged, it caught 79.2% (recall). Because the crosswalk is never referenced by the profile, a passing scorecard proves genuine name-and-address resolution — not an ID lookup wearing a fuzzy-matching costume.
 
-The eleven left-separate companies are reported by name, honestly, every run:
+(Recall reads slightly lower than the very first version of this pipeline, 79.2% vs. an earlier 80.6% — not a regression, but an honest correction. A coarser blocking setup used to give a couple of unrelated rename pairs an accidental shared bucket; closing that gap is exactly what the audit instrument below is for, and it's why the number moved down before the wider blocking strategies below moved it back up.)
 
-- **The blocking misses** — Boeing, Coca-Cola, Procter & Gamble, Walt Disney, 3M, Intel, AT&T, Ford, Texas Instruments, Starbucks. Mostly the `THE X COMPANY` vs `X CO` prefix split from Stage 1, plus a few whose SEC and GLEIF names diverge past a shared 4-char stem.
-- **The genuine rebrand** — Verizon. SEC carries the retired filer name `BELL ATLANTIC CORP` at the same address as `VERIZON COMMUNICATIONS INC.`. `BELL ATLANTIC` and `VERIZON COMMUNICATIONS` share *no* name tokens, so even though the addresses match, the matcher correctly refuses to guess that a company rebranded. That's not a bug — bridging a rebrand from name and address alone would be a hallucination.
+The ten left-separate companies are reported by name, honestly, every run:
+
+- **Blocked, but under the scoring threshold** — Boeing, Walt Disney, Intel, 3M, Ford, Texas Instruments, Starbucks. These now share a blocking key (the canonicalizer/fingerprint work described above sees past `THE X COMPANY` vs `X CO`, article words, and suffix abbreviations), so they *are* compared — they just don't clear the 0.41 auto-merge bar, usually because the SEC business address and the GLEIF address disagree. This is a scoring/address problem now, not a blocking one.
+- **The genuine rebrands** — AT&T (from SBC), Meta (from Facebook), and Verizon (from Bell Atlantic). SEC carries retired filer names at the same address as the current legal name, but a rebrand shares *no* name tokens with its former identity — `BELL ATLANTIC` and `VERIZON COMMUNICATIONS`, `FACEBOOK` and `META PLATFORMS` — so even though the addresses match, the matcher correctly refuses to guess that a company rebranded. That's not a bug — bridging a rebrand from name and address alone would be a hallucination. (AT&T/SBC is the one exception that *does* close: `acr:sbc` — the acronym strategy — bridges `SOUTHWESTERN BELL CORP` to `SBC`, which is why it shows up as "correctly unified" rather than in this list.)
 
 ### What a left-separate case looks like in the graph
 
-Pull Boeing's records out of the resolved graph and the failure is visual — two disconnected islands, not one cluster:
+Pull Boeing's records out of the resolved graph and it still looks exactly like the original version of this article described — two disconnected islands, no edge between them:
 
 ![Boeing left separate in Neo4j: SEC's BOEING CO and GLEIF's THE BOEING COMPANY each resolve to their own separate golden organization, with no MATCHED_TO edge between them](boeing-graph.png)
 
-SEC's `BOEING CO` resolves to one golden organization; GLEIF's `THE BOEING COMPANY` resolves to a *different* one. Each source record is joined to its `Source` and to its own golden record by a `RESOLVED_TO` edge — but there is **no `MATCHED_TO` edge between the two orange source nodes.** That missing edge is the whole story: because the two records never shared a blocking key, they were never compared, so a match edge could never form, so union-find had nothing to connect. Set this beside Apple's fully-connected cluster from Stage 3 — the presence or absence of those `MATCHED_TO` edges is the entire difference between one golden record and two. Multiply this one missing edge across eleven companies and you get 60 golden organizations instead of the ideal 49.
+That's worth pausing on, because it's a genuinely useful caveat about reading a resolution graph: **this picture is identical whether the pair was never compared or compared and correctly rejected** — the Neo4j export only draws a `MATCHED_TO` edge for pairs that clear the auto-merge threshold, so a "no edge" here doesn't distinguish "blocking never presented this pair" from "blocking presented it and scoring said no." Today it's the latter: Boeing's two records *do* share a blocking key (`fingerprint`, per Stage 1) and get scored — at **0.14**, nowhere near even the 0.31 review floor — so union-find still has nothing to connect. The *outcome* is unchanged from the original run (two golden organizations, not one), and so, coincidentally, is the graph; what changed is the *reason*, and you can only see that reason with `match explain`, not with this graph export. Set this beside Apple's fully-connected cluster from Stage 3: for Apple, the blocking-to-scoring pipeline runs all the way through to a merge; for Boeing, it runs all the way through and stops well short of even a review-band edge. Multiply the remaining gap across the ten left-separate companies above and you get 59 golden organizations instead of the ideal 49.
 
 ## Precision-first tuning is a decision, not a default
 
-Why is the auto-merge threshold **0.41** — a number that looks alarmingly low if you expect matches to score near 1.0? Because in master data management the two kinds of error are not equal. A **false merge** silently fuses two different companies into one golden record and corrupts every downstream report; unwinding it later is expensive and often undetected. A **missed merge** leaves two records where there should be one — visible, safe, fixable. So the threshold was tuned down until recall was as high as it could go **while incorrect merges stayed at exactly zero.** That's the tradeoff made explicit: 80.6% recall bought at 100% precision, on purpose.
+Why is the auto-merge threshold **0.41** — a number that looks alarmingly low if you expect matches to score near 1.0? Because in master data management the two kinds of error are not equal. A **false merge** silently fuses two different companies into one golden record and corrupts every downstream report; unwinding it later is expensive and often undetected. A **missed merge** leaves two records where there should be one — visible, safe, fixable. So the threshold was tuned down until recall was as high as it could go **while incorrect merges stayed at exactly zero.** That's the tradeoff made explicit: 79.2% recall bought at 100% precision, on purpose.
 
 And when you genuinely need to close the recall gap? The lever is sitting right there, deliberately unused: feed the CIK↔LEI crosswalk into the profile as an **`Identifier` field**. An exact identifier match floors a pair straight into the auto band regardless of name or address, instantly unifying every hard case. This showcase withholds that strong key precisely so it can measure how far fuzzy resolution gets *without* it. In production you'd use every reliable key you have — the point of the exercise is to know what the fuzzy layer contributes underneath.
 

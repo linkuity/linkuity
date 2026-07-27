@@ -115,7 +115,8 @@ annotated block above is not fiction, it will load as-is.)
 | `fields[].weight` | no | Relative importance in weighted scoring. Defaults to `1.0`. |
 | `fields[].evaluatorOptions` | no | Per-evaluator tuning knobs, as a string-to-string map. Recognized keys: `numeric.tolerance`, `numeric.maxPercentDiff` (for the `numeric` evaluator), `date.maxDays` (for `date`), `ngram.size` (for `ngram`). E.g. `{ "ngram.size": "3" }`. |
 | `normalizationStrategy` | yes | `identity` (no-op — the usual choice when data is already clean at ingest) or `semantic-field` (applies per-semantic-type cleaning at match time). Must be registered. |
-| `blockingStrategies[]` | yes, ≥ 1 entry | Which blocking strategies run; the engine unions the keys they all produce. Built-ins: `exact-value`, `token-name`, `prefix`, `ngram`, `phonetic`, `dob-lastname-phonetic`. Each name must be registered. |
+| `blockingStrategies[]` | yes, ≥ 1 entry | Which blocking strategies run; the engine unions the keys they all produce. Built-ins: `exact-value`, `token-name`, `prefix`, `ngram`, `phonetic`, `dob-lastname-phonetic`, `fingerprint`, `token`, `acronym`. Each name must be registered. |
+| `maxBlockSize` | no | Absolute cap on how many records a single blocking key may match before that key is suppressed entirely (produces zero candidates rather than being ranked/truncated). Distinct from `MaxCandidates` (a retrieval-time top-N cap per query, not a key-frequency cap). Omitted ⇒ no suppression on the in-process `linear` path; the durable Lucene path derives a default from `MaxCandidates` when unset. Must be ≥ 1 if present. The built-in `organization` profile sets it to `50`. See [how-matching-works.md](how-matching-works.md#blocking) and `match blocking audit` for measuring its effect. |
 | `candidateRetrievalStrategy` | yes | `linear` or `blocking-linear` in the in-process engine registry (durable ingest overrides this with an index-backed retrieval — Lucene — regardless of what's declared here; see [Batch vs. durable usage](#batch-vs-durable-usage-of-the-same-files)). Must be registered. |
 | `similarityStrategy` | yes | `default` or `field-weighted` (the built-in profiles use `field-weighted`, which honors per-field `similarityEvaluator`/`weight`). Must be registered. |
 | `scoringStrategy` | yes | `default`, `weighted`, or `identifier-weighted` (the built-in profiles use `identifier-weighted`, which floors a pair to `0.98` on an exact `Identifier` match). Must be registered. |
@@ -163,7 +164,10 @@ A field's semantic type drives which normalization rules apply to it and
 which blocking strategies can key off it (e.g. `exact-value` blocking keys off
 `Email`, `Phone`, `DomainName`, `DateOfBirth`, or any field carrying the
 `Identifier` role; `token-name` keys off `LastName`, `FullName`,
-`OrganizationName`, `ProductName`). `Sku`/`Gtin`/`ProductName` exist so a
+`OrganizationName`, `ProductName`). `fingerprint`, `token`, and `acronym` key
+off `OrganizationName` specifically, via a canonicalizer that drops leading
+articles and strips legal-entity suffixes before generating keys — see
+[how-matching-works.md](how-matching-works.md#blocking). `Sku`/`Gtin`/`ProductName` exist so a
 product-catalog taxonomy can be built with **no engine change** — they behave
 like any other identifier-capable or name-like type. Full detail on how
 semantic type feeds normalization and blocking is in
