@@ -366,6 +366,7 @@ to its kind of value. The built-ins are:
 | `exact` | identifiers, codes, postal codes | 1.0 if equal after match-key normalization, else 0.0 |
 | `fuzzy` | names, free text | the strongest of edit-distance, substring, and token-set ratios |
 | `jaccard` | address-like multi-token text | overlap of the two token sets |
+| `canonical-jaccard` | organization names | overlap of the two token sets after canonicalization (articles dropped, legal suffixes stripped, ampersand initials collapsed), falling back to plain token overlap for fields whose semantic type has no canonicalizer; names that are canonically identical but differ only in token boundaries (e.g. `AMAZON.COM` vs `AMAZON COM`, both compressing to `AMAZONCOM`) score 1.0 via a compressed-form equality check — the same multiple-representation practice used by commercial entity-resolution engines |
 | `ngram` | short strings/typos | shared character n-grams |
 | `numeric` | quantities | closeness on a numeric scale |
 | `date` | dates | equal after parsing to a common form |
@@ -373,6 +374,22 @@ to its kind of value. The built-ins are:
 `jaccard` and `ngram` are two distinct evaluators, not one. A field is only scored
 when **both** records have a value for it; a field missing on either side simply
 doesn't contribute.
+
+`canonical-jaccard` closes a gap the blocking canonicalizer opened: since the
+blocking stage already treats `THE BOEING COMPANY` and `BOEING CO` as the same
+fingerprint, scoring them at a raw-token Jaccard of 0.25 meant blocking could
+find pairs that scoring then threw away. With `canonical-jaccard` the same
+canonicalizer (same registration map, same rules) feeds both stages, so the
+built-in `organization` profile now scores those two names at 1.0 — and,
+symmetrically, two *different* companies no longer collect similarity credit
+for sharing noise tokens like `THE` or `COMPANY`. The evaluator also
+short-circuits on names that are **canonically identical but differ only in
+token boundaries**: `AMAZON.COM, INC.` and `AMAZON COM INC` both compress to
+the same token sequence, `AMAZONCOM`, once punctuation and delimiters are
+squashed out, so they score 1.0 outright on a compressed-form equality check
+rather than being penalized for how the tokenizer happened to split them — the
+same multiple-representation practice commercial entity-resolution engines use
+for company names with inconsistent punctuation.
 
 One behavior of `fuzzy` is worth calling out because it drives a worked-example
 outcome: it takes the **maximum** of an edit-distance ratio, a *partial* (substring)

@@ -341,7 +341,7 @@ dotnet run --project src\Linkuity.Cli -- run `
   --neo4j-export
 ```
 
-Because this sample's profile is byte-equivalent to the built-in `organization` profile, `--profile organization` works identically in place of the file path above.
+This sample's profile deliberately pins the older, narrower configuration (`token-name` blocking, `fuzzy` name scoring) so its walkthrough stays reproducible; the built-in `organization` profile has since moved to canonicalized blocking (`fingerprint`/`token`/`acronym` + `maxBlockSize`) and canonical name scoring (`canonical-jaccard`), so `--profile organization` will produce different (generally better) results than the file above.
 
 The HTTP API completes the same run synchronously via `POST /run`. It requires the API
 to be running locally at `http://localhost:5017`.
