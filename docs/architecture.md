@@ -248,7 +248,7 @@ built-ins, override semantics) applies identically to both paths; see
 | `fields[].name` | Column name in the input data. |
 | `fields[].semanticType` | One of: `FirstName, LastName, FullName, Email, Phone, DateOfBirth, AddressLine, PostalCode, OrganizationName, DomainName, SourceIdentifier, Sku, Gtin, ProductName`. |
 | `fields[].roles` | Any of `Searchable`, `Matchable`, `Blocking`, `Identifier` (empty = ignored for matching, e.g. a `SourceIdentifier`). A field marked `Identifier` is a strong identifier: an exact match auto-matches a pair (given a shared blocking key), and the field also produces an exact blocking key. |
-| `fields[].similarityEvaluator` | `exact`, `fuzzy`, `jaccard`, `ngram`, `numeric`, or `date`. |
+| `fields[].similarityEvaluator` | `exact`, `fuzzy`, `jaccard`, `canonical-jaccard`, `ngram`, `numeric`, or `date`. |
 | `fields[].weight` | Relative weight in weighted scoring (default 1.0). |
 | `fields[].evaluatorOptions` | Optional per-evaluator settings, e.g. `{ "ngram.size": "3" }`. |
 | `normalizationStrategy` | e.g. `identity`, `semantic-field`. |

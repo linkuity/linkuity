@@ -119,6 +119,15 @@ public class CanonicalJaccardSimilarityEvaluatorTests
     }
 
     [Fact]
+    public void DigitBoundaryVariants_ScoreOneViaSquashEquality()
+    {
+        // {3, M} and {3M} concatenate to the same string "3M" -> same name,
+        // tokenized differently.
+        var evaluator = new CanonicalJaccardSimilarityEvaluator();
+        Assert.Equal(1.0, evaluator.Evaluate("3 M COMPANY", "3M CO", OrgField())!.Value, 10);
+    }
+
+    [Fact]
     public void SquashEquality_IsOrderSensitive()
     {
         // {WALMART} vs {MART, WAL}: concatenations WALMART vs MARTWAL differ, so
