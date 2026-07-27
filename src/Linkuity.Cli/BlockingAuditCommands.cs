@@ -25,7 +25,7 @@ public static class BlockingAuditCommands
         }
 
         var verb = args[2];
-        var options = ParseFlags(args.Skip(3));
+        var options = AuditCliCommon.ParseFlags(args.Skip(3));
 
         if (!options.TryGetValue("profile", out var profilePath) || string.IsNullOrWhiteSpace(profilePath))
         {
@@ -42,7 +42,7 @@ public static class BlockingAuditCommands
         }
 
         IReadOnlyList<EntityRecord> records;
-        try { records = await LoadRecordsAsync(options, ct); }
+        try { records = await AuditCliCommon.LoadRecordsAsync(options, ct); }
         catch (Exception ex) when (ex is ArgumentException or FileNotFoundException or InvalidOperationException)
         {
             await Console.Error.WriteLineAsync(ex.Message);
@@ -65,91 +65,6 @@ public static class BlockingAuditCommands
         return 2;
     }
 
-    // ---- Source resolution: CSV, File-store, or Postgres-store ----
-
-    private static async Task<IReadOnlyList<EntityRecord>> LoadRecordsAsync(
-        IReadOnlyDictionary<string, string> options, CancellationToken ct)
-    {
-        var hasCsv = options.TryGetValue("input", out var csvPath) && !string.IsNullOrWhiteSpace(csvPath);
-        var hasMetadata = options.TryGetValue("metadata", out var metaPath) && !string.IsNullOrWhiteSpace(metaPath);
-        var isPostgres = options.TryGetValue("metadata-store", out var storeType)
-                         && string.Equals(storeType, "postgres", StringComparison.OrdinalIgnoreCase);
-
-        var sourceCount = (hasCsv ? 1 : 0) + (hasMetadata ? 1 : 0) + (isPostgres ? 1 : 0);
-        if (sourceCount != 1)
-            throw new ArgumentException(
-                "Exactly one record source is required: --input <csv>, --metadata <path>, " +
-                "or --metadata-store postgres --connection-string <cs> (all store sources need --project-id).");
-
-        if (hasCsv)
-        {
-            if (!File.Exists(csvPath))
-                throw new FileNotFoundException($"Input CSV not found: {csvPath}", csvPath);
-            return ReadCsv(csvPath!);
-        }
-
-        var projectId = ParseProjectId(options);
-
-        if (hasMetadata)
-        {
-            var store = new Linkuity.Infrastructure.Local.FileMetadataStore(
-                new Linkuity.Infrastructure.Local.FileMetadataStoreOptions { DatabasePath = metaPath! });
-            return await store.ListEntityRecordsAsync(projectId, ct);
-        }
-
-        // Postgres
-        if (!options.TryGetValue("connection-string", out var cs) || string.IsNullOrWhiteSpace(cs))
-            throw new ArgumentException("Postgres source requires --connection-string.");
-        Linkuity.Infrastructure.Postgres.DbUpMigrator.EnsureSchema(cs);
-        var pg = new Linkuity.Infrastructure.Postgres.PostgresMetadataStore(
-            new Linkuity.Infrastructure.Postgres.PostgresMetadataStoreOptions { ConnectionString = cs },
-            engine: null, profileProvider: null, indexedRetrieval: null);
-        return await pg.ListEntityRecordsAsync(projectId, ct);
-    }
-
-    private static Guid ParseProjectId(IReadOnlyDictionary<string, string> options)
-    {
-        if (!options.TryGetValue("project-id", out var raw) || !Guid.TryParse(raw, out var id))
-            throw new ArgumentException("A valid --project-id <guid> is required for store sources.");
-        return id;
-    }
-
-    private static IReadOnlyList<EntityRecord> ReadCsv(string path)
-    {
-        using var reader = new StreamReader(path);
-        using var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture));
-        var records = new List<EntityRecord>();
-        if (!csv.Read()) return records;
-        csv.ReadHeader();
-        var headers = csv.HeaderRecord ?? [];
-        var now = DateTimeOffset.UnixEpoch;
-        while (csv.Read())
-        {
-            var fields = headers.ToDictionary(h => h, h => csv.GetField(h) ?? "", StringComparer.OrdinalIgnoreCase);
-            if (!fields.TryGetValue("id", out var id) || string.IsNullOrEmpty(id))
-                continue;
-            records.Add(new EntityRecord
-            {
-                Id = Guid.NewGuid(), ProjectId = Guid.Empty, SourceId = Guid.Empty, IngestBatchId = Guid.Empty,
-                SourceRecordId = id, Fields = fields, CreatedAt = now
-            });
-        }
-        return records;
-    }
-
-    /// <summary>--max-block-size flag > profile maxBlockSize > off. Null Error means valid.</summary>
-    private static (int? Value, string? Error) ResolveMaxBlockSize(
-        IReadOnlyDictionary<string, string> options, MatchingProfile profile)
-    {
-        if (options.TryGetValue("max-block-size", out var raw))
-        {
-            if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value < 1)
-                return (null, $"Invalid --max-block-size value: {raw}");
-            return (value, null);
-        }
-        return (profile.MaxBlockSize, null);
-    }
-
     // ---- audit ----
 
     private static async Task<int> AuditAsync(
@@ -169,7 +84,7 @@ public static class BlockingAuditCommands
 
         int? maxCandidates = options.TryGetValue("max-candidates", out var mc) && int.TryParse(mc, out var mcVal) ? mcVal : null;
 
-        var (maxBlockSize, maxBlockSizeError) = ResolveMaxBlockSize(options, profile);
+        var (maxBlockSize, maxBlockSizeError) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
         if (maxBlockSizeError is not null)
         {
             await Console.Error.WriteLineAsync(maxBlockSizeError);
@@ -232,7 +147,7 @@ public static class BlockingAuditCommands
         BlockingAuditService service, IReadOnlyList<EntityRecord> records, MatchingProfile profile,
         IReadOnlyDictionary<string, string> options)
     {
-        var (maxBlockSize, maxBlockSizeError) = ResolveMaxBlockSize(options, profile);
+        var (maxBlockSize, maxBlockSizeError) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
         if (maxBlockSizeError is not null) { Console.Error.WriteLine(maxBlockSizeError); return 2; }
 
         var result = service.Audit(records, profile, groundTruth: null, maxCandidates: null, maxBlockSize);
@@ -255,7 +170,7 @@ public static class BlockingAuditCommands
                 Console.WriteLine($"WOULD COMPARE (shares {string.Join(", ", active)})");
             else if (suppressed.Count > 0)
                 Console.WriteLine(
-                    $"SKIPPED (all shared keys suppressed: {string.Join(", ", suppressed.Select(k => $"{k} (size {suppressedSizes[k]} > {result.Suppression!.MaxBlockSize})"))})");
+                    $"SKIPPED (all shared keys suppressed: {string.Join(", ", suppressed.Select(k => $"{k} (size {suppressedSizes[k]}, corpus frequency {suppressedSizes[k] - 1} > {result.Suppression!.MaxBlockSize})"))})");
             else
                 Console.WriteLine("SKIPPED (no shared key)");
             return 0;
@@ -270,28 +185,5 @@ public static class BlockingAuditCommands
 
         Console.Error.WriteLine("Provide --record <id>, or --left <id> --right <id>.");
         return 2;
-    }
-
-    // ---- minimal flag parser: "--name value" pairs ----
-
-    private static Dictionary<string, string> ParseFlags(IEnumerable<string> args)
-    {
-        var options = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        string? pending = null;
-        foreach (var arg in args)
-        {
-            if (arg.StartsWith("--", StringComparison.Ordinal))
-            {
-                if (pending is not null) options[pending] = "true";
-                pending = arg[2..];
-            }
-            else if (pending is not null)
-            {
-                options[pending] = arg;
-                pending = null;
-            }
-        }
-        if (pending is not null) options[pending] = "true";
-        return options;
     }
 }

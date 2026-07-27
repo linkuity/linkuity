@@ -6,11 +6,15 @@ public class BlockingSuppressionCliTests
     {
         var dir = Directory.CreateTempSubdirectory("lk-supp-cli").FullName;
         var csv = Path.Combine(dir, "orgs.csv");
+        // junk-d is a second unrelated "INC" filler record: with engine-parity suppression
+        // (corpus frequency = size-1), name:inc needs 6 members (frequency 5 > 4) to remain
+        // suppressed at --max-block-size 4.
         File.WriteAllText(csv,
             "id,organization_name\n" +
             "\"acme-a\",\"ACMEWIDGETS INC\"\n" +
             "\"acme-b\",\"AJAX INC\"\n" +
             "\"junk-c\",\"OMEGA INC\"\n" +
+            "\"junk-d\",\"DELTA INC\"\n" +
             "\"zeta-a\",\"ZETA GLOBAL INC\"\n" +
             "\"zeta-b\",\"ZETA HOLDINGS INC\"\n");
 
@@ -71,8 +75,8 @@ public class BlockingSuppressionCliTests
             "--ground-truth", gt, "--max-block-size", "4");
 
         Assert.Equal(0, exit);
-        Assert.Contains("Suppressed keys (block size > 4): 1", output);
-        Assert.Contains("name:inc (size 5)", output);
+        Assert.Contains("Suppressed keys (corpus frequency > 4): 1", output);
+        Assert.Contains("name:inc (size 6)", output);
         Assert.Contains("Effective recall ceiling: 50.0 % (1/2)", output);
         Assert.Contains("pairs lost to suppression: 1", output);
         Assert.Contains("[acme]", output);
@@ -100,7 +104,7 @@ public class BlockingSuppressionCliTests
             "--ground-truth", gt, "--max-block-size", "4", "--format", "csv");
 
         Assert.Equal(0, exit);
-        Assert.Contains("suppressed,name:inc,5,token-name", output);
+        Assert.Contains("suppressed,name:inc,6,token-name", output);
         Assert.Contains("suppression_missed,acme-a,acme-b,acme,", output);
     }
 
@@ -124,7 +128,7 @@ public class BlockingSuppressionCliTests
             "--left", "acme-a", "--right", "acme-b", "--max-block-size", "4");
 
         Assert.Equal(0, exit);
-        Assert.Contains("SKIPPED (all shared keys suppressed: name:inc (size 5 > 4))", output);
+        Assert.Contains("SKIPPED (all shared keys suppressed: name:inc (size 6, corpus frequency 5 > 4))", output);
         Assert.DoesNotContain("WOULD COMPARE", output);
     }
 

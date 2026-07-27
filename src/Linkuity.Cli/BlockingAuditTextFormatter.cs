@@ -47,7 +47,7 @@ public static class BlockingAuditTextFormatter
         if (result.Suppression is { } sup)
         {
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"Suppressed keys (block size > {sup.MaxBlockSize}): {sup.SuppressedBlocks.Count}");
+                $"Suppressed keys (corpus frequency > {sup.MaxBlockSize}): {sup.SuppressedBlocks.Count}");
             foreach (var b in sup.SuppressedBlocks)
                 sb.AppendLine(CultureInfo.InvariantCulture, $"  {b.Key} (size {b.Size}) [{string.Join(",", b.StrategyNames)}]");
             if (sup.NoActiveKeyRecordIds.Count > 0)
