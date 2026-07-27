@@ -3,7 +3,7 @@
 Resolve real companies across two independent public systems — using nothing but
 their names and addresses.
 
-![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 59 golden organizations, then scoring 100% precision / 79.2% recall / F1 88.4% with zero incorrect merges against a held-out CIK/LEI crosswalk](assets/demo.gif)
+![Linkuity resolving 107 SEC EDGAR + GLEIF company records into 52 golden organizations, then scoring 100% precision / 88.9% recall / F1 94.1% with zero incorrect merges against a held-out CIK/LEI crosswalk](assets/demo.gif)
 
 > Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs) — re-record with `vhs assets/demo.tape`.
 
@@ -12,13 +12,13 @@ their names and addresses.
 [SEC EDGAR](https://www.sec.gov/) and [GLEIF](https://www.gleif.org/) describe the
 same companies independently, and **share no common identifier** — SEC keys on CIK,
 GLEIF on LEI. Given 107 source records that only agree on a fuzzy company name and a
-postal address, Linkuity reconciles them into 59 golden organizations, then we prove
+postal address, Linkuity reconciles them into 52 golden organizations, then we prove
 it got them right against a CIK↔LEI crosswalk the matcher never saw.
 
-- Correctly unified: **39** companies
-- Left separate (honest hard cases): **10**
+- Correctly unified: **46** companies
+- Left separate (honest hard cases): **3**
 - Incorrectly merged: **0**
-- Pairwise precision / recall: **100.0% / 79.2%** (F1 88.4%)
+- Pairwise precision / recall: **100.0% / 88.9%** (F1 94.1%)
 
 ## The datasets
 
@@ -66,15 +66,23 @@ differently formatted addresses (business vs legal/HQ). Examples from this datas
   and three retired SEC filer names, `APPLE INC`, `APPLE COMPUTER INC`, and
   `APPLE COMPUTER INC/ FA` → all five unify into one golden organization. See the
   worked graph in [assets/golden-graph.md](assets/golden-graph.md).
-- **Boeing** (left separate) — GLEIF `THE BOEING COMPANY, 2711 Centerville Road Suite
+- **Boeing** (resolved) — GLEIF `THE BOEING COMPANY, 2711 Centerville Road Suite
   400, Wilmington, US-DE 19808` (a Delaware registered-agent address) vs SEC
   `BOEING CO, 929 LONG BRIDGE DRIVE, ARLINGTON, VA 22202` (the real Arlington HQ).
   The name pattern (`THE X COMPANY` vs `X CO`) and address divergence present a classic
   article/suffix/word-order blocking challenge; the same pattern splits Coca-Cola,
   Procter & Gamble, and Walt Disney. With fingerprint + phonetic + token + acronym +
-  n-gram blocking, all four pairs now become candidates: Coca-Cola and Procter &
-  Gamble correctly unify (pinned in expectations.json mustUnify), while Boeing and
-  Walt Disney score below the 0.41 auto-merge threshold, so they remain separate.
+  n-gram blocking, all four pairs become candidates — but scoring used to throw three
+  of them away again: plain-token Jaccard saw `THE BOEING COMPANY` vs `BOEING CO` as
+  only 0.25 similar, below the auto-merge threshold, because `THE` and `COMPANY`
+  inflate the token sets without meaning anything. The `canonical-jaccard` evaluator
+  scores organization names the same way blocking already treats them: after the
+  leading article is dropped and the legal suffix is stripped, both names reduce to
+  the same canonical token set, so name similarity jumps to 1.0 and the address
+  disagreement (a registered-agent address, not Boeing's real HQ) no longer has to
+  carry the pair — Boeing now auto-matches at 0.5714. The same canonical scoring
+  resolves Walt Disney too; Coca-Cola and Procter & Gamble were already unifying
+  under the previous evaluator (pinned in expectations.json mustUnify).
 - **Verizon** (left separate) — SEC carries a retired filer name, `BELL ATLANTIC CORP`,
   at the same address as `VERIZON COMMUNICATIONS INC.` (`1095 AVENUE OF THE AMERICAS,
   NEW YORK, NY 10036`). Name and address alone can't bridge a genuine corporate
@@ -88,10 +96,11 @@ The end-to-end flow — acquire → prepare → run → validate — is sketched
 [pipeline diagram](assets/pipeline.md).
 
 `run/company.profile.json` uses `organization_name` as a fuzzy primary signal
-(exact-value + fingerprint + phonetic + token + acronym + n-gram blocking, jaccard
-similarity, weight 4.0) plus `address_line` (jaccard, weight 2.5) and `postal_code`
-(exact, weight 0.5). **No identifier is fed to the matcher** — CIK/LEI live only in
-the ground truth. The auto-match threshold (0.41) is tuned so incorrect merges are
+(exact-value + fingerprint + phonetic + token + acronym + n-gram blocking,
+`canonical-jaccard` similarity, weight 4.0) plus `address_line` (jaccard, weight 2.5)
+and `postal_code` (exact, weight 0.5). **No identifier is fed to the matcher** —
+CIK/LEI live only in the ground truth. The auto-match threshold (0.41) is tuned so
+incorrect merges are
 zero across this dataset. See [docs/configuration.md](../../docs/configuration.md).
 
 ### Auditing blocking recall
@@ -133,7 +142,7 @@ Prerequisite: the .NET 10 SDK and PowerShell 7.
 
 ## Expected output
 
-`59` golden records in `output/golden-records.csv`, e.g.:
+`52` golden records in `output/golden-records.csv`, e.g.:
 
 ```
 cluster_id,record_count,member_ids,address_line,organization_name,postal_code

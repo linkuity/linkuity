@@ -9,6 +9,17 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- `canonical-jaccard` similarity evaluator: token-set Jaccard computed on
+  canonicalized organization names (leading articles dropped, trailing legal
+  suffixes stripped, ampersand initials collapsed — the same canonicalizer
+  blocking uses), so `THE BOEING COMPANY` vs `BOEING CO` scores 1.0 instead
+  of 0.25, while unrelated names sharing only noise tokens (`THE`, `COMPANY`)
+  drop toward 0. Names that are canonically identical but differ only in
+  token boundaries (e.g. `AMAZON.COM` vs `AMAZON COM`, both compressing to
+  `AMAZONCOM`) score 1.0 via a compressed-form equality check — the same
+  multiple-representation practice used by commercial entity-resolution
+  engines. Fields whose semantic type has no registered canonicalizer fall
+  back to plain token Jaccard.
 - `match scoring audit` and `match scoring explain` CLI commands: score every
   blocked candidate pair under a profile (batch blocking-linear fidelity) and
   report band outcomes, direct-edge precision/recall/F1 against a held-out
@@ -32,6 +43,13 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   company-resolution showcase are the first consumers (`50`).
 
 ### Changed
+- The built-in `organization` matching profile now scores `organization_name`
+  with `canonical-jaccard` (previously `fuzzy`; weight unchanged). This is a
+  **behavior change** for anyone relying on the built-in organization
+  profile's scoring, in both batch and durable matching (custom
+  `*.profile.json` files are unaffected). On the company-resolution showcase
+  (which also adopts it), 7 previously under-scored true pairs graduate to
+  auto-match: recall 79.2% → 88.9% at unchanged 100% precision.
 - The built-in `organization` matching profile now blocks on
   `["exact-value", "fingerprint", "phonetic", "token", "acronym", "ngram"]`
   with `maxBlockSize: 50`, replacing the previous

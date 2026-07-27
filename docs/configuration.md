@@ -53,7 +53,7 @@ annotated:
     // (or disagreement) counts toward the pair score.
     { "name": "organization_name", "semanticType": "OrganizationName",
       "roles": ["Searchable", "Matchable", "Blocking"],
-      "similarityEvaluator": "fuzzy", "weight": 2.0 },
+      "similarityEvaluator": "canonical-jaccard", "weight": 2.0 },
 
     // Identifier: an exact match on this field is strong enough evidence to
     // auto-match a pair on its own (see "roles" below).
@@ -111,7 +111,7 @@ annotated block above is not fiction, it will load as-is.)
 | `fields[].name` | yes | The column name in your input data. |
 | `fields[].semanticType` | yes | What kind of value this is — see [the semantic-type vocabulary](#the-semantic-type-vocabulary) below. Drives normalization and which blocking strategies apply. Unknown value throws. |
 | `fields[].roles` | no (omitted ⇒ no roles, same as `[]`) | Any combination of `Searchable`, `Matchable`, `Blocking`, `Identifier` — see [roles](#field-roles) below. Unknown role name throws. |
-| `fields[].similarityEvaluator` | no | Which evaluator compares this field: `exact`, `fuzzy`, `jaccard`, `ngram`, `numeric`, or `date`. Must be registered if present; unknown value throws. |
+| `fields[].similarityEvaluator` | no | Which evaluator compares this field: `exact`, `fuzzy`, `jaccard`, `canonical-jaccard`, `ngram`, `numeric`, or `date`. Must be registered if present; unknown value throws. |
 | `fields[].weight` | no | Relative importance in weighted scoring. Defaults to `1.0`. |
 | `fields[].evaluatorOptions` | no | Per-evaluator tuning knobs, as a string-to-string map. Recognized keys: `numeric.tolerance`, `numeric.maxPercentDiff` (for the `numeric` evaluator), `date.maxDays` (for `date`), `ngram.size` (for `ngram`). E.g. `{ "ngram.size": "3" }`. |
 | `normalizationStrategy` | yes | `identity` (no-op — the usual choice when data is already clean at ingest) or `semantic-field` (applies per-semantic-type cleaning at match time). Must be registered. |

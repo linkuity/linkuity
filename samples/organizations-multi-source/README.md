@@ -5,7 +5,7 @@ A 28-row organization dataset that exercises Linkuity's source-priority merging 
 ## Files
 
 - `sample.csv` — 28 input rows representing 10 distinct organizations, ingested from 4 different source systems.
-- `organizations-multi-source.profile.json` — matching profile. Declares the fields, semantic types, and matching strategy (its `contentType: "organization"` is byte-equivalent to the built-in `organization` profile — see `SampleScenarioTests.OrgMultiSource_BuiltInProfileByName_MatchesFileProfile`).
+- `organizations-multi-source.profile.json` — matching profile. Declares the fields, semantic types, and matching strategy (its `contentType: "organization"` pins an older, narrower configuration than today's built-in `organization` profile — see the note under "Running it end-to-end" below; `SampleScenarioTests.OrgMultiSource_BuiltInProfileByName_MatchesFileProfile` verifies the built-in profile still reproduces this sample's cluster relations).
 - `organizations-multi-source.merge.json` — merge policy. Declares per-field source-priority merge rules.
 - `expectations.json` — asserted golden values for each cluster, used by `Run-Scenario.ps1` and `SampleScenarioTests`.
 
@@ -341,7 +341,7 @@ dotnet run --project src\Linkuity.Cli -- run `
   --neo4j-export
 ```
 
-Because this sample's profile is byte-equivalent to the built-in `organization` profile, `--profile organization` works identically in place of the file path above.
+This sample's profile deliberately pins the older, narrower configuration (`token-name` blocking, `fuzzy` name scoring) so its walkthrough stays reproducible; the built-in `organization` profile has since moved to canonicalized blocking (`fingerprint`/`token`/`acronym` + `maxBlockSize`) and canonical name scoring (`canonical-jaccard`), so `--profile organization` will produce different (generally better) results than the file above.
 
 The HTTP API completes the same run synchronously via `POST /run`. It requires the API
 to be running locally at `http://localhost:5017`.

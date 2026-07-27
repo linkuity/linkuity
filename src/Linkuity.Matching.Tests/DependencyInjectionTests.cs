@@ -60,6 +60,7 @@ public class DependencyInjectionTests
         Assert.Contains("exact", registry.Evaluators.Keys);
         Assert.Contains("fuzzy", registry.Evaluators.Keys);
         Assert.Contains("jaccard", registry.Evaluators.Keys);
+        Assert.Contains("canonical-jaccard", registry.Evaluators.Keys);
         Assert.Contains("ngram", registry.Evaluators.Keys);
         Assert.Contains("numeric", registry.Evaluators.Keys);
         Assert.Contains("date", registry.Evaluators.Keys);

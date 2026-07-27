@@ -34,6 +34,15 @@ public sealed class MatchingDefaultsProfileLoadingTests : IDisposable
         Assert.Equal("person", provider.GetRequiredService<IMatchingProfileProvider>().GetProfile("person").ContentType);
     }
 
+    [Fact]
+    public void CreateRegistry_RegistersSameEvaluatorNamesAsDependencyInjection()
+    {
+        var registry = MatchingDefaults.CreateRegistry();
+        string[] expected = ["exact", "fuzzy", "jaccard", "canonical-jaccard", "ngram", "numeric", "date"];
+        foreach (var name in expected)
+            Assert.Contains(name, registry.Evaluators.Keys);
+    }
+
     private const string OverrideOrgJson = """
     {
       "contentType": "organization",

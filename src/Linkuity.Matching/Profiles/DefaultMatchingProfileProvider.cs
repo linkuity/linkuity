@@ -92,11 +92,12 @@ public sealed class DefaultMatchingProfileProvider : IMatchingProfileProvider
 
     /// <summary>
     /// The default organization profile: a faithful C# rendering of the canonical
-    /// organization configuration. Mirrors the person durable strategy selections
-    /// (identity normalization, field-weighted similarity, identifier-weighted
-    /// scoring, exact-value + token-name blocking, 0.90/0.75 thresholds). Domain,
-    /// email, and phone are the strong identifiers; <c>source</c> is a non-matching
-    /// source identifier.
+    /// organization configuration. Shares the person profile's durable strategy
+    /// selections (identity normalization, field-weighted similarity,
+    /// identifier-weighted scoring, 0.90/0.75 thresholds) but blocks on exact-value,
+    /// fingerprint, phonetic, token, acronym, and ngram keys with maxBlockSize 50.
+    /// Domain, email, and phone are the strong identifiers; <c>source</c> is a
+    /// non-matching source identifier.
     /// </summary>
     public static MatchingProfile CreateOrganizationProfile() => new()
     {
@@ -104,7 +105,7 @@ public sealed class DefaultMatchingProfileProvider : IMatchingProfileProvider
         Fields =
         [
             new ProfileField { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier, Roles = FieldRole.None },
-            new ProfileField { Name = "organization_name", SemanticType = SemanticFieldType.OrganizationName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "fuzzy", Weight = 2.0 },
+            new ProfileField { Name = "organization_name", SemanticType = SemanticFieldType.OrganizationName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "canonical-jaccard", Weight = 2.0 },
             new ProfileField { Name = "domain_name", SemanticType = SemanticFieldType.DomainName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.5 },
             new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.5 },
             new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.0 },
