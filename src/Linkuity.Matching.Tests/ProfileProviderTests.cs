@@ -82,6 +82,11 @@ public class ProfileProviderTests
         var email = Assert.Single(profile.Fields, f => f.Name == "email");
         Assert.True(email.Roles.HasFlag(FieldRole.Identifier));
 
+        var orgName = Assert.Single(profile.Fields, f => f.Name == "organization_name");
+        Assert.Equal(SemanticFieldType.OrganizationName, orgName.SemanticType);
+        Assert.Equal("canonical-jaccard", orgName.SimilarityEvaluator);
+        Assert.Equal(2.0, orgName.Weight);
+
         var source = Assert.Single(profile.Fields, f => f.Name == "source");
         Assert.Equal(FieldRole.None, source.Roles);
         Assert.Equal(SemanticFieldType.SourceIdentifier, source.SemanticType);

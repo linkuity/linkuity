@@ -104,7 +104,7 @@ public sealed class DefaultMatchingProfileProvider : IMatchingProfileProvider
         Fields =
         [
             new ProfileField { Name = "source", SemanticType = SemanticFieldType.SourceIdentifier, Roles = FieldRole.None },
-            new ProfileField { Name = "organization_name", SemanticType = SemanticFieldType.OrganizationName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "fuzzy", Weight = 2.0 },
+            new ProfileField { Name = "organization_name", SemanticType = SemanticFieldType.OrganizationName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "canonical-jaccard", Weight = 2.0 },
             new ProfileField { Name = "domain_name", SemanticType = SemanticFieldType.DomainName, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.5 },
             new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.5 },
             new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier, SimilarityEvaluator = "exact", Weight = 2.0 },

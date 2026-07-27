@@ -17,6 +17,7 @@ public static class MatchingDefaults
             new ExactSimilarityEvaluator(),
             new FuzzyTextSimilarityEvaluator(),
             new JaccardSimilarityEvaluator(),
+            new CanonicalJaccardSimilarityEvaluator(),
             new NGramSimilarityEvaluator(),
             new NumericSimilarityEvaluator(),
             new DateSimilarityEvaluator()
