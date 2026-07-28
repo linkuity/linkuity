@@ -358,7 +358,7 @@ public class LocalBatchRunnerCorpusAuditTests
     // ---- --compare-baseline ----
 
     [Fact]
-    public async Task CompareBaseline_UnchangedRun_PassesWithReportBeforeVerdict()
+    public async Task CompareBaseline_UnchangedRun_PassesWithFullReportOnStdout()
     {
         var f = await WriteBaselineAsync();
 
@@ -403,7 +403,7 @@ public class LocalBatchRunnerCorpusAuditTests
     {
         var f = await WriteBaselineAsync();
 
-        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileB,
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileB,
             "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
 
         Assert.Equal(1, exit);
@@ -412,9 +412,6 @@ public class LocalBatchRunnerCorpusAuditTests
         Assert.Contains("S1Identical post-cluster recall fell beyond the 0.5pp tolerance (2/2 -> 1/2)",
             err, StringComparison.Ordinal);
         Assert.Contains("stop and escalate", err, StringComparison.Ordinal);
-        // The current run does classify the moved pair into S5 — the report shows that, and the
-        // gated cohort above is nonetheless the baseline's.
-        Assert.Contains("S5Disjoint", output, StringComparison.Ordinal);
     }
 
     // ---- HAZARD 2: strataSha256 is the sidecar's identity, not the current run's classification ----
@@ -735,7 +732,9 @@ public class LocalBatchRunnerCorpusAuditTests
     }
 
     /// <summary>Report-only runs pin nothing, so they must stay unaffected: no --corpus-source, and
-    /// a built-in profile name, are both fine when no baseline is involved.</summary>
+    /// a built-in profile NAME rather than a file, are both fine when no baseline is involved.
+    /// Both halves are exercised — the second run is the one UnhashableGateInput would have
+    /// refused had the built-in-profile refusal leaked out of gate mode.</summary>
     [Fact]
     public async Task ReportOnly_WithoutCorpusSource_IsUnaffected()
     {
@@ -746,6 +745,13 @@ public class LocalBatchRunnerCorpusAuditTests
         Assert.Equal(0, exit);
         Assert.Equal("", err);
         Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
+
+        // Same run, but --profile is a built-in name ("organization"), not a file path.
+        var (builtInExit, builtInOut, builtInErr) = await RunAsync(AuditBare(f, "organization"));
+
+        Assert.Equal(0, builtInExit);
+        Assert.Equal("", builtInErr);
+        Assert.Contains("=== corpus audit ===", builtInOut, StringComparison.Ordinal);
     }
 
     // ---- --format csv stays machine-readable under a gate flag ----

@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <!-- Lets the showcase parity tests read the corpus through the CLI's OWN readers
-         (AuditCliCommon.ReadCsv / CorpusAuditCommands.ReadGroundTruth) rather than a
+         (AuditCliCommon.ReadCsv / AuditCliCommon.ReadGroundTruthStrict) rather than a
          reimplementation, so the audit under test sees byte-identical inputs to the CLI. -->
     <InternalsVisibleTo Include="Linkuity.Cli.Tests" />
   </ItemGroup>

@@ -107,6 +107,31 @@ internal static class AuditCliCommon
         return records;
     }
 
+    /// <summary>
+    /// THE reader for the (record_id, canonical_key) ground-truth format (spec §4): duplicate
+    /// record_id rows fail fast rather than last-write-wins. Shared by `match scoring audit` and
+    /// `match corpus audit` — two copies would let the two instruments silently disagree about the
+    /// same file if either drifted. The lenient variant in BlockingAuditCommands is deliberately
+    /// separate; it tolerates duplicates.
+    /// </summary>
+    internal static Dictionary<string, string> ReadGroundTruthStrict(string path)
+    {
+        using var reader = new StreamReader(path);
+        using var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture));
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!csv.Read()) return map;
+        csv.ReadHeader();
+        while (csv.Read())
+        {
+            var id = csv.GetField("record_id");
+            var canonical = csv.GetField("canonical_key");
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(canonical)) continue;
+            if (!map.TryAdd(id, canonical))
+                throw new ArgumentException($"Duplicate record_id in ground truth: '{id}'.");
+        }
+        return map;
+    }
+
     /// <summary>--max-block-size flag > profile maxBlockSize > off. Null Error means valid.</summary>
     internal static (int? Value, string? Error) ResolveMaxBlockSize(
         IReadOnlyDictionary<string, string> options, MatchingProfile profile)

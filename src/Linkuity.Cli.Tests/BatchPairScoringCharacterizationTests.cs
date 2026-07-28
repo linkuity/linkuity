@@ -7,18 +7,22 @@ namespace Linkuity.Cli.Tests;
 
 /// <summary>
 /// Pins the batch path's observable pair-scoring behaviour so CorpusAuditService claims parity
-/// with something verified. Read from source and confirmed here:
-///   - BuildMatchesCsv scores BOTH directions and keeps the MAX (BatchMatchingService.cs:63-73)
-///   - it emits ONLY pairs at or above AutoMatchThreshold (lines 56 and 65), so review-band pairs never
-///     appear and any parity test can compare auto-band pairs only. OmitsPairsBelowAutoThreshold
-///     proves this specifically with a pair that clears Resolve's review gate (0.31) but not
-///     BuildMatchesCsv's auto gate (0.41) — a pair suppressed by an earlier gate (e.g. never
-///     reaching Resolve's Candidates at all) would pass a weaker version of that test without
-///     the auto-threshold line ever running, so the fixture and the two-part assertion both
-///     matter, not just the header-only outcome.
-/// The max rule cannot be discriminated here because BuildMatchesCsv resolves strategies from
-/// MatchingDefaults; CorpusAuditScoringTests.ScorePair_TakesMaxOfBothDirections does that with
-/// an injected asymmetric strategy.
+/// with something verified. Confirmed here:
+///   - BuildMatchesCsv emits ONE row per unordered pair, ordinal lowest id first
+///   - it emits ONLY pairs at or above AutoMatchThreshold (BatchMatchingService.cs:56 and 65), so
+///     review-band pairs never appear and any parity test can compare auto-band pairs only.
+///     OmitsPairsBelowAutoThreshold proves this specifically with a pair that clears Resolve's
+///     review gate (0.31) but not BuildMatchesCsv's auto gate (0.41) — a pair suppressed by an
+///     earlier gate (e.g. never reaching Resolve's Candidates at all) would pass a weaker version
+///     of that test without the auto-threshold line ever running, so the fixture and the two-part
+///     assertion both matter, not just the header-only outcome.
+/// NOT confirmed here: that BuildMatchesCsv scores BOTH directions and keeps the MAX
+/// (BatchMatchingService.cs:63-73). Nothing in this class discriminates that rule — it cannot be,
+/// because BuildMatchesCsv resolves strategies from MatchingDefaults and the shipped evaluator is
+/// symmetric. The emitted score is tied to the audit's max-of-both-directions score by
+/// CorpusAuditShowcaseParityTests.ScoresMatchBatchMatchingServicePerPair, which compares 63 real
+/// emitted pairs; CorpusAuditScoringTests.ScorePair_TakesMaxOfBothDirections pins the max rule
+/// itself with an injected asymmetric strategy.
 /// </summary>
 public class BatchPairScoringCharacterizationTests
 {
@@ -133,10 +137,13 @@ public class BatchPairScoringCharacterizationTests
         Assert.Single(lines);   // header only
     }
 
-    /// <summary>The emitted score equals Resolve() in BOTH directions for the shipped evaluator.
-    /// If this ever fails, the evaluator became asymmetric and the max rule starts to matter.</summary>
+    /// <summary>Resolve() returns the same score with the arguments in either order, for the
+    /// shipped evaluator and profile. This does NOT touch BuildMatchesCsv — it proves only that
+    /// the evaluator is symmetric, which is why BatchMatchingService's max-of-both-directions rule
+    /// is unobservable on the default strategy set. If this ever fails, the evaluator became
+    /// asymmetric and that max rule starts to matter.</summary>
     [Fact]
-    public void EmittedScoreEqualsBothDirectionalResolveScores()
+    public void ResolveScoreIsSymmetricInBothDirections()
     {
         var engine = new MatchingEngine(MatchingDefaults.CreateRegistry());
         var blocking = Profile.WithCandidateRetrievalStrategy("blocking-linear");

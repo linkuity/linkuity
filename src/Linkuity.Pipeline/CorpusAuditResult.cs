@@ -59,8 +59,7 @@ public sealed record TruePairOutcome(
     bool Reachable,
     CorpusBand? Band,
     double? Score,
-    bool SameCluster,
-    bool LikelyIndividual);
+    bool SameCluster);
 
 /// <summary>Distinct predicted clusters — "golden records" in showcase vocabulary.</summary>
 public sealed record CorpusAuditClusterSummary(

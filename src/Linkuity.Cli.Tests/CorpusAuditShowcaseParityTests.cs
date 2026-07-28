@@ -37,7 +37,7 @@ public class CorpusAuditShowcaseParityTests
     private static CorpusAuditResult RunShowcase()
     {
         var records = AuditCliCommon.ReadCsv(CompaniesCsv());
-        var truth = CorpusAuditCommands.ReadGroundTruth(GroundTruthCsv());
+        var truth = AuditCliCommon.ReadGroundTruthStrict(GroundTruthCsv());
 
         return new CorpusAuditService(MatchingDefaults.CreateRegistry())
             .Audit(records, Profile(), truth, maxBlockSize: null, gateMode: true);
@@ -90,7 +90,7 @@ public class CorpusAuditShowcaseParityTests
     [Fact]
     public void ReproducesTheCompletePublishedScorecard()
     {
-        var truth = CorpusAuditCommands.ReadGroundTruth(GroundTruthCsv());
+        var truth = AuditCliCommon.ReadGroundTruthStrict(GroundTruthCsv());
         var result = RunShowcase();
 
         Assert.Equal(107, result.Counts.Records);
@@ -142,7 +142,7 @@ public class CorpusAuditShowcaseParityTests
         Assert.Equal(2, summary.SingletonCount);
         Assert.Equal(summary.GoldenRecordCount, summary.UnifiedClusterCount + summary.SingletonCount);
 
-        var truth = CorpusAuditCommands.ReadGroundTruth(GroundTruthCsv());
+        var truth = AuditCliCommon.ReadGroundTruthStrict(GroundTruthCsv());
         Assert.NotEqual(ShowcaseUnifiedSplit(result, truth).Unified, summary.UnifiedClusterCount);
     }
 
@@ -212,7 +212,7 @@ public class CorpusAuditShowcaseParityTests
         // therefore actually got score-compared, not merely that some did.
         Assert.Equal(63, batchPairs.Count);
 
-        var truth = CorpusAuditCommands.ReadGroundTruth(GroundTruthCsv());
+        var truth = AuditCliCommon.ReadGroundTruthStrict(GroundTruthCsv());
         var audit = new CorpusAuditService(MatchingDefaults.CreateRegistry())
             .Audit(records, profile, truth, maxBlockSize: null, gateMode: true);
 

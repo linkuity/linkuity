@@ -59,10 +59,16 @@ public class CorpusAuditClusterMetricTests
         Assert.Equal(1, ap);
     }
 
+    /// <summary>
+    /// The exclusion above does not depend on WHERE the unlabeled record sits: ClusterPairCounts
+    /// reads a contingency table, so the null's index is irrelevant. This is a position variant of
+    /// the previous test, nothing more — it does NOT exercise any connecting behaviour, which
+    /// happens in CorpusAuditService's union-find and is covered end-to-end by
+    /// CorpusAuditPipelineTests.UnlabeledBridgeClustersATruePairBlockingNeverProposed_WithoutInflatingPredictedPositives.
+    /// </summary>
     [Fact]
-    public void UnlabeledConnectorStillJoinsLabelledRecords()
+    public void UnlabeledRecordsExcludedFromPredictedPositives_RegardlessOfPosition()
     {
-        // 0 and 2 are labelled the same and only reach each other through unlabeled record 1.
         int[] predicted = [0, 0, 0];
         string?[] truth = ["x", null, "x"];
 

@@ -4,8 +4,8 @@ public class CorpusAuditFrozenStrataTests
 {
     private static readonly IReadOnlyList<TruePairOutcome> CurrentRun =
     [
-        new("a", "b", Stratum.S5Disjoint, true, CorpusBand.NoMatch, 0.1, SameCluster: false, false),
-        new("c", "d", Stratum.S4WeakOverlap, true, CorpusBand.Auto, 0.9, SameCluster: true, false)
+        new("a", "b", Stratum.S5Disjoint, true, CorpusBand.NoMatch, 0.1, SameCluster: false),
+        new("c", "d", Stratum.S4WeakOverlap, true, CorpusBand.Auto, 0.9, SameCluster: true)
     ];
 
     private static readonly IReadOnlyList<FrozenStratumAssignment> Frozen =
@@ -54,11 +54,11 @@ public class CorpusAuditFrozenStrataTests
     {
         IReadOnlyList<TruePairOutcome> run =
         [
-            new("a", "b", Stratum.S4WeakOverlap, true, CorpusBand.Auto, 0.9, SameCluster: true, false),
-            new("c", "d", Stratum.S4WeakOverlap, true, CorpusBand.Review, 0.35, SameCluster: false, false),
-            new("e", "f", Stratum.S4WeakOverlap, true, CorpusBand.NoMatch, 0.1, SameCluster: false, false),
-            new("g", "h", Stratum.S4WeakOverlap, true, CorpusBand.NonComparable, null, SameCluster: false, false),
-            new("i", "j", Stratum.S4WeakOverlap, false, null, null, SameCluster: false, false)
+            new("a", "b", Stratum.S4WeakOverlap, true, CorpusBand.Auto, 0.9, SameCluster: true),
+            new("c", "d", Stratum.S4WeakOverlap, true, CorpusBand.Review, 0.35, SameCluster: false),
+            new("e", "f", Stratum.S4WeakOverlap, true, CorpusBand.NoMatch, 0.1, SameCluster: false),
+            new("g", "h", Stratum.S4WeakOverlap, true, CorpusBand.NonComparable, null, SameCluster: false),
+            new("i", "j", Stratum.S4WeakOverlap, false, null, null, SameCluster: false)
         ];
         IReadOnlyList<FrozenStratumAssignment> frozen =
         [

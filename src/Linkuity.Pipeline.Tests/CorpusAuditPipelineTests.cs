@@ -55,7 +55,6 @@ public class CorpusAuditPipelineTests
         Assert.Equal(CorpusBand.Auto, outcome.Band);
         Assert.Equal(1.0, outcome.Score!.Value, precision: 6);
         Assert.True(outcome.SameCluster);
-        Assert.False(outcome.LikelyIndividual);
 
         var s1 = result.Strata.Single(s => s.Id == Stratum.S1Identical);
         Assert.Equal(1, s1.TruePairs);

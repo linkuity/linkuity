@@ -796,6 +796,53 @@ Common causes and fixes:
   identifier.
 - **Thresholds too low.** Raise `autoMatchThreshold` / `reviewThreshold`.
 
+### Measuring both failures at corpus scale (`match corpus audit`)
+
+`match blocking audit` and `match scoring audit` materialize every candidate pair
+with a full breakdown, which is what you want on a showcase-sized corpus and what you
+cannot afford on a million records. `match corpus audit` answers the same question
+aggregate-only, so it runs over a whole labelled corpus without holding a pair set:
+given records and a ground truth that assigns each record a canonical key, it reports
+four metrics —
+
+- **reachability** — true pairs that share at least one *unsuppressed* blocking key,
+  i.e. the recall ceiling blocking leaves you;
+- **direct auto recall** — true pairs scored at or above `autoMatchThreshold` on
+  their own, before clustering;
+- **post-cluster pairwise recall** — true pairs that ended up in the same cluster,
+  including those joined transitively through a third record;
+- **cluster pairwise precision** — the over-merging side: how many pairs sharing a
+  predicted cluster are genuinely the same entity.
+
+Pairs are also broken down by how similar the two names are after canonicalization
+(identical, containment, strong/weak overlap, disjoint), so "we lost recall" can be
+attributed to a cohort rather than guessed at.
+
+```powershell
+dotnet run --project src/Linkuity.Cli -- match corpus audit `
+  --input corpus.csv `
+  --ground-truth ground-truth.csv `
+  --profile company.profile.json
+```
+
+`--input` is the corpus CSV, `--ground-truth` is a CSV of `record_id,canonical_key`,
+and `--profile` takes a built-in name or a `*.profile.json` path (the same record
+sources as the sibling verbs are available — `--metadata` / `--metadata-store`).
+
+Run this way it just reports. It can also **gate**: `--write-baseline <dir>` freezes
+the current numbers as an artifact, and `--compare-baseline <dir>` re-runs and refuses
+to let the frozen numbers get worse. Both baseline modes additionally require
+`--corpus-source <path>` — the snapshot or manifest the corpus was extracted from —
+which is pinned by SHA-256 alongside the records, ground truth and profile, so a
+comparison across two different corpora is rejected rather than reported as a
+regression. Use it to keep a matching change honest: write a baseline before, compare
+after.
+
+Exit codes are a contract: **0** report-only run, successful baseline write, or a gate
+that passed; **1** gate failure — the two runs are comparable and something got worse;
+**2** usage error, or gate *refusal* because the runs are not comparable at all. A
+refusal is never reported as a failure; the two mean entirely different things.
+
 ### Hot and coarse blocking keys (and review-queue noise)
 
 A key shared by a large crowd — a common surname's `name:smith`, a catch-all domain

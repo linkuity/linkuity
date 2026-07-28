@@ -95,8 +95,7 @@ public sealed class CorpusAuditService
                     var rightRaw = RawName(records[hi], profile);
                     truePairs[Pack(lo, hi)] = new TruePairState(lo, hi,
                         ClassifyPair(Canonicalizer.Canonicalize(leftRaw), Canonicalizer.Canonicalize(rightRaw)),
-                        LowestSharedActiveKey(index.RecordKeys[lo], index.RecordKeys[hi], suppressed) >= 0,
-                        LikelyIndividual(leftRaw, rightRaw));
+                        LowestSharedActiveKey(index.RecordKeys[lo], index.RecordKeys[hi], suppressed) >= 0);
                 }
 
         var uf = new UnionFind(records.Count);
@@ -153,24 +152,12 @@ public sealed class CorpusAuditService
         return (double)intersection / union >= 0.5 ? Stratum.S3StrongOverlap : Stratum.S4WeakOverlap;
     }
 
-    /// <summary>True when neither raw name carries a legal-form token — a proxy for an individual
-    /// filer, reported as a cross-cutting diagnostic rather than a stratum.</summary>
-    internal static bool LikelyIndividual(string leftRaw, string rightRaw)
-        => !HasLegalForm(leftRaw) && !HasLegalForm(rightRaw);
-
-    /// <summary>Tokenizes with the canonicalizer's own suffix-KEEPING pipeline (Canonicalize
-    /// would have stripped the very token being looked for) and tests each token against the
-    /// canonicalizer's vocabulary, so the audit can never drift from the matcher.</summary>
-    private static bool HasLegalForm(string raw)
-        => Canonicalizer.CanonicalizeKeepingSuffixes(raw).Any(OrganizationNameCanonicalizer.IsLegalSuffix);
-
-    internal sealed class TruePairState(int left, int right, Stratum stratum, bool reachable, bool likelyIndividual)
+    internal sealed class TruePairState(int left, int right, Stratum stratum, bool reachable)
     {
         public int Left { get; } = left;
         public int Right { get; } = right;
         public Stratum Stratum { get; } = stratum;
         public bool Reachable { get; } = reachable;
-        public bool LikelyIndividual { get; } = likelyIndividual;
         public CorpusBand? Band { get; set; }
         public double? Score { get; set; }
         public bool SameCluster { get; set; }
@@ -239,7 +226,7 @@ public sealed class CorpusAuditService
             .OrderBy(x => x.Left).ThenBy(x => x.Right)
             .Select(x => new TruePairOutcome(
                 records[x.Left].SourceRecordId, records[x.Right].SourceRecordId,
-                x.Stratum, x.Reachable, x.Band, x.Score, x.SameCluster, x.LikelyIndividual))
+                x.Stratum, x.Reachable, x.Band, x.Score, x.SameCluster))
             .ToList();
 
         return new CorpusAuditResult(

@@ -78,12 +78,6 @@ public static class CorpusAuditTextFormatter
                 $"{s.NoMatch,8:N0} {s.NonComparable,8:N0} {recall,8}");
         }
 
-        // TruePairOutcome.LikelyIndividual is DELIBERATELY not reported, here or in the CSV. It is
-        // a heuristic — "neither raw name carries a legal-form token" — and the canonicalizer's
-        // legal-suffix vocabulary is known to over-match (e.g. "DE" as a suffix), so a printed
-        // count would systematically under-report individuals while reading as a measurement.
-        // Nothing in the spec asks for it. Do not "fix" this omission without first fixing the
-        // vocabulary and agreeing what the number means.
         var missed = result.AllTruePairs.Where(p => !p.SameCluster)
             .OrderBy(p => p.Stratum)
             .ThenBy(p => p.LeftSourceRecordId, StringComparer.Ordinal)

@@ -42,11 +42,4 @@ public class CorpusAuditStratumTests
     [InlineData("", false)]
     public void IsLegalSuffixMatchesTheCanonicalizerVocabulary(string token, bool expected)
         => Assert.Equal(expected, OrganizationNameCanonicalizer.IsLegalSuffix(token));
-
-    [Fact]
-    public void LikelyIndividual_TrueOnlyWhenNeitherSideHasLegalForm()
-    {
-        Assert.True(CorpusAuditService.LikelyIndividual("ARNHEIM WALTER R", "ARNHEIM WALTER RICHARD"));
-        Assert.False(CorpusAuditService.LikelyIndividual("ACME WIDGETS INC", "ACME WIDGETS"));
-    }
 }

@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
-using CsvHelper;
-using CsvHelper.Configuration;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
@@ -136,7 +134,7 @@ public static class CorpusAuditCommands
         }
 
         Dictionary<string, string> truth;
-        try { truth = ReadGroundTruth(truthPath); }
+        try { truth = AuditCliCommon.ReadGroundTruthStrict(truthPath); }
         catch (ArgumentException ex) { await Console.Error.WriteLineAsync(ex.Message); return 2; }
 
         var (maxBlockSize, maxErr) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
@@ -371,21 +369,4 @@ public static class CorpusAuditCommands
         return Convert.ToHexString(SHA256.HashData(stream));
     }
 
-    internal static Dictionary<string, string> ReadGroundTruth(string path)
-    {
-        using var reader = new StreamReader(path);
-        using var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture));
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (!csv.Read()) return map;
-        csv.ReadHeader();
-        while (csv.Read())
-        {
-            var id = csv.GetField("record_id");
-            var canonical = csv.GetField("canonical_key");
-            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(canonical)) continue;
-            if (!map.TryAdd(id, canonical))
-                throw new ArgumentException($"Duplicate record_id in ground truth: '{id}'.");
-        }
-        return map;
-    }
 }
