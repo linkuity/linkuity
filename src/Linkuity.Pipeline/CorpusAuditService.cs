@@ -228,6 +228,40 @@ public sealed class CorpusAuditService
             : score >= profile.ReviewThreshold ? CorpusBand.Review
             : CorpusBand.NoMatch;
 
+    private static long Choose2(long n) => n * (n - 1) / 2;
+
+    /// <summary>
+    /// Pair-counting cluster metrics from a contingency table — never by enumerating pairs inside
+    /// a cluster. Memory is O(records). Computed over the LABELLED PROJECTION (spec §7): an
+    /// unlabeled record contributes to neither predicted nor actual positives, but its presence
+    /// in a cluster still connects the labelled records around it.
+    /// </summary>
+    internal static (long TruePositive, long PredictedPositive, long ActualPositive) ClusterPairCounts(
+        int[] predictedRoot, string?[] trueLabel)
+    {
+        if (predictedRoot.Length != trueLabel.Length)
+            throw new ArgumentException("predictedRoot and trueLabel must be the same length.");
+
+        var labeledPerCluster = new Dictionary<int, long>();
+        var trueSize = new Dictionary<string, long>(StringComparer.Ordinal);
+        var cell = new Dictionary<(int, string), long>();
+
+        for (var i = 0; i < predictedRoot.Length; i++)
+        {
+            if (trueLabel[i] is not { } label) continue;      // labelled projection
+            labeledPerCluster[predictedRoot[i]] = labeledPerCluster.GetValueOrDefault(predictedRoot[i]) + 1;
+            trueSize[label] = trueSize.GetValueOrDefault(label) + 1;
+            var key = (predictedRoot[i], label);
+            cell[key] = cell.GetValueOrDefault(key) + 1;
+        }
+
+        long tp = 0, pp = 0, ap = 0;
+        foreach (var n in cell.Values) tp += Choose2(n);
+        foreach (var n in labeledPerCluster.Values) pp += Choose2(n);
+        foreach (var n in trueSize.Values) ap += Choose2(n);
+        return (tp, pp, ap);
+    }
+
     private static void Require(bool ok, string setting, string actual, string expected)
     {
         if (!ok)
