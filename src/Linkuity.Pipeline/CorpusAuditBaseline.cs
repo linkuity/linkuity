@@ -144,7 +144,14 @@ public sealed record CorpusAuditBaseline(
         return sb.ToString();
     }
 
-    public static IReadOnlyList<FrozenStratumAssignment> ReadStrataCsv(string csv)
+    /// <summary>
+    /// INTERNAL BY DESIGN. Parsing without verifying the sidecar's hash is the shortcut a hasty
+    /// caller reaches for, and it makes the integrity check in
+    /// <see cref="ReadStrataCsv(string, string)"/> skippable. Now that the CLI is the only caller,
+    /// the hash-verifying two-arg overload is the sole public route in; this one exists for the
+    /// parser's own tests and for that overload to delegate to.
+    /// </summary>
+    internal static IReadOnlyList<FrozenStratumAssignment> ReadStrataCsv(string csv)
     {
         ArgumentNullException.ThrowIfNull(csv);
 
