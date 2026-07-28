@@ -161,6 +161,73 @@ public sealed class CorpusAuditService
         return -1;
     }
 
+    /// <summary>Union-find with path halving and union by size: 2 ints per record, so 1.05M
+    /// records costs ~8MB.</summary>
+    internal sealed class UnionFind
+    {
+        private readonly int[] _parent;
+        private readonly int[] _size;
+
+        public UnionFind(int count)
+        {
+            _parent = new int[count];
+            _size = new int[count];
+            for (var i = 0; i < count; i++) { _parent[i] = i; _size[i] = 1; }
+        }
+
+        public int Find(int x)
+        {
+            while (_parent[x] != x)
+            {
+                _parent[x] = _parent[_parent[x]];
+                x = _parent[x];
+            }
+            return x;
+        }
+
+        public void Union(int a, int b)
+        {
+            var ra = Find(a);
+            var rb = Find(b);
+            if (ra == rb) return;
+            if (_size[ra] < _size[rb]) (ra, rb) = (rb, ra);
+            _parent[rb] = ra;
+            _size[ra] += _size[rb];
+        }
+    }
+
+    /// <summary>
+    /// Scores one pair, taking the MAX of both directions exactly as the batch path does
+    /// (BatchMatchingService.cs:63-73). For a symmetric evaluator this is a no-op; doing it
+    /// unconditionally removes any need to assume symmetry.
+    /// floorLifted is true when identifier-weighted's review floor raised the final score above
+    /// the raw weighted average — only possible when weighted is in [ReviewFloorGate, 0.80).
+    /// </summary>
+    internal static double ScorePair(
+        EntityRecord[] normalized, int l, int r,
+        ISimilarityStrategy similarity, IScoringStrategy scoring, MatchingProfile profile,
+        out bool comparable, out bool floorLifted)
+    {
+        var forwardSignals = similarity.Evaluate(normalized[l], normalized[r], profile);
+        var reverseSignals = similarity.Evaluate(normalized[r], normalized[l], profile);
+        comparable = forwardSignals.Count > 0 || reverseSignals.Count > 0;
+        if (!comparable) { floorLifted = false; return 0; }
+
+        var forward = scoring.Score(forwardSignals, profile);
+        var reverse = scoring.Score(reverseSignals, profile);
+        var best = forward.FinalScore >= reverse.FinalScore ? forward : reverse;
+
+        var weightedOnly = best.Breakdown.Sum(c => c.Contribution);
+        floorLifted = best.FinalScore > weightedOnly + 1e-12;
+        return best.FinalScore;
+    }
+
+    internal static CorpusBand BandOf(double score, bool comparable, MatchingProfile profile)
+        => !comparable ? CorpusBand.NonComparable
+            : score >= profile.AutoMatchThreshold ? CorpusBand.Auto
+            : score >= profile.ReviewThreshold ? CorpusBand.Review
+            : CorpusBand.NoMatch;
+
     private static void Require(bool ok, string setting, string actual, string expected)
     {
         if (!ok)
