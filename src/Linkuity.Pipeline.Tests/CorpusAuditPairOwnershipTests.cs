@@ -94,12 +94,14 @@ public class CorpusAuditPairOwnershipTests
     }
 
     /// <summary>Ownership must survive when the two records' key sets are NON-IDENTICAL, forcing
-    /// the two-pointer scan in LowestSharedActiveKey to advance past mismatched keys before it
-    /// finds the shared owner. Every other test in this file gives both records identical key
-    /// arrays, so only the equal branch ever executes there; the mismatch branches
-    /// (`left[i] &lt; right[j]` and `left[i] &gt; right[j]`) are untested without this case.
+    /// the two-pointer scan in LowestSharedActiveKey to advance past a mismatched key before it
+    /// finds the shared owner. Every other test above this one in the file gives both records
+    /// identical key arrays, so only the equal branch ever executes there. This case exercises
+    /// ONLY the `left[i] &lt; right[j]` branch (`i++`) — the symmetric `left[i] &gt; right[j]`
+    /// branch (`j++`) is NOT covered here; see OwnershipSurvivesLowerKeyOnTheRightSide for that.
     /// Ids: "a" interns first (0), "x" second (1), "b" third (2) -> record 0 = [0,1], record 1 =
-    /// [1,2]. The scan must step past "a" vs "b" (a mismatch) before landing on the shared "x".</summary>
+    /// [1,2]. The scan must step past "a" vs "b" (left[i] &lt; right[j], so i++) before landing on
+    /// the shared "x".</summary>
     [Fact]
     public void OwnershipSurvivesNonIdenticalKeySets()
     {
@@ -109,6 +111,27 @@ public class CorpusAuditPairOwnershipTests
 
         Assert.Single(seen);
         Assert.Equal((0, 1), seen[0]);
+    }
+
+    /// <summary>Forces the OTHER mismatch branch in LowestSharedActiveKey: `left[i] &gt; right[j]`
+    /// (`j++`). SyntheticIndex interns in first-seen order, so a later record can normally only
+    /// introduce HIGHER ids; this branch only fires when a later record shares a LOWER-id key that
+    /// an earlier record lacks. "b" interns to id 0 (first seen in record 0), "a" to id 1 (first
+    /// seen in record 1) — first-seen order, NOT alphabetical. Record 2 carries both, so
+    /// RecordKeys[2] = [0,1]. For pair (1,2): RecordKeys[1] = [1], RecordKeys[2] = [0,1]; the scan
+    /// starts at left[0]=1 vs right[0]=0, so left[i] &gt; right[j] and ONLY the j++ branch can
+    /// advance to the shared key 1. Mutating that j++ to i++ walks left off its end, returns -1,
+    /// and drops the pair.</summary>
+    [Fact]
+    public void OwnershipSurvivesLowerKeyOnTheRightSide()
+    {
+        var index = CorpusAuditFixtures.SyntheticIndex(["b"], ["a"], ["b", "a"]);
+
+        var seen = Collect(index, null, out _);
+
+        Assert.Equal(2, seen.Count);
+        Assert.Contains((0, 2), seen);
+        Assert.Contains((1, 2), seen);
     }
 
     /// <summary>Ownership must fall through TWO consecutive suppressed shared keys, not just one,
