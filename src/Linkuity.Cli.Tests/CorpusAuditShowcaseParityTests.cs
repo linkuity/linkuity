@@ -109,6 +109,17 @@ public class CorpusAuditShowcaseParityTests
         Assert.Equal(0.889, result.Metrics.PostClusterPairwiseRecall, precision: 3);
         Assert.Equal(64L, result.Counts.TruePositive);
 
+        // Reachability is pinned by its COUNT, deliberately, because it collides numerically with
+        // post-cluster recall on this corpus: 72 true pairs minus the 8 unreachable pure-rename
+        // pairs is 64 reachable, and TruePositive is independently also 64, so both metrics read
+        // 0.8889. That is a COINCIDENCE of this corpus, not a construction — the two answer
+        // different questions (did blocking reach the pair / did clustering recover it) and a
+        // future corpus will separate them. Anyone "validating" reachability against the published
+        // 88.9% would be right for the wrong reason, which is the same near-miss shape as reading
+        // ClusterSummary.UnifiedClusterCount as the showcase's "unified 46".
+        Assert.Equal(64L, result.Counts.ReachableTruePairs);
+        Assert.Equal(result.Metrics.PostClusterPairwiseRecall, result.Metrics.Reachability, precision: 9);
+
         var p = result.Metrics.ClusterPairwisePrecision;
         var r = result.Metrics.PostClusterPairwiseRecall;
         Assert.Equal(0.941, 2 * p * r / (p + r), precision: 3);
@@ -165,9 +176,9 @@ public class CorpusAuditShowcaseParityTests
     /// Spec §6.2: PER-PAIR score equality with the batch path, not merely matching aggregates —
     /// two aggregates can agree while individual pairs differ in compensating ways.
     ///
-    /// BuildMatchesCsv emits ONLY pairs at or above AutoMatchThreshold (BatchMatchingService.cs:66,
-    /// pinned by BatchPairScoringCharacterizationTests.OmitsPairsBelowAutoThreshold), so the
-    /// comparison is over auto-band pairs: every batch-emitted pair that is also a ground-truth
+    /// BuildMatchesCsv emits ONLY pairs at or above AutoMatchThreshold (BatchMatchingService.cs:56
+    /// and :65, pinned by BatchPairScoringCharacterizationTests.OmitsPairsBelowAutoThreshold), so
+    /// the comparison is over auto-band pairs: every batch-emitted pair that is also a ground-truth
     /// pair must be Auto here with the IDENTICAL score.
     ///
     /// A loop that silently compares zero pairs would pass and prove nothing, so the count of
@@ -193,7 +204,13 @@ public class CorpusAuditShowcaseParityTests
                 double.Parse(parts[2], CultureInfo.InvariantCulture);
         }
 
-        Assert.NotEmpty(batchPairs);
+        // Guards the OTHER side of the loop below. `continue` skips any batch-emitted pair that is
+        // not a ground-truth pair, so without this the test would certify nothing about such pairs
+        // — a future change that made the batch path emit a 64th, cross-company auto edge the audit
+        // does not produce would leave this test green while the two paths had genuinely diverged.
+        // Pinning the emitted count to 63 proves EVERY emitted pair is a ground-truth pair and
+        // therefore actually got score-compared, not merely that some did.
+        Assert.Equal(63, batchPairs.Count);
 
         var truth = CorpusAuditCommands.ReadGroundTruth(GroundTruthCsv());
         var audit = new CorpusAuditService(MatchingDefaults.CreateRegistry())

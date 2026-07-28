@@ -9,7 +9,7 @@ namespace Linkuity.Cli.Tests;
 /// Pins the batch path's observable pair-scoring behaviour so CorpusAuditService claims parity
 /// with something verified. Read from source and confirmed here:
 ///   - BuildMatchesCsv scores BOTH directions and keeps the MAX (BatchMatchingService.cs:63-73)
-///   - it emits ONLY pairs at or above AutoMatchThreshold (line 66), so review-band pairs never
+///   - it emits ONLY pairs at or above AutoMatchThreshold (lines 56 and 65), so review-band pairs never
 ///     appear and any parity test can compare auto-band pairs only. OmitsPairsBelowAutoThreshold
 ///     proves this specifically with a pair that clears Resolve's review gate (0.31) but not
 ///     BuildMatchesCsv's auto gate (0.41) — a pair suppressed by an earlier gate (e.g. never
@@ -101,7 +101,7 @@ public class BatchPairScoringCharacterizationTests
     ///
     /// This is deliberately NOT a pair that fails to reach Resolve's Candidates list (e.g. two
     /// names with 0.0 similarity): such a pair would make this test pass even if
-    /// BuildMatchesCsv's AutoMatchThreshold cut (BatchMatchingService.cs:66) were deleted outright,
+    /// BuildMatchesCsv's AutoMatchThreshold cut (BatchMatchingService.cs:56 and :65) were deleted outright,
     /// because Resolve's own review-threshold gate (MatchingEngine.cs:50) would suppress it one
     /// gate earlier for an unrelated reason. Assertion block 1 proves the pair clears that earlier
     /// gate and reaches Candidates with a score in the intended band, so assertion block 2 —
@@ -125,7 +125,7 @@ public class BatchPairScoringCharacterizationTests
         Assert.True(candidate.Score < Profile.AutoMatchThreshold,
             $"expected score < AutoMatchThreshold ({Profile.AutoMatchThreshold}), got {candidate.Score}");
 
-        // Block 2: BuildMatchesCsv's auto-match cut (BatchMatchingService.cs:66) suppresses the
+        // Block 2: BuildMatchesCsv's auto-match cut (BatchMatchingService.cs:56 and :65) suppresses the
         // same pair anyway, since its score never reaches AutoMatchThreshold.
         var csv = BatchMatchingService.BuildMatchesCsv(
             [Row("x", "ACME WIDGETS INC"), Row("y", "ACME GADGETS INC")], Profile);
