@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Linkuity.Pipeline.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Linkuity.Core\Linkuity.Core.csproj" />
     <ProjectReference Include="..\Linkuity.Matching\Linkuity.Matching.csproj" />
   </ItemGroup>

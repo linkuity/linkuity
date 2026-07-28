@@ -1,6 +1,4 @@
 using System.Globalization;
-using CsvHelper;
-using CsvHelper.Configuration;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
@@ -87,7 +85,7 @@ public static class ScoringAuditCommands
                 await Console.Error.WriteLineAsync($"Ground-truth CSV not found: {gtPath}");
                 return 2;
             }
-            groundTruth = ReadGroundTruthStrict(gtPath);
+            groundTruth = AuditCliCommon.ReadGroundTruthStrict(gtPath);
         }
 
         var (maxBlockSize, maxErr) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
@@ -133,25 +131,6 @@ public static class ScoringAuditCommands
         if (e2 is not null) return (null, null, e2);
         return (auto, review, null);
         // Range/ordering validation (0 <= review < auto <= 1) lives in the service.
-    }
-
-    /// <summary>Like the blocking reader, but duplicate record_id rows fail fast (spec).</summary>
-    private static IReadOnlyDictionary<string, string> ReadGroundTruthStrict(string path)
-    {
-        using var reader = new StreamReader(path);
-        using var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture));
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (!csv.Read()) return map;
-        csv.ReadHeader();
-        while (csv.Read())
-        {
-            var id = csv.GetField("record_id");
-            var canonical = csv.GetField("canonical_key");
-            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(canonical)) continue;
-            if (!map.TryAdd(id, canonical))
-                throw new ArgumentException($"Duplicate record_id in ground truth: '{id}'.");
-        }
-        return map;
     }
 
     private static int Explain(

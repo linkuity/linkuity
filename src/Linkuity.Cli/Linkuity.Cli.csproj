@@ -13,6 +13,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lets the showcase parity tests read the corpus through the CLI's OWN readers
+         (AuditCliCommon.ReadCsv / AuditCliCommon.ReadGroundTruthStrict) rather than a
+         reimplementation, so the audit under test sees byte-identical inputs to the CLI. -->
+    <InternalsVisibleTo Include="Linkuity.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Linkuity.Core\Linkuity.Core.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Local\Linkuity.Infrastructure.Local.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Lucene\Linkuity.Infrastructure.Lucene.csproj" />

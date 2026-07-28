@@ -31,6 +31,14 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
         "KK", "PTY", "PTE", "BHD", "SDN"
     };
 
+    /// <summary>
+    /// Whether a token is one of the trailing legal-form suffixes this canonicalizer strips.
+    /// Exposed so analysis tools classify names with the SAME vocabulary the matcher uses,
+    /// without handing out a mutable set. Additive: canonicalization behaviour is unchanged.
+    /// </summary>
+    public static bool IsLegalSuffix(string token)
+        => !string.IsNullOrEmpty(token) && LegalSuffixes.Contains(token.ToUpperInvariant());
+
     [GeneratedRegex(@"([A-Z0-9]+) *& *([A-Z0-9]+)")]
     private static partial Regex AmpersandJoin();
 
