@@ -31,7 +31,7 @@ public class CorpusAuditStratumTests
     public void NoSharedToken_IsS5()
         => Assert.Equal(Stratum.S5Disjoint, Classify("NATOMAS LABS, INC.", "VILLA TECHNOLOGIES, INC."));
 
-    /// <summary>The flag must consume the canonicalizer's OWN vocabulary. A second suffix list
+    /// <summary>The audit must consume the canonicalizer's OWN vocabulary. A second suffix list
     /// in the audit would drift from the matcher — the failure this instrument exists to catch.
     /// Exposed as a predicate, not the set, so the vocabulary stays immutable.</summary>
     [Theory]

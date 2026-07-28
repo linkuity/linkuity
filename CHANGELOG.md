@@ -20,6 +20,12 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   multiple-representation practice used by commercial entity-resolution
   engines. Fields whose semantic type has no registered canonicalizer fall
   back to plain token Jaccard.
+- `match corpus audit` CLI command: measures recall and precision at corpus scale
+  against a labelled ground truth without materializing a full candidate pair set —
+  reachability, direct auto recall, post-cluster pairwise recall, and cluster
+  pairwise precision, stratified by canonical-name overlap — plus a frozen-baseline
+  gate (`--write-baseline` / `--compare-baseline`) that pins every evaluation input
+  by SHA-256 and exits non-zero when a comparable run regresses.
 - `match scoring audit` and `match scoring explain` CLI commands: score every
   blocked candidate pair under a profile (batch blocking-linear fidelity) and
   report band outcomes, direct-edge precision/recall/F1 against a held-out

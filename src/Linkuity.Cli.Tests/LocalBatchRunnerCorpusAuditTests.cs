@@ -371,6 +371,8 @@ public class LocalBatchRunnerCorpusAuditTests
         // diffable; ordering on a terminal follows from the write order in CompareBaselineAsync.
         Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
         Assert.Contains("post-cluster pairwise recall", output, StringComparison.Ordinal);
+        Assert.Contains("stratum          true    reach     auto   review  nomatch  noncomp   recall",
+            output, StringComparison.Ordinal);
         // Nothing moved and nothing was waived, so neither annotation is printed.
         Assert.DoesNotContain("changed stratum", err, StringComparison.Ordinal);
         Assert.DoesNotContain("ACKNOWLEDGED", err, StringComparison.Ordinal);

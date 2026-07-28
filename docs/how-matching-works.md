@@ -836,7 +836,10 @@ to let the frozen numbers get worse. Both baseline modes additionally require
 which is pinned by SHA-256 alongside the records, ground truth and profile, so a
 comparison across two different corpora is rejected rather than reported as a
 regression. Use it to keep a matching change honest: write a baseline before, compare
-after.
+after. Because the gate pins every evaluation input by SHA-256, gate mode further
+requires `--input` specifically (a store-backed source has nothing single to hash)
+and requires `--profile` to be a file path rather than a built-in name (a name has
+no bytes to hash either).
 
 Exit codes are a contract: **0** report-only run, successful baseline write, or a gate
 that passed; **1** gate failure — the two runs are comparable and something got worse;
