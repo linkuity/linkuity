@@ -100,6 +100,67 @@ public sealed class CorpusAuditService
         return new KeyIndex(recordKeys, keyCount, keyMembers, [.. keyNames]);
     }
 
+    /// <summary>Engine parity: blocking-linear counts key frequency over a corpus that EXCLUDES
+    /// the query record, so a block of size S has per-query frequency S-1 and is suppressed iff
+    /// S-1 > maxBlockSize (BlockingAuditService.cs:118).</summary>
+    internal static bool[] SuppressedKeys(KeyIndex index, int? maxBlockSize)
+    {
+        var suppressed = new bool[index.KeyCount.Length];
+        if (maxBlockSize is not { } max) return suppressed;
+        for (var k = 0; k < index.KeyCount.Length; k++)
+            suppressed[k] = index.KeyCount[k] - 1 > max;
+        return suppressed;
+    }
+
+    /// <summary>
+    /// Emits each candidate pair EXACTLY ONCE with no deduplication structure: a pair is owned
+    /// by the lowest active key id both records carry. Returns the OCCURRENCE count — how many
+    /// block-pair visits happened — which is the real work measure and is always >= the number
+    /// of emitted pairs.
+    /// </summary>
+    internal static long ForEachCandidatePair(
+        KeyIndex index, int? maxBlockSize, Action<int, int> onPair, CancellationToken ct = default)
+    {
+        var suppressed = SuppressedKeys(index, maxBlockSize);
+        long occurrences = 0;
+
+        for (var k = 0; k < index.KeyMembers.Length; k++)
+        {
+            if (suppressed[k]) continue;
+            var ids = index.KeyMembers[k];
+            if (ids.Length < 2) continue;
+            ct.ThrowIfCancellationRequested();
+
+            for (var i = 0; i < ids.Length; i++)
+                for (var j = i + 1; j < ids.Length; j++)
+                {
+                    occurrences++;
+                    var a = ids[i];
+                    var b = ids[j];
+                    if (LowestSharedActiveKey(index.RecordKeys[a], index.RecordKeys[b], suppressed) == k)
+                        onPair(a < b ? a : b, a < b ? b : a);
+                }
+        }
+        return occurrences;
+    }
+
+    /// <summary>Lowest key id present in both ascending arrays and not suppressed; -1 if none.</summary>
+    private static int LowestSharedActiveKey(int[] left, int[] right, bool[] suppressed)
+    {
+        int i = 0, j = 0;
+        while (i < left.Length && j < right.Length)
+        {
+            if (left[i] < right[j]) i++;
+            else if (left[i] > right[j]) j++;
+            else
+            {
+                if (!suppressed[left[i]]) return left[i];
+                i++; j++;
+            }
+        }
+        return -1;
+    }
+
     private static void Require(bool ok, string setting, string actual, string expected)
     {
         if (!ok)
