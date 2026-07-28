@@ -18,13 +18,32 @@ public sealed record BaselineInputs(
     string StrataSha256, int? MaxBlockSize,
     double AutoMatchThreshold, double ReviewThreshold, double ReviewFloorGate);
 
-/// <summary>Raw counts only. Every gate inequality is evaluated on these integers, never on a
-/// derived ratio, so no comparison can be lost to rounding.</summary>
+/// <summary>
+/// Raw counts only. Every gate inequality is evaluated on these integers, never on a derived
+/// ratio, so no comparison can be lost to rounding. Spec §6.1 requires all four named metrics to
+/// be emitted by every run, so the numerators of all four are stored — <see cref="TruePositive"/>
+/// (post-cluster recall and precision), <see cref="ReachableTruePairs"/> and
+/// <see cref="DirectAutoTruePairs"/> — even though §10 gates only three of them. Recording a
+/// quantity and gating it are different things: a change that loses direct auto-matches but
+/// recovers them through clustering transitivity is visible here without failing the gate.
+/// </summary>
 public sealed record BaselineCounts(
     int Records, long TruePairs, long CandidatePairs,
-    long ActualPositive, long PredictedPositive, long TruePositive, long ReachableTruePairs);
+    long ActualPositive, long PredictedPositive, long TruePositive,
+    long ReachableTruePairs, long DirectAutoTruePairs);
 
-public sealed record BaselineStratum(Stratum Id, long TruePairs, long PostClusterTruePositive)
+/// <summary>
+/// One stratum cohort. Mirrors <see cref="CorpusStratumRow"/>'s shape because spec §8 requires
+/// per stratum: true pairs, reachability, and each reachable pair's outcome — auto / review /
+/// no-match / non-comparable. Non-comparable is deliberately distinct from no-match: it means no
+/// field was populated on both sides, a data problem rather than a scoring rejection. Only
+/// <see cref="TruePairs"/> and <see cref="PostClusterTruePositive"/> are gated (§10 rule 2); the
+/// rest are recorded so a regression can be diagnosed, not so it can be failed.
+/// </summary>
+public sealed record BaselineStratum(
+    Stratum Id, long TruePairs, long Reachable,
+    long Auto, long Review, long NoMatch, long NonComparable,
+    long PostClusterTruePositive)
 {
     /// <summary>Null (rendered "n/a") rather than 0.0 when the stratum is empty. Display only —
     /// the gate never compares this value.</summary>
@@ -92,13 +111,24 @@ public sealed record CorpusAuditBaseline(
     }
 
     public static CorpusAuditBaseline Create(CorpusAuditResult result, BaselineInputs inputs, string createdUtc)
-        => new(CurrentSchemaVersion, createdUtc, inputs,
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        return new CorpusAuditBaseline(CurrentSchemaVersion, createdUtc, inputs,
             new BaselineCounts(result.Counts.Records, result.Counts.TruePairs, result.Counts.CandidatePairs,
                 result.Counts.ActualPositive, result.Counts.PredictedPositive, result.Counts.TruePositive,
-                result.Counts.ReachableTruePairs),
-            result.Strata.Select(s => new BaselineStratum(s.Id, s.TruePairs, s.PostClusterTruePositive)).ToList());
+                result.Counts.ReachableTruePairs, result.Counts.DirectAutoTruePairs),
+            result.Strata
+                .Select(s => new BaselineStratum(s.Id, s.TruePairs, s.Reachable,
+                    s.Auto, s.Review, s.NoMatch, s.NonComparable, s.PostClusterTruePositive))
+                .ToList());
+    }
 
     // ---- frozen strata sidecar ----
+
+    /// <summary>The sidecar's first line. Validated on read rather than skipped: a headerless file
+    /// would otherwise lose its first pair silently, quietly un-gating it.</summary>
+    public const string StrataHeader = "left_id,right_id,stratum";
 
     /// <summary>Deterministic, byte-stable CSV: sorted by left then right, ordinal.</summary>
     public static string WriteStrataCsv(IReadOnlyList<FrozenStratumAssignment> assignments)
@@ -106,7 +136,7 @@ public sealed record CorpusAuditBaseline(
         ArgumentNullException.ThrowIfNull(assignments);
 
         var sb = new StringBuilder();
-        sb.Append("left_id,right_id,stratum\n");
+        sb.Append(StrataHeader).Append('\n');
         foreach (var a in assignments
             .OrderBy(a => a.LeftId, StringComparer.Ordinal)
             .ThenBy(a => a.RightId, StringComparer.Ordinal))
@@ -120,6 +150,13 @@ public sealed record CorpusAuditBaseline(
 
         var rows = new List<FrozenStratumAssignment>();
         var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        if (lines.Length == 0 || !string.Equals(lines[0].TrimEnd('\r'), StrataHeader, StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"Frozen strata sidecar is missing its header row (expected '{StrataHeader}'). " +
+                "Skipping line 1 unconditionally would drop a true pair from the frozen set and " +
+                "silently un-gate it.", nameof(csv));
+
         for (var i = 1; i < lines.Length; i++)
         {
             var parts = lines[i].TrimEnd('\r').Split(',');
@@ -128,6 +165,34 @@ public sealed record CorpusAuditBaseline(
             rows.Add(new FrozenStratumAssignment(parts[0], parts[1], Enum.Parse<Stratum>(parts[2])));
         }
         return rows;
+    }
+
+    /// <summary>
+    /// Reads the sidecar and verifies it is still the artifact the baseline was written against.
+    /// <para>
+    /// This is an ARTIFACT-INTEGRITY check, not a run-to-run comparison, and the distinction is
+    /// easy to get wrong. `strataSha256` cannot mean "the current run's strata match the
+    /// baseline's": spec §8.1 says reclassification is reported rather than gated, so the current
+    /// run's classification is *expected* to differ. Hashing the current run's strata and
+    /// comparing it to the baseline's would refuse every comparison that had anything to report.
+    /// The only coherent meaning is that the file on disk beside baseline.json has not been
+    /// edited or replaced since — which matters precisely because the spec says the corpus
+    /// directory is not version-controlled.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<FrozenStratumAssignment> ReadStrataCsv(string csv, string expectedSha256)
+    {
+        ArgumentNullException.ThrowIfNull(csv);
+
+        var actual = Sha256Of(csv);
+        if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Frozen strata sidecar does not match the baseline it accompanies " +
+                $"(expected sha256 {expectedSha256}, found {actual}). The baseline directory is not " +
+                "version-controlled; the file has been edited or replaced since the baseline was " +
+                "written, so the frozen cohorts can no longer be trusted.");
+
+        return ReadStrataCsv(csv);
     }
 
     public static string Sha256Of(string content)
@@ -145,7 +210,7 @@ public sealed record CorpusAuditBaseline(
         ArgumentNullException.ThrowIfNull(frozen);
 
         var byPair = current.ToDictionary(o => (o.LeftSourceRecordId, o.RightSourceRecordId));
-        var totals = new Dictionary<Stratum, (long Pairs, long Tp)>();
+        var cohorts = Enum.GetValues<Stratum>().ToDictionary(s => s, _ => new List<TruePairOutcome>());
 
         foreach (var f in frozen)
         {
@@ -154,12 +219,23 @@ public sealed record CorpusAuditBaseline(
                     $"Frozen true pair ({f.LeftId}, {f.RightId}) is absent from the current run. " +
                     "The ground-truth pair set changed; regenerate the baseline deliberately.",
                     nameof(current));
-            var entry = totals.GetValueOrDefault(f.Stratum);
-            totals[f.Stratum] = (entry.Pairs + 1, entry.Tp + (outcome.SameCluster ? 1 : 0));
+            cohorts[f.Stratum].Add(outcome);
         }
 
+        // Counted exactly as CorpusAuditService counts CorpusStratumRow, so a frozen cohort and a
+        // live stratum row are the same shape measured the same way — only the bucketing differs.
         return Enum.GetValues<Stratum>()
-            .Select(s => new BaselineStratum(s, totals.GetValueOrDefault(s).Pairs, totals.GetValueOrDefault(s).Tp))
+            .Select(s =>
+            {
+                var rows = cohorts[s];
+                return new BaselineStratum(s, rows.Count,
+                    rows.LongCount(o => o.Reachable),
+                    rows.LongCount(o => o.Band == CorpusBand.Auto),
+                    rows.LongCount(o => o.Band == CorpusBand.Review),
+                    rows.LongCount(o => o.Band == CorpusBand.NoMatch),
+                    rows.LongCount(o => o.Band == CorpusBand.NonComparable),
+                    rows.LongCount(o => o.SameCluster));
+            })
             .ToList();
     }
 
@@ -178,9 +254,13 @@ public sealed record CorpusAuditBaseline(
 
     // ---- comparison ----
 
+    /// <param name="reclassifiedPairs">Deliberately has no default. It is a pass-through diagnostic
+    /// (§8.1: reported, never gated), and a default of 0 would let a caller that forgot to run
+    /// <see cref="CountReclassified"/> report "nothing moved" indistinguishably from the truth.
+    /// Requiring it makes the omission a compile error instead of a silent zero.</param>
     public static BaselineComparison Compare(
         CorpusAuditBaseline baseline, CorpusAuditBaseline current,
-        bool acceptProfileChange, long reclassifiedPairs = 0)
+        bool acceptProfileChange, long reclassifiedPairs)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(current);
@@ -206,6 +286,15 @@ public sealed record CorpusAuditBaseline(
                 Refuse("autoMatchThreshold", baseline.Inputs.AutoMatchThreshold, current.Inputs.AutoMatchThreshold) ??
                 Refuse("reviewThreshold", baseline.Inputs.ReviewThreshold, current.Inputs.ReviewThreshold) ??
                 Refuse("reviewFloorGate", baseline.Inputs.ReviewFloorGate, current.Inputs.ReviewFloorGate);
+
+        // Rule 3 compares raw ReachableTruePairs counts, which only means "reachability decreased"
+        // because the denominator — total true pairs — is identical. The groundTruthSha256 refusal
+        // above guarantees that today, but nothing asserts it. Checking it directly makes the
+        // gate's only bare-count rule correct by construction rather than by argument.
+        if (refusal is null && baseline.Counts.TruePairs != current.Counts.TruePairs)
+            refusal = $"Cannot compare: truePairs changed ({baseline.Counts.TruePairs} -> " +
+                      $"{current.Counts.TruePairs}). Reachability is compared as a raw count, which " +
+                      "is only meaningful against an identical denominator.";
 
         if (refusal is null)
         {
@@ -255,10 +344,17 @@ public sealed record CorpusAuditBaseline(
     }
 
     /// <summary>
-    /// Writes baseline.json and baseline-strata.csv atomically, and REFUSES to overwrite an
-    /// existing baseline unless replace is true. The corpus directory is not version-controlled,
-    /// so "written once" has to be enforced by the tool rather than by convention — otherwise
-    /// resetting the gate to current behaviour is a single command.
+    /// Writes baseline.json and baseline-strata.csv, and REFUSES to overwrite an existing baseline
+    /// unless replace is true. The corpus directory is not version-controlled, so "written once"
+    /// has to be enforced by the tool rather than by convention — otherwise resetting the gate to
+    /// current behaviour is a single command.
+    /// <para>
+    /// Atomicity is PER FILE, not across the pair: each file is staged to a temp path and moved
+    /// into place, so neither can be observed half-written. The two moves are not a transaction,
+    /// however — a crash between them in replace mode leaves a new sidecar beside the old
+    /// baseline.json. <see cref="ReadStrataCsv(string, string)"/> is what detects that torn state:
+    /// the sidecar's hash will not match the baseline's <c>StrataSha256</c>.
+    /// </para>
     /// </summary>
     public static void WriteAtomic(
         string directory, CorpusAuditBaseline baseline,
