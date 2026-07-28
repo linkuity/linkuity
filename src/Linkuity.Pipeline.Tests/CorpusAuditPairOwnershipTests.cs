@@ -79,10 +79,49 @@ public class CorpusAuditPairOwnershipTests
     [Fact]
     public void OwnershipFallsThroughSuppressedLowestKey()
     {
-        // "aaa" interns first (id 0) and is shared by all four -> suppressed at max 2.
-        // "zzz" interns later and is shared only by records 0 and 1 -> must own the pair.
+        // "aaa" interns to id 0 BECAUSE it is listed first in record 0 below (SyntheticIndex
+        // interns in first-seen order, not alphabetically) — reordering this fixture to
+        // ["zzz", "aaa"] would flip the ids and quietly invalidate what this test proves.
+        // "aaa" is shared by all four records -> suppressed at max 2.
+        // "zzz" interns second (id 1) and is shared only by records 0 and 1 -> must own the pair.
         var index = CorpusAuditFixtures.SyntheticIndex(
             ["aaa", "zzz"], ["aaa", "zzz"], ["aaa"], ["aaa"]);
+
+        var seen = Collect(index, maxBlockSize: 2, out _);
+
+        Assert.Single(seen);
+        Assert.Equal((0, 1), seen[0]);
+    }
+
+    /// <summary>Ownership must survive when the two records' key sets are NON-IDENTICAL, forcing
+    /// the two-pointer scan in LowestSharedActiveKey to advance past mismatched keys before it
+    /// finds the shared owner. Every other test in this file gives both records identical key
+    /// arrays, so only the equal branch ever executes there; the mismatch branches
+    /// (`left[i] &lt; right[j]` and `left[i] &gt; right[j]`) are untested without this case.
+    /// Ids: "a" interns first (0), "x" second (1), "b" third (2) -> record 0 = [0,1], record 1 =
+    /// [1,2]. The scan must step past "a" vs "b" (a mismatch) before landing on the shared "x".</summary>
+    [Fact]
+    public void OwnershipSurvivesNonIdenticalKeySets()
+    {
+        var index = CorpusAuditFixtures.SyntheticIndex(["a", "x"], ["b", "x"]);
+
+        var seen = Collect(index, null, out _);
+
+        Assert.Single(seen);
+        Assert.Equal((0, 1), seen[0]);
+    }
+
+    /// <summary>Ownership must fall through TWO consecutive suppressed shared keys, not just one,
+    /// before reaching the active owner. "aaa" and "bbb" are both shared by all five records and
+    /// suppressed at max 2; "zzz" is shared only by records 0 and 1 and is active. This exercises
+    /// repeated (suppressed-equal -> i++, j++) steps in LowestSharedActiveKey, which a single-skip
+    /// fixture cannot distinguish from a fixture that only ever skips once.</summary>
+    [Fact]
+    public void OwnershipFallsThroughMultipleConsecutiveSuppressedKeys()
+    {
+        var index = CorpusAuditFixtures.SyntheticIndex(
+            ["aaa", "bbb", "zzz"], ["aaa", "bbb", "zzz"],
+            ["aaa", "bbb"], ["aaa", "bbb"], ["aaa", "bbb"]);
 
         var seen = Collect(index, maxBlockSize: 2, out _);
 
