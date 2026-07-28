@@ -248,16 +248,34 @@ public sealed class CorpusAuditService
             counts, metrics, summary, strata, outcomes);
     }
 
+    /// <summary>
+    /// Gate mode requires the records ID set and the ground-truth ID set to be exactly equal.
+    /// Cluster precision is undefined otherwise: an unlabeled record can transitively connect
+    /// two labelled clusters, and neither ignoring nor penalizing that is defensible in a gate.
+    /// </summary>
     private static void ValidateCoverage(
         bool gateMode, IReadOnlyList<EntityRecord> records,
         IReadOnlyDictionary<string, string> groundTruth,
         IReadOnlyDictionary<string, int> indexOf, int unlabeled)
     {
         if (!gateMode) return;
-        // Full implementation lands in Task 8; this keeps the parameter live meanwhile.
-        if (unlabeled > 0 || groundTruth.Count != records.Count)
-            throw new ArgumentException("Gate mode requires exact record/ground-truth ID-set equality.");
-        _ = indexOf;
+
+        if (unlabeled > 0)
+        {
+            var missing = records.Where(r => !groundTruth.ContainsKey(r.SourceRecordId))
+                .Select(r => r.SourceRecordId).OrderBy(k => k, StringComparer.Ordinal).ToList();
+            throw new ArgumentException(
+                $"Gate mode requires every record to be labeled; {missing.Count} record(s) have no " +
+                $"ground truth: {string.Join(", ", missing.Take(10))}{(missing.Count > 10 ? ", ..." : "")}.");
+        }
+
+        var absent = groundTruth.Keys.Where(k => !indexOf.ContainsKey(k))
+            .OrderBy(k => k, StringComparer.Ordinal).ToList();
+        if (absent.Count > 0)
+            throw new ArgumentException(
+                $"Gate mode requires exact ID-set equality; {absent.Count} ground-truth row(s) name " +
+                $"records absent from the corpus: {string.Join(", ", absent.Take(10))}" +
+                $"{(absent.Count > 10 ? ", ..." : "")}.");
     }
 
     internal static KeyIndex BuildIndex(
