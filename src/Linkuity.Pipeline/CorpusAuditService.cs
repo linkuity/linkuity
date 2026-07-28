@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching.Canonicalization;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -19,6 +20,10 @@ public sealed class CorpusAuditService
     internal sealed record KeyIndex(int[][] RecordKeys, int[] KeyCount, int[][] KeyMembers, string[] KeyNames);
 
     private static readonly StringComparer KeyComparer = StringComparer.OrdinalIgnoreCase;
+
+    /// <summary>Stateless — every method reads only static vocabulary — so one shared instance
+    /// is safe and keeps the audit on the matcher's own canonicalization.</summary>
+    private static readonly OrganizationNameCanonicalizer Canonicalizer = new();
 
     private readonly IStrategyRegistry _registry;
 
@@ -54,7 +59,205 @@ public sealed class CorpusAuditService
         if (duplicate is not null)
             throw new ArgumentException($"Duplicate SourceRecordId in input: '{duplicate.Key}'.");
 
-        throw new NotImplementedException("Passes 1-4 arrive in Tasks 3-8.");
+        var effectiveMax = maxBlockSize ?? profile.MaxBlockSize;
+        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var similarity = _registry.Similarity[profile.SimilarityStrategy];
+        var scoring = _registry.Scoring[profile.ScoringStrategy];
+
+        var indexOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < records.Count; i++) indexOf[records[i].SourceRecordId] = i;
+
+        var trueLabel = new string?[records.Count];
+        var unlabeled = 0;
+        for (var i = 0; i < records.Count; i++)
+            if (groundTruth.TryGetValue(records[i].SourceRecordId, out var label)) trueLabel[i] = label;
+            else unlabeled++;
+
+        ValidateCoverage(gateMode, records, groundTruth, indexOf, unlabeled);
+
+        var normalized = records.Select(r => normalization.Normalize(r, profile)).ToArray();
+        var index = BuildIndex(records, profile, _registry, ct);
+        var suppressed = SuppressedKeys(index, effectiveMax);
+
+        var byLabel = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < records.Count; i++)
+            if (trueLabel[i] is { } l)
+                (byLabel.TryGetValue(l, out var list) ? list : byLabel[l] = []).Add(i);
+
+        var truePairs = new Dictionary<long, TruePairState>();
+        foreach (var members in byLabel.Values)
+            for (var i = 0; i < members.Count; i++)
+                for (var j = i + 1; j < members.Count; j++)
+                {
+                    var lo = Math.Min(members[i], members[j]);
+                    var hi = Math.Max(members[i], members[j]);
+                    var leftRaw = RawName(records[lo], profile);
+                    var rightRaw = RawName(records[hi], profile);
+                    truePairs[Pack(lo, hi)] = new TruePairState(lo, hi,
+                        ClassifyPair(Canonicalizer.Canonicalize(leftRaw), Canonicalizer.Canonicalize(rightRaw)),
+                        LowestSharedActiveKey(index.RecordKeys[lo], index.RecordKeys[hi], suppressed) >= 0,
+                        LikelyIndividual(leftRaw, rightRaw));
+                }
+
+        var uf = new UnionFind(records.Count);
+        long emitted = 0, floorLifted = 0;
+        var occurrences = ForEachCandidatePair(index, effectiveMax, (l, r) =>
+        {
+            emitted++;
+            var score = ScorePair(normalized, l, r, similarity, scoring, profile, out var comparable, out var lifted);
+            if (lifted) floorLifted++;
+            var band = BandOf(score, comparable, profile);
+            if (band == CorpusBand.Auto) uf.Union(l, r);
+            if (truePairs.TryGetValue(Pack(l, r), out var state)) { state.Band = band; state.Score = score; }
+        }, ct);
+
+        var roots = new int[records.Count];
+        for (var i = 0; i < records.Count; i++) roots[i] = uf.Find(i);
+        foreach (var state in truePairs.Values) state.SameCluster = roots[state.Left] == roots[state.Right];
+
+        var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
+        return BuildResult(records, profile, effectiveMax, normalized, trueLabel, roots,
+            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap);
+    }
+
+    private static long Pack(int lo, int hi) => ((long)lo << 32) | (uint)hi;
+
+    /// <summary>
+    /// The raw organization name the strata are computed from: the FIRST matchable
+    /// OrganizationName field in profile field order. Profiles carrying more than one such
+    /// field would need an explicit choice; today none do.
+    /// </summary>
+    private static string RawName(EntityRecord record, MatchingProfile profile)
+    {
+        foreach (var field in profile.Fields)
+            if (field.SemanticType == SemanticFieldType.OrganizationName &&
+                field.Roles.HasFlag(FieldRole.Matchable) &&
+                record.Fields.TryGetValue(field.Name, out var v))
+                return v;
+        return "";
+    }
+
+    /// <summary>Name-similarity relationship between two canonical token lists (spec §8).</summary>
+    internal static Stratum ClassifyPair(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        var a = new HashSet<string>(left, StringComparer.Ordinal);
+        var b = new HashSet<string>(right, StringComparer.Ordinal);
+        if (a.Count == 0 || b.Count == 0) return Stratum.S5Disjoint;
+        if (a.SetEquals(b)) return Stratum.S1Identical;
+
+        var intersection = a.Count(b.Contains);
+        if (intersection == 0) return Stratum.S5Disjoint;
+        if (a.IsProperSubsetOf(b) || b.IsProperSubsetOf(a)) return Stratum.S2Containment;
+
+        var union = a.Count + b.Count - intersection;
+        return (double)intersection / union >= 0.5 ? Stratum.S3StrongOverlap : Stratum.S4WeakOverlap;
+    }
+
+    /// <summary>True when neither raw name carries a legal-form token — a proxy for an individual
+    /// filer, reported as a cross-cutting diagnostic rather than a stratum.</summary>
+    internal static bool LikelyIndividual(string leftRaw, string rightRaw)
+        => !HasLegalForm(leftRaw) && !HasLegalForm(rightRaw);
+
+    /// <summary>Tokenizes with the canonicalizer's own suffix-KEEPING pipeline (Canonicalize
+    /// would have stripped the very token being looked for) and tests each token against the
+    /// canonicalizer's vocabulary, so the audit can never drift from the matcher.</summary>
+    private static bool HasLegalForm(string raw)
+        => Canonicalizer.CanonicalizeKeepingSuffixes(raw).Any(OrganizationNameCanonicalizer.IsLegalSuffix);
+
+    internal sealed class TruePairState(int left, int right, Stratum stratum, bool reachable, bool likelyIndividual)
+    {
+        public int Left { get; } = left;
+        public int Right { get; } = right;
+        public Stratum Stratum { get; } = stratum;
+        public bool Reachable { get; } = reachable;
+        public bool LikelyIndividual { get; } = likelyIndividual;
+        public CorpusBand? Band { get; set; }
+        public double? Score { get; set; }
+        public bool SameCluster { get; set; }
+    }
+
+    private static CorpusAuditResult BuildResult(
+        IReadOnlyList<EntityRecord> records, MatchingProfile profile, int? effectiveMax,
+        EntityRecord[] normalized, string?[] trueLabel, int[] roots,
+        int unlabeled, long emitted, long occurrences, long floorLifted,
+        IEnumerable<TruePairState> states, long tp, long pp, long ap)
+    {
+        var all = states.ToList();
+
+        var strata = Enum.GetValues<Stratum>().Select(s =>
+        {
+            var rows = all.Where(x => x.Stratum == s).ToList();
+            return new CorpusStratumRow(s, rows.Count, rows.Count(x => x.Reachable),
+                rows.Count(x => x.Band == CorpusBand.Auto), rows.Count(x => x.Band == CorpusBand.Review),
+                rows.Count(x => x.Band == CorpusBand.NoMatch),
+                rows.Count(x => x.Band == CorpusBand.NonComparable),
+                rows.Count(x => x.SameCluster));
+        }).ToList();
+
+        // Field coverage over TRUE pairs: how often each matchable field was populated on both
+        // sides, so the report shows the real denominator distribution rather than a scalar.
+        var coverage = profile.Fields
+            .Where(f => f.Roles.HasFlag(FieldRole.Matchable))
+            .Select(f => new FieldCoverageRow(f.Name, f.Weight, all.Count(x =>
+                normalized[x.Left].Fields.TryGetValue(f.Name, out var lv) && !string.IsNullOrWhiteSpace(lv) &&
+                normalized[x.Right].Fields.TryGetValue(f.Name, out var rv) && !string.IsNullOrWhiteSpace(rv))))
+            .ToList();
+
+        long unlabeledEndpointPairs = 0;
+        var clusterSizes = new Dictionary<int, int>();
+        for (var i = 0; i < roots.Length; i++)
+            clusterSizes[roots[i]] = clusterSizes.GetValueOrDefault(roots[i]) + 1;
+
+        var labeledPerCluster = new Dictionary<int, int>();
+        for (var i = 0; i < roots.Length; i++)
+            if (trueLabel[i] is not null)
+                labeledPerCluster[roots[i]] = labeledPerCluster.GetValueOrDefault(roots[i]) + 1;
+        foreach (var (root, size) in clusterSizes)
+        {
+            var labeled = labeledPerCluster.GetValueOrDefault(root);
+            unlabeledEndpointPairs += (long)labeled * (size - labeled) + Choose2(size - labeled);
+        }
+
+        var summary = new CorpusAuditClusterSummary(
+            clusterSizes.Count,
+            clusterSizes.Count == 0 ? 0 : clusterSizes.Values.Max(),
+            clusterSizes.Values.Count(v => v > 1),
+            clusterSizes.Values.Count(v => v == 1));
+
+        var counts = new CorpusAuditCounts(records.Count, unlabeled, unlabeledEndpointPairs,
+            all.Count, emitted, occurrences, ap, pp, tp,
+            all.Count(x => x.Reachable), all.Count(x => x.Band == CorpusBand.Auto), floorLifted);
+
+        double Ratio(long n, long d) => d == 0 ? 0.0 : (double)n / d;
+        var metrics = new CorpusAuditMetrics(
+            Ratio(counts.ReachableTruePairs, all.Count),
+            Ratio(counts.DirectAutoTruePairs, all.Count),
+            Ratio(tp, ap),
+            Ratio(tp, pp));
+
+        var outcomes = all
+            .OrderBy(x => x.Left).ThenBy(x => x.Right)
+            .Select(x => new TruePairOutcome(
+                records[x.Left].SourceRecordId, records[x.Right].SourceRecordId,
+                x.Stratum, x.Reachable, x.Band, x.Score, x.SameCluster, x.LikelyIndividual))
+            .ToList();
+
+        return new CorpusAuditResult(
+            new CorpusAuditInputs(effectiveMax, profile.AutoMatchThreshold, profile.ReviewThreshold,
+                profile.ReviewFloorGate, coverage),
+            counts, metrics, summary, strata, outcomes);
+    }
+
+    private static void ValidateCoverage(
+        bool gateMode, IReadOnlyList<EntityRecord> records,
+        IReadOnlyDictionary<string, string> groundTruth,
+        IReadOnlyDictionary<string, int> indexOf, int unlabeled)
+    {
+        if (!gateMode) return;
+        // Full implementation lands in Task 8; this keeps the parameter live meanwhile.
+        if (unlabeled > 0 || groundTruth.Count != records.Count)
+            throw new ArgumentException("Gate mode requires exact record/ground-truth ID-set equality.");
+        _ = indexOf;
     }
 
     internal static KeyIndex BuildIndex(
@@ -200,8 +403,10 @@ public sealed class CorpusAuditService
     /// Scores one pair, taking the MAX of both directions exactly as the batch path does
     /// (BatchMatchingService.cs:63-73). For a symmetric evaluator this is a no-op; doing it
     /// unconditionally removes any need to assume symmetry.
-    /// floorLifted is true when identifier-weighted's review floor raised the final score above
-    /// the raw weighted average — only possible when weighted is in [ReviewFloorGate, 0.80).
+    /// floorLifted is true when ANY floor raised the final score above the raw weighted average:
+    /// identifier-weighted applies the 0.98 identifier floor on an exact identifier-field match
+    /// and the 0.80 review floor when weighted sits in [ReviewFloorGate, 0.80). It is a general
+    /// "a floor decided this band, not the similarity" flag, not a review-floor-only counter.
     /// </summary>
     internal static double ScorePair(
         EntityRecord[] normalized, int l, int r,
