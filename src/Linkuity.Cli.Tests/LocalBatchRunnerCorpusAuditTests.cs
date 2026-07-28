@@ -32,7 +32,8 @@ public class LocalBatchRunnerCorpusAuditTests
         }
     }
 
-    private sealed record Fixture(string Dir, string Csv, string GroundTruth, string ProfileA, string ProfileB)
+    private sealed record Fixture(
+        string Dir, string Csv, string GroundTruth, string ProfileA, string ProfileB, string CorpusSource)
     {
         public string BaselineDir => Path.Combine(Dir, "baseline");
         public string StrataPath => Path.Combine(BaselineDir, CorpusAuditBaseline.StrataFileName);
@@ -119,22 +120,30 @@ public class LocalBatchRunnerCorpusAuditTests
         }
         """);
 
-        return new Fixture(dir, csv, gt, profileA, profileB);
+        // The snapshot the corpus was extracted from. Gate mode pins it by SHA-256 (spec §13).
+        var corpusSource = Path.Combine(dir, "corpus-manifest.json");
+        File.WriteAllText(corpusSource, "{ \"snapshot\": \"2026-07-28\", \"records\": 4 }\n");
+
+        return new Fixture(dir, csv, gt, profileA, profileB, corpusSource);
     }
 
-    private static string[] Audit(Fixture f, string profile, params string[] extra) =>
+    /// <summary>Args WITHOUT --corpus-source, so the gate-mode requirement can be tested.</summary>
+    private static string[] AuditBare(Fixture f, string profile, params string[] extra) =>
     [
         "match", "corpus", "audit",
         "--input", f.Csv, "--ground-truth", f.GroundTruth, "--profile", profile,
         .. extra
     ];
 
+    private static string[] Audit(Fixture f, string profile, params string[] extra) =>
+        AuditBare(f, profile, ["--corpus-source", f.CorpusSource, .. extra]);
+
     private static async Task<Fixture> WriteBaselineAsync()
     {
         var f = WriteFixture();
         var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA, "--write-baseline", f.BaselineDir));
         Assert.Equal(0, exit);
-        Assert.Equal("", err);
+        Assert.Contains("Baseline written to", err, StringComparison.Ordinal);
         return f;
     }
 
@@ -210,7 +219,12 @@ public class LocalBatchRunnerCorpusAuditTests
             ["match", "corpus", "frobnicate", "--input", f.Csv, "--profile", f.ProfileA]);
 
         Assert.Equal(2, exit);
-        Assert.Contains("match corpus audit", err, StringComparison.Ordinal);
+        Assert.Contains("Usage: match corpus audit", err, StringComparison.Ordinal);
+        // The usage block documents every gate flag, including --corpus-source.
+        foreach (var flag in (string[])
+                 ["--input", "--profile", "--ground-truth", "--write-baseline", "--compare-baseline",
+                  "--replace-baseline", "--corpus-source", "--accept-profile-change", "--format", "--top"])
+            Assert.Contains(flag, err, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -300,6 +314,18 @@ public class LocalBatchRunnerCorpusAuditTests
         Assert.True(File.Exists(f.JsonPath));
         Assert.True(File.Exists(f.StrataPath));
         Assert.StartsWith(CorpusAuditBaseline.StrataHeader, File.ReadAllText(f.StrataPath), StringComparison.Ordinal);
+
+        // No placeholder reached the artifact: all four evaluation-input hashes are real SHA-256
+        // hex, none empty and none a passed-through path or profile name.
+        var json = File.ReadAllText(f.JsonPath);
+        foreach (var key in (string[])["RecordsSha256", "GroundTruthSha256", "ProfileSha256", "CorpusSourceSha256"])
+        {
+            var value = System.Text.Json.JsonDocument.Parse(json)
+                .RootElement.GetProperty("Inputs").GetProperty(key).GetString();
+            Assert.NotNull(value);
+            Assert.Equal(64, value!.Length);
+            Assert.True(value.All(Uri.IsHexDigit), $"{key} is not a hex SHA-256: '{value}'");
+        }
     }
 
     /// <summary>The corpus directory is not version-controlled, so "written once" has to be
@@ -325,8 +351,8 @@ public class LocalBatchRunnerCorpusAuditTests
             "--write-baseline", f.BaselineDir, "--replace-baseline"));
 
         Assert.Equal(0, exit);
-        Assert.Equal("", err);
-        Assert.Contains("Baseline written to", output, StringComparison.Ordinal);
+        Assert.Contains("Baseline written to", err, StringComparison.Ordinal);
+        Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
     }
 
     // ---- --compare-baseline ----
@@ -339,14 +365,15 @@ public class LocalBatchRunnerCorpusAuditTests
         var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
 
         Assert.Equal(0, exit);
-        Assert.Equal("", err);
-        Assert.Contains("GATE PASSED.", output, StringComparison.Ordinal);
-        // A verdict with no visible numbers is not actionable: the report precedes it.
-        Assert.True(
-            output.IndexOf("=== corpus audit ===", StringComparison.Ordinal)
-            < output.IndexOf("GATE PASSED.", StringComparison.Ordinal));
-        // Nothing moved, so no warning is printed.
-        Assert.DoesNotContain("changed stratum", output, StringComparison.Ordinal);
+        Assert.Contains("GATE PASSED.", err, StringComparison.Ordinal);
+        // A verdict with no visible numbers is not actionable: the report is emitted, in full,
+        // before the verdict. Report and verdict are on separate streams so `--format csv` stays
+        // diffable; ordering on a terminal follows from the write order in CompareBaselineAsync.
+        Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
+        Assert.Contains("post-cluster pairwise recall", output, StringComparison.Ordinal);
+        // Nothing moved and nothing was waived, so neither annotation is printed.
+        Assert.DoesNotContain("changed stratum", err, StringComparison.Ordinal);
+        Assert.DoesNotContain("ACKNOWLEDGED", err, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -426,11 +453,11 @@ public class LocalBatchRunnerCorpusAuditTests
         File.WriteAllText(f.StrataPath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         Assert.Equal(0xEF, File.ReadAllBytes(f.StrataPath)[0]);
 
-        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
 
         Assert.Equal(0, exit);
-        Assert.Equal("", err);
-        Assert.Contains("GATE PASSED.", output, StringComparison.Ordinal);
+        Assert.Contains("GATE PASSED.", err, StringComparison.Ordinal);
+        Assert.DoesNotContain("Frozen strata sidecar", err, StringComparison.Ordinal);
     }
 
     // ---- HAZARD 4: the hash-verifying overload is the only route in ----
@@ -481,12 +508,12 @@ public class LocalBatchRunnerCorpusAuditTests
     {
         var f = await WriteBaselineAsync();
 
-        var (_, output, _) = await RunAsync(Audit(f, f.ProfileB,
+        var (_, _, err) = await RunAsync(Audit(f, f.ProfileB,
             "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
 
         Assert.Contains("WARNING: 1 true pair(s) changed stratum since the baseline",
-            output, StringComparison.Ordinal);
-        Assert.Contains("bucketed by the BASELINE assignment", output, StringComparison.Ordinal);
+            err, StringComparison.Ordinal);
+        Assert.Contains("bucketed by the BASELINE assignment", err, StringComparison.Ordinal);
     }
 
     // ---- spec §10 amendment: evaluation inputs always refuse, system-under-test can be accepted ----
@@ -538,5 +565,231 @@ public class LocalBatchRunnerCorpusAuditTests
 
         Assert.Equal(2, exit);
         Assert.Contains("recordsSha256 changed", err, StringComparison.Ordinal);
+    }
+
+    /// <summary>The corpus source is an EVALUATION input: re-extracting the corpus from a different
+    /// snapshot refuses even with the acknowledgement (spec §13).</summary>
+    [Fact]
+    public async Task CompareBaseline_CorpusSourceChanged_RefusedEvenWithAcceptFlag()
+    {
+        var f = await WriteBaselineAsync();
+        File.WriteAllText(f.CorpusSource, "{ \"snapshot\": \"2026-08-01\", \"records\": 4 }\n");
+
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA,
+            "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
+
+        Assert.Equal(2, exit);
+        Assert.Contains("corpusSourceSha256 changed", err, StringComparison.Ordinal);
+    }
+
+    // ---- spec §10: the acknowledgement must be echoed, not merely accepted ----
+
+    /// <summary>
+    /// A `GATE PASSED.` transcript from a run that WAIVED the profile refusal must not be
+    /// indistinguishable from one where the profile never moved. Both halves are asserted: the
+    /// echo is present when the flag is used, and absent when it is not.
+    /// </summary>
+    [Fact]
+    public async Task CompareBaseline_AcceptProfileChange_IsEchoedBeforeTheVerdict()
+    {
+        var f = await WriteBaselineAsync();
+
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileB,
+            "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("ACKNOWLEDGED: --accept-profile-change was given", err, StringComparison.Ordinal);
+        Assert.Contains("WAIVED", err, StringComparison.Ordinal);
+        Assert.True(
+            err.IndexOf("ACKNOWLEDGED", StringComparison.Ordinal)
+            < err.IndexOf("GATE FAILED", StringComparison.Ordinal),
+            "the waiver must be visible above the verdict, not after it");
+    }
+
+    /// <summary>The passing case is the one that matters most: a waived run that PASSES still says
+    /// so, or the acknowledgement is decorative.</summary>
+    [Fact]
+    public async Task CompareBaseline_AcceptProfileChange_IsEchoedEvenWhenTheGatePasses()
+    {
+        var f = await WriteBaselineAsync();
+
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA,
+            "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
+
+        Assert.Equal(0, exit);
+        Assert.Contains("GATE PASSED.", err, StringComparison.Ordinal);
+        Assert.Contains("ACKNOWLEDGED: --accept-profile-change was given", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompareBaseline_WithoutAcceptFlag_EmitsNoAcknowledgement()
+    {
+        var f = await WriteBaselineAsync();
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("ACKNOWLEDGED", err, StringComparison.Ordinal);
+        Assert.DoesNotContain("ACKNOWLEDGED", output, StringComparison.Ordinal);
+    }
+
+    // ---- a corrupt baseline.json is exit 2, not a stack trace ----
+
+    /// <summary>
+    /// <c>JsonSerializer.Deserialize</c> throws <c>JsonException</c>, which derives from
+    /// <c>Exception</c> and not from <c>ArgumentException</c>. Program.cs has no top-level handler,
+    /// so a truncated baseline.json — precisely the torn artifact WriteAtomic's doc comment warns a
+    /// crash between its two file moves can leave — would otherwise escape as a stack trace.
+    /// </summary>
+    [Fact]
+    public async Task CompareBaseline_CorruptBaselineJson_Exit2()
+    {
+        var f = await WriteBaselineAsync();
+        var truncated = File.ReadAllText(f.JsonPath);
+        File.WriteAllText(f.JsonPath, truncated[..(truncated.Length / 2)]);
+
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+
+        Assert.Equal(2, exit);
+        Assert.NotEqual("", err);
+    }
+
+    [Fact]
+    public async Task CompareBaseline_BaselineJsonThatIsNotJsonAtAll_Exit2()
+    {
+        var f = await WriteBaselineAsync();
+        File.WriteAllText(f.JsonPath, "this is not json");
+
+        var (exit, _, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+
+        Assert.Equal(2, exit);
+        Assert.NotEqual("", err);
+    }
+
+    // ---- gate mode refuses an evaluation input it cannot hash (spec §13) ----
+
+    /// <summary>
+    /// A store-backed source has no single file to hash, so the baseline would record an empty
+    /// recordsSha256 — and "" == "", so a later run over an entirely different corpus would compare
+    /// clean. The gate refuses rather than write a refusal that can never fire.
+    /// </summary>
+    [Fact]
+    public async Task GateMode_StoreBackedRecordSource_Exit2()
+    {
+        var f = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(
+        [
+            "match", "corpus", "audit",
+            "--metadata", Path.Combine(f.Dir, "meta.db"),
+            "--project-id", Guid.NewGuid().ToString(),
+            "--ground-truth", f.GroundTruth, "--profile", f.ProfileA,
+            "--corpus-source", f.CorpusSource,
+            "--write-baseline", f.BaselineDir
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("hashable record source", err, StringComparison.Ordinal);
+        Assert.Contains("--input", err, StringComparison.Ordinal);
+        Assert.False(File.Exists(f.JsonPath));
+    }
+
+    /// <summary>With a built-in profile the recorded "hash" would be the constant string
+    /// "organization", so any later edit to the built-in definition is invisible to the
+    /// profileSha256 refusal (spec §5.1).</summary>
+    [Fact]
+    public async Task GateMode_BuiltInProfileName_Exit2()
+    {
+        var f = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(Audit(f, "organization", "--write-baseline", f.BaselineDir));
+
+        Assert.Equal(2, exit);
+        Assert.Contains("hashable profile", err, StringComparison.Ordinal);
+        Assert.Contains("organization", err, StringComparison.Ordinal);
+        Assert.False(File.Exists(f.JsonPath));
+    }
+
+    [Fact]
+    public async Task GateMode_MissingCorpusSource_Exit2()
+    {
+        var f = WriteFixture();
+
+        var (exit, _, err) = await RunAsync(AuditBare(f, f.ProfileA, "--write-baseline", f.BaselineDir));
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--corpus-source", err, StringComparison.Ordinal);
+        Assert.False(File.Exists(f.JsonPath));
+    }
+
+    /// <summary>The compare path is gated too, not just the write path.</summary>
+    [Fact]
+    public async Task GateMode_MissingCorpusSourceOnComparePath_Exit2()
+    {
+        var f = await WriteBaselineAsync();
+
+        var (exit, _, err) = await RunAsync(AuditBare(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--corpus-source", err, StringComparison.Ordinal);
+    }
+
+    /// <summary>Report-only runs pin nothing, so they must stay unaffected: no --corpus-source, and
+    /// a built-in profile name, are both fine when no baseline is involved.</summary>
+    [Fact]
+    public async Task ReportOnly_WithoutCorpusSource_IsUnaffected()
+    {
+        var f = WriteFixture();
+
+        var (exit, output, err) = await RunAsync(AuditBare(f, f.ProfileA));
+
+        Assert.Equal(0, exit);
+        Assert.Equal("", err);
+        Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
+    }
+
+    // ---- --format csv stays machine-readable under a gate flag ----
+
+    /// <summary>
+    /// The CSV report exists to be diffed. A `GATE PASSED.`, a reclassification WARNING or a
+    /// "Baseline written to …" line appended to stdout after the section,key,value body destroys
+    /// that. Both gate paths are checked, including the reclassifying compare that emits every
+    /// annotation at once.
+    /// </summary>
+    [Fact]
+    public async Task CsvFormat_UnderGateFlags_StdoutRemainsCleanCsv()
+    {
+        var f = WriteFixture();
+
+        var (writeExit, writeOut, _) = await RunAsync(Audit(f, f.ProfileA,
+            "--format", "csv", "--write-baseline", f.BaselineDir));
+        Assert.Equal(0, writeExit);
+        AssertCleanCsv(writeOut);
+
+        // Reclassifying compare: acknowledgement + warning + GATE FAILED all fire on this run.
+        var (compareExit, compareOut, compareErr) = await RunAsync(Audit(f, f.ProfileB,
+            "--format", "csv", "--compare-baseline", f.BaselineDir, "--accept-profile-change"));
+        Assert.Equal(1, compareExit);
+        AssertCleanCsv(compareOut);
+        // The annotations were not dropped — they moved to stderr.
+        Assert.Contains("ACKNOWLEDGED", compareErr, StringComparison.Ordinal);
+        Assert.Contains("changed stratum", compareErr, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", compareErr, StringComparison.Ordinal);
+    }
+
+    private static void AssertCleanCsv(string stdout)
+    {
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.TrimEnd('\r')).ToList();
+
+        Assert.Equal("section,key,value", lines[0]);
+        foreach (var line in lines)
+        {
+            Assert.Equal(3, line.Split(',').Length);
+            Assert.DoesNotContain("GATE", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("WARNING", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("ACKNOWLEDGED", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("Baseline written", line, StringComparison.Ordinal);
+        }
     }
 }

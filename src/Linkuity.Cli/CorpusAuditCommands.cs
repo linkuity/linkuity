@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Linkuity.Matching;
@@ -23,14 +24,52 @@ namespace Linkuity.Cli;
 /// Reporting a refusal as a failure sends someone debugging a regression that does not exist.</description></item>
 /// </list>
 /// </para>
+/// <para>
+/// STDOUT carries the report and nothing else; every annotation, acknowledgement and verdict goes
+/// to STDERR. Under <c>--format csv</c> the report is an artifact meant to be diffed, and a verdict
+/// line appended to it corrupts the very output whose reason for existing is that it diffs cleanly.
+/// </para>
 /// </summary>
 public static class CorpusAuditCommands
 {
+    private const string Usage = """
+        Usage: match corpus audit [options]
+
+          Record source (exactly one, inherited from `match blocking` / `match scoring`):
+            --input <csv>                 CSV corpus. REQUIRED in gate mode — it is the only
+                                          source the gate can pin by SHA-256.
+            --metadata <path>             File metadata store (needs --project-id).
+            --metadata-store postgres     Postgres store (needs --connection-string, --project-id).
+
+          Required:
+            --profile <name|file.json>    In gate mode this must be a FILE, not a built-in name.
+            --ground-truth <csv>          Columns: record_id, canonical_key.
+
+          Reporting:
+            --format <text|csv>           Default text. STDOUT carries the report alone; verdicts
+                                          and annotations go to STDERR so CSV stays diffable.
+            --top <n>                     Missed true pairs to list (default 20).
+            --max-block-size <n>          Overrides the profile's maxBlockSize.
+
+          Baseline gate (mutually exclusive; both require --corpus-source):
+            --write-baseline <dir>        Write baseline.json + baseline-strata.csv.
+            --replace-baseline            Permit overwriting an existing baseline.
+            --compare-baseline <dir>      Compare this run against a frozen baseline.
+            --corpus-source <path>        The snapshot/manifest/extract the corpus was built from.
+                                          Pinned by SHA-256 so snapshot drift is enforced, not
+                                          merely documented (spec §13).
+            --accept-profile-change       Waive the SYSTEM-UNDER-TEST refusals (profile, block
+                                          size, thresholds) for this run, and say so in the report.
+                                          Evaluation inputs are never waived.
+
+          Exit codes: 0 pass or report-only, 1 gate FAILURE, 2 usage error or gate REFUSAL.
+        """;
+
     public static async Task<int> RunAsync(string[] args, CancellationToken ct)
     {
         if (args.Length < 3 || !string.Equals(args[2], "audit", StringComparison.OrdinalIgnoreCase))
         {
-            await Console.Error.WriteLineAsync("Usage: match corpus audit [options].");
+            await Console.Error.WriteLineAsync(Usage);
             return 2;
         }
 
@@ -61,6 +100,14 @@ public static class CorpusAuditCommands
         // block size, thresholds) can be acknowledged with this flag. Default is unchanged.
         var acceptProfileChange = options.ContainsKey("accept-profile-change");
         var gateMode = write is not null || compare is not null;
+
+        // Checked from the flags alone, before anything is loaded: a gate whose inputs cannot be
+        // hashed is not a gate at all (see UnhashableGateInput).
+        if (gateMode && UnhashableGateInput(options, profilePath) is { } unhashable)
+        {
+            await Console.Error.WriteLineAsync(unhashable);
+            return 2;
+        }
 
         // Validated BEFORE the audit runs: a corpus-scale audit is measured in minutes, and
         // discovering a bad --top after it is pure waste.
@@ -117,11 +164,13 @@ public static class CorpusAuditCommands
             .Select(p => new FrozenStratumAssignment(p.LeftSourceRecordId, p.RightSourceRecordId, p.Stratum))
             .ToList();
 
+        // Every hash here is a real SHA-256 of a real file: UnhashableGateInput has already refused
+        // the run otherwise, so no placeholder can reach the artifact.
         var inputs = new BaselineInputs(
-            options.TryGetValue("input", out var inPath) && File.Exists(inPath) ? Sha256File(inPath) : "",
+            Sha256File(options["input"]),
             Sha256File(truthPath),
-            File.Exists(profilePath) ? Sha256File(profilePath) : profilePath,
-            options.TryGetValue("corpus-source", out var src) && File.Exists(src) ? Sha256File(src) : "",
+            Sha256File(profilePath),
+            Sha256File(options["corpus-source"]),
             CorpusAuditBaseline.Sha256Of(CorpusAuditBaseline.WriteStrataCsv(frozen)),
             result.Inputs.EffectiveMaxBlockSize,
             profile.AutoMatchThreshold, profile.ReviewThreshold, profile.ReviewFloorGate);
@@ -149,9 +198,12 @@ public static class CorpusAuditCommands
             return 2;
         }
 
+        // Report to stdout; the confirmation to stderr, so `--format csv > baseline-report.csv`
+        // captures the report alone.
         Console.Write(Render(result, options, top));
-        Console.WriteLine();
-        Console.WriteLine($"Baseline written to {Path.Combine(directory, CorpusAuditBaseline.BaselineFileName)}");
+        await Console.Error.WriteLineAsync(
+            $"{Environment.NewLine}Baseline written to " +
+            $"{Path.Combine(directory, CorpusAuditBaseline.BaselineFileName)}");
         return 0;
     }
 
@@ -205,8 +257,12 @@ public static class CorpusAuditCommands
                 Strata = CorpusAuditBaseline.AggregateByFrozenStratum(result.AllTruePairs, baselineStrata)
             };
         }
+        // JsonException is NOT an ArgumentException: without it a truncated or hand-mangled
+        // baseline.json escapes as an unhandled crash instead of exit 2, and Program.cs has no
+        // top-level handler. WriteAtomic's own doc comment warns that a crash between its two file
+        // moves leaves a torn artifact — this is the read side of exactly that state.
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException
-                                      or IOException or UnauthorizedAccessException)
+                                      or JsonException or IOException or UnauthorizedAccessException)
         {
             await Console.Error.WriteLineAsync(ex.Message);
             return 2;
@@ -215,17 +271,29 @@ public static class CorpusAuditCommands
         var comparison = CorpusAuditBaseline.Compare(
             baseline, currentInFrozenCohorts, acceptProfileChange, reclassified);
 
-        // Report BEFORE the verdict: a PASSED/FAILED/REFUSED line with no visible numbers beside
-        // it is not actionable.
+        // Report BEFORE the acknowledgement, warning and verdict: a PASSED/FAILED/REFUSED line with
+        // no visible numbers beside it is not actionable. Ordering on a terminal is guaranteed by
+        // this write order; the split across stdout/stderr is what keeps `--format csv` diffable.
         Console.Write(Render(result, options, top));
+
+        // Spec §10: the acknowledgement must be typed deliberately AND echoed in the report.
+        // Without this, a `GATE PASSED.` transcript from a run that WAIVED the profile refusal is
+        // byte-indistinguishable from one where the profile never moved — the gate becoming
+        // skippable in the artifact a human actually reads.
+        if (acceptProfileChange)
+            await Console.Error.WriteLineAsync(
+                $"{Environment.NewLine}ACKNOWLEDGED: --accept-profile-change was given, so the " +
+                "system-under-test refusals (profileSha256, maxBlockSize, autoMatchThreshold, " +
+                "reviewThreshold, reviewFloorGate) were WAIVED for this run. The verdict below was " +
+                "reached against a configuration that may differ from the baseline's. Evaluation " +
+                "inputs — records, ground truth, corpus source, frozen strata — were still enforced.");
+
         if (comparison.ReclassifiedPairs > 0)
-        {
-            Console.WriteLine();
-            Console.WriteLine(
-                $"WARNING: {comparison.ReclassifiedPairs.ToString("N0", CultureInfo.InvariantCulture)} " +
+            await Console.Error.WriteLineAsync(
+                $"{Environment.NewLine}WARNING: " +
+                $"{comparison.ReclassifiedPairs.ToString("N0", CultureInfo.InvariantCulture)} " +
                 "true pair(s) changed stratum since the baseline. Gated cohorts are bucketed by the " +
-                "BASELINE assignment, not by the classification above.");
-        }
+                "BASELINE assignment, not by the classification in the report above.");
 
         if (comparison.Refused)
         {
@@ -242,12 +310,46 @@ public static class CorpusAuditCommands
             return 1;
         }
 
-        Console.WriteLine();
-        Console.WriteLine("GATE PASSED.");
+        await Console.Error.WriteLineAsync($"{Environment.NewLine}GATE PASSED.");
         return 0;
     }
 
     // ---- helpers ----
+
+    /// <summary>
+    /// Gate mode refuses any evaluation input it cannot reduce to a SHA-256, naming which one and
+    /// why. A placeholder in the artifact is worse than no artifact: <c>""</c> equals <c>""</c>, so
+    /// a baseline written with an empty <c>recordsSha256</c> records a refusal that can NEVER fire
+    /// — a later run over an entirely different corpus would compare clean. Spec §13 requires
+    /// snapshot drift to be "pinned by SHA-256 in the manifest and ENFORCED BY THE GATE, not merely
+    /// documented". Report-only runs are unaffected; nothing is being pinned there.
+    /// <para>Returns null when every input is hashable.</para>
+    /// </summary>
+    private static string? UnhashableGateInput(
+        IReadOnlyDictionary<string, string> options, string profilePath)
+    {
+        if (!options.TryGetValue("input", out var inPath) || !File.Exists(inPath))
+            return "Gate mode requires a hashable record source: pass --input <csv>. A store-backed " +
+                   "source (--metadata / --metadata-store postgres) has no single file to hash, so " +
+                   "the baseline would record an empty recordsSha256 — and an empty hash matches " +
+                   "every other empty hash, so the records refusal could never fire. Writing or " +
+                   "comparing a baseline over a corpus the gate cannot pin is not a gate.";
+
+        if (!File.Exists(profilePath))
+            return $"Gate mode requires a hashable profile: '{profilePath}' resolves to a built-in " +
+                   "profile, not a file. The baseline would record that NAME where a hash belongs, " +
+                   "so any later edit to the built-in profile's definition would be invisible to the " +
+                   "profileSha256 refusal (spec §5.1). Write the profile out as a *.profile.json " +
+                   "file and pass its path.";
+
+        if (!options.TryGetValue("corpus-source", out var src) || !File.Exists(src))
+            return "Gate mode requires --corpus-source <path>: the snapshot, manifest or extract the " +
+                   "corpus was built from. Spec §13 pins snapshot drift by SHA-256 and requires the " +
+                   "GATE to enforce it; without the flag the baseline records an empty " +
+                   "corpusSourceSha256, which matches every other empty value and can never refuse.";
+
+        return null;
+    }
 
     /// <summary>A directory-valued flag. ParseFlags stores a bare `--flag` as "true", which is
     /// never a directory the caller meant, so it is rejected rather than silently used.</summary>
