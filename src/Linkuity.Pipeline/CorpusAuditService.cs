@@ -14,6 +14,12 @@ public sealed class CorpusAuditService
 {
     private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted"];
 
+    /// <summary>Interned blocking-key index. RecordKeys rows are ascending — Task 4's
+    /// lowest-shared-key ownership rule needs it for a linear intersection scan.</summary>
+    internal sealed record KeyIndex(int[][] RecordKeys, int[] KeyCount, int[][] KeyMembers, string[] KeyNames);
+
+    private static readonly StringComparer KeyComparer = StringComparer.OrdinalIgnoreCase;
+
     private readonly IStrategyRegistry _registry;
 
     public CorpusAuditService(IStrategyRegistry registry)
@@ -49,6 +55,49 @@ public sealed class CorpusAuditService
             throw new ArgumentException($"Duplicate SourceRecordId in input: '{duplicate.Key}'.");
 
         throw new NotImplementedException("Passes 1-4 arrive in Tasks 3-8.");
+    }
+
+    internal static KeyIndex BuildIndex(
+        IReadOnlyList<EntityRecord> records, MatchingProfile profile, IStrategyRegistry registry,
+        CancellationToken ct = default)
+    {
+        var normalization = registry.Normalization[profile.NormalizationStrategy];
+        var keyIds = new Dictionary<string, int>(KeyComparer);
+        var keyNames = new List<string>();
+        var members = new List<List<int>>();
+        var recordKeys = new int[records.Count][];
+
+        for (var i = 0; i < records.Count; i++)
+        {
+            if ((i & 0xFFFF) == 0) ct.ThrowIfCancellationRequested();
+
+            var normalized = normalization.Normalize(records[i], profile);
+            var ids = new SortedSet<int>();
+            foreach (var strategyName in profile.BlockingStrategies)
+                foreach (var key in registry.Blocking[strategyName].GenerateKeys(normalized, profile))
+                {
+                    if (!keyIds.TryGetValue(key, out var id))
+                    {
+                        id = keyNames.Count;
+                        keyIds[key] = id;
+                        keyNames.Add(key);
+                        members.Add([]);
+                    }
+                    ids.Add(id);
+                }
+
+            recordKeys[i] = [.. ids];
+            foreach (var id in ids) members[id].Add(i);
+        }
+
+        var keyMembers = new int[members.Count][];
+        var keyCount = new int[members.Count];
+        for (var k = 0; k < members.Count; k++)
+        {
+            keyMembers[k] = [.. members[k]];
+            keyCount[k] = members[k].Count;
+        }
+        return new KeyIndex(recordKeys, keyCount, keyMembers, [.. keyNames]);
     }
 
     private static void Require(bool ok, string setting, string actual, string expected)

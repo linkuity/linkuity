@@ -69,44 +69,43 @@ internal static class CorpusAuditFixtures
         CreatedAt = DateTimeOffset.UnixEpoch
     };
 
-    // TASK-3: uncomment when KeyIndex lands
-    // /// <summary>
-    // /// Builds a KeyIndex directly from an explicit record -> key-name map. Suppression and
-    // /// ownership tests use this instead of real names, so they test the ALGORITHM rather than
-    // /// which key a strategy happens to emit. Real-strategy fidelity is Task 3's job.
-    // /// </summary>
-    // internal static CorpusAuditService.KeyIndex SyntheticIndex(params string[][] keysPerRecord)
-    // {
-    //     var ids = new Dictionary<string, int>(StringComparer.Ordinal);
-    //     var names = new List<string>();
-    //     var members = new List<List<int>>();
-    //     var recordKeys = new int[keysPerRecord.Length][];
-    //
-    //     for (var i = 0; i < keysPerRecord.Length; i++)
-    //     {
-    //         var set = new SortedSet<int>();
-    //         foreach (var key in keysPerRecord[i])
-    //         {
-    //             if (!ids.TryGetValue(key, out var id))
-    //             {
-    //                 id = names.Count;
-    //                 ids[key] = id;
-    //                 names.Add(key);
-    //                 members.Add([]);
-    //             }
-    //             set.Add(id);
-    //         }
-    //         recordKeys[i] = [.. set];
-    //         foreach (var id in set) members[id].Add(i);
-    //     }
-    //
-    //     var keyMembers = new int[members.Count][];
-    //     var keyCount = new int[members.Count];
-    //     for (var k = 0; k < members.Count; k++)
-    //     {
-    //         keyMembers[k] = [.. members[k]];
-    //         keyCount[k] = members[k].Count;
-    //     }
-    //     return new CorpusAuditService.KeyIndex(recordKeys, keyCount, keyMembers, [.. names]);
-    // }
+    /// <summary>
+    /// Builds a KeyIndex directly from an explicit record -> key-name map. Suppression and
+    /// ownership tests use this instead of real names, so they test the ALGORITHM rather than
+    /// which key a strategy happens to emit. Real-strategy fidelity is Task 3's job.
+    /// </summary>
+    internal static CorpusAuditService.KeyIndex SyntheticIndex(params string[][] keysPerRecord)
+    {
+        var ids = new Dictionary<string, int>(StringComparer.Ordinal);
+        var names = new List<string>();
+        var members = new List<List<int>>();
+        var recordKeys = new int[keysPerRecord.Length][];
+
+        for (var i = 0; i < keysPerRecord.Length; i++)
+        {
+            var set = new SortedSet<int>();
+            foreach (var key in keysPerRecord[i])
+            {
+                if (!ids.TryGetValue(key, out var id))
+                {
+                    id = names.Count;
+                    ids[key] = id;
+                    names.Add(key);
+                    members.Add([]);
+                }
+                set.Add(id);
+            }
+            recordKeys[i] = [.. set];
+            foreach (var id in set) members[id].Add(i);
+        }
+
+        var keyMembers = new int[members.Count][];
+        var keyCount = new int[members.Count];
+        for (var k = 0; k < members.Count; k++)
+        {
+            keyMembers[k] = [.. members[k]];
+            keyCount[k] = members[k].Count;
+        }
+        return new CorpusAuditService.KeyIndex(recordKeys, keyCount, keyMembers, [.. names]);
+    }
 }
