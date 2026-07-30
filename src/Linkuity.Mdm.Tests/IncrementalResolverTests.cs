@@ -295,6 +295,65 @@ public class IncrementalResolverTests
         Assert.Equal(existing.Id, task.CandidateEntityRecordId);
     }
 
+    // ── Scenario 6: a raised IdentifierFloorGate on the CALLER's profile must reach the scorer
+    // through IncrementalResolver.WithCallOverrides. shared date_of_birth (identifier, sim 1.0,
+    // weight 2) + conflicting postal_code (exact, sim 0.0, weight 1) -> weighted = 2/3 = 0.6667.
+    // Under the profile-configured gate of 0.90 the identifier floor is blocked, and 0.6667 is
+    // below ReviewFloorGate 0.75 too, so the pair is a NoMatch and no auto edge is written. If
+    // WithCallOverrides drops IdentifierFloorGate the default 0.35 applies instead, the floor
+    // fires and the pair auto-merges — the RED behavior this pins.
+    [Fact]
+    public void RaisedIdentifierFloorGate_PropagatesThroughCallOverrides_AndBlocksBareDobAutoMerge()
+    {
+        var resolver = NewResolver();
+        var projectId = Guid.NewGuid();
+        var sourceId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        var seedBatch = Guid.NewGuid();
+        var incBatch = Guid.NewGuid();
+
+        var highGateProfile = new MatchingProfile
+        {
+            ContentType = PersonProfile.ContentType,
+            Fields = PersonProfile.Fields,
+            NormalizationStrategy = PersonProfile.NormalizationStrategy,
+            BlockingStrategies = PersonProfile.BlockingStrategies,
+            CandidateRetrievalStrategy = PersonProfile.CandidateRetrievalStrategy,
+            SimilarityStrategy = PersonProfile.SimilarityStrategy,
+            ScoringStrategy = PersonProfile.ScoringStrategy,
+            DecisionStrategy = PersonProfile.DecisionStrategy,
+            ClusteringStrategy = PersonProfile.ClusteringStrategy,
+            AutoMatchThreshold = PersonProfile.AutoMatchThreshold,
+            ReviewThreshold = PersonProfile.ReviewThreshold,
+            ReviewFloorGate = PersonProfile.ReviewFloorGate,
+            IdentifierFloorGate = 0.90
+        };
+
+        var existing = Keyed(resolver, Record(projectId, sourceId, seedBatch, "existing-1",
+            new() { ["date_of_birth"] = "1935-12-22", ["postal_code"] = "10001" }, now));
+        var existingCluster = new Cluster
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            MemberEntityRecordIds = [existing.Id],
+            CreatedAt = now
+        };
+
+        var context = new InMemoryResolutionContext();
+        context.Records.Add(existing);
+        context.Clusters.Add(existingCluster);
+
+        var incoming = Keyed(resolver, Record(projectId, sourceId, incBatch, "in-1",
+            new() { ["date_of_birth"] = "1935-12-22", ["postal_code"] = "90210" },
+            now.AddMinutes(1)));
+        var request = new IncrementalIngestRequest(projectId, sourceId, incBatch, [incoming], 0.90, 0.75);
+
+        var (result, _) = resolver.Resolve(
+            request, PersonProject(projectId, now), highGateProfile, [incoming], context, now.AddMinutes(1));
+
+        Assert.Equal(0, result.AutoMatches);
+    }
+
     private static (GoldenRecord Golden, GoldenRecordVersion Version) Golden(
         Guid projectId, Guid clusterId, Dictionary<string, string> fields, DateTimeOffset now)
     {

@@ -44,6 +44,30 @@ public class MatchingProfileTests
     }
 
     [Fact]
+    public void IdentifierFloorGate_DefaultsTo035()
+    {
+        // The corroboration gate: an identifier match only floors a pair to auto when the
+        // weighted average independently reaches this bar. 0.35 is measured, not chosen —
+        // see .superpowers/phase0/corroboration-separation.md.
+        var profile = new MatchingProfile
+        {
+            ContentType = "person",
+            Fields = [new ProfileField { Name = "email", SemanticType = SemanticFieldType.Email, Roles = FieldRole.Matchable }],
+            NormalizationStrategy = "identity",
+            BlockingStrategies = ["exact-value"],
+            CandidateRetrievalStrategy = "linear",
+            SimilarityStrategy = "field-weighted",
+            ScoringStrategy = "identifier-weighted",
+            DecisionStrategy = "threshold",
+            ClusteringStrategy = "union-find",
+            AutoMatchThreshold = 0.90,
+            ReviewThreshold = 0.75
+        };
+
+        Assert.Equal(0.35, profile.IdentifierFloorGate);
+    }
+
+    [Fact]
     public void ProfileField_WeightDefaultsToOne()
     {
         var field = new ProfileField { Name = "phone", SemanticType = SemanticFieldType.Phone, Roles = FieldRole.Matchable };

@@ -258,6 +258,7 @@ built-ins, override semantics) applies identically to both paths; see
 | `similarityStrategy` / `scoringStrategy` / `decisionStrategy` / `clusteringStrategy` | e.g. `field-weighted` / `identifier-weighted` / `threshold` / `union-find`. |
 | `autoMatchThreshold` / `reviewThreshold` | Decision bands in `[0,1]`, with auto ≥ review. |
 | `reviewFloorGate` | Minimum weighted similarity (default `0.75`) a non-identifier pair must reach before the `0.80` review floor is applied; below it the raw weighted score stands. |
+| `identifierFloorGate` | Minimum weighted similarity (default `0.35`) a pair must reach before an exact `Identifier` match may floor it to `0.98`; below it the identifier floor does not apply. Stops a coincidental collision on a non-unique identifier (a shared birth date, a switchboard phone) from auto-merging records that agree on nothing else. |
 
 Every name is validated at load time against the strategy registry; an unknown
 strategy, evaluator, semantic type, or role fails loudly with a message naming
@@ -693,7 +694,10 @@ Current incremental candidate generation uses durable blocking keys:
   `name`.
 
 Scoring returns `0` when no blocking keys overlap, `0.98` for a shared exact
-`Identifier` key, and otherwise, when the weighted similarity reaches the
+`Identifier` key **whose pair also reaches the identifier corroboration gate**
+(`IdentifierFloorGate`, default `0.35`) — an identifier match promotes a
+plausible pair to auto, it does not rescue one whose every other field
+disagrees — and otherwise, when the weighted similarity reaches the
 review-floor gate (`ReviewFloorGate`, default `0.75`), the greater of `0.80` and
 token Jaccard similarity; below the gate the raw weighted score stands (a shared
 blocking key alone does not reach the review band). Defaults are

@@ -105,7 +105,10 @@ public class IdentifierAwareScoringTests
         Assert.Equal(2, result.Breakdown.Count);
     }
 
-    private static MatchingProfile TwoFieldProfile(FieldRole emailRoles, double reviewFloorGate = 0.75) => new()
+    private static MatchingProfile TwoFieldProfile(
+        FieldRole emailRoles,
+        double reviewFloorGate = 0.75,
+        double identifierFloorGate = 0.35) => new()
     {
         ContentType = "t",
         Fields =
@@ -122,7 +125,8 @@ public class IdentifierAwareScoringTests
         ClusteringStrategy = "union-find",
         AutoMatchThreshold = 0.90,
         ReviewThreshold = 0.75,
-        ReviewFloorGate = reviewFloorGate
+        ReviewFloorGate = reviewFloorGate,
+        IdentifierFloorGate = identifierFloorGate
     };
 
     [Fact]
@@ -162,5 +166,138 @@ public class IdentifierAwareScoringTests
         var result = Scorer.Score([new("email", 0.6), new("first_name", 0.0)], profile);
         Assert.True(result.FinalScore < 0.75,
             $"expected the raw weighted score below review at the default gate, got {result.FinalScore}");
+    }
+
+    // ── Identifier corroboration gate (IdentifierFloorGate, default 0.35) ─────────────────
+    // An identifier match promotes a plausible pair to auto; it must not rescue an
+    // implausible one. The floor now fires only when the weighted average independently
+    // reaches the profile's IdentifierFloorGate.
+
+    /// <summary>
+    /// FEBRL-shaped fixture: a <c>date_of_birth</c> identifier (weight 2.0) alongside 6.0 of
+    /// non-identifier evidence, total weight 8.0. A bare DOB agreement is therefore
+    /// 2/8 = <b>0.25 exactly</b> (binary-exact, so boundary assertions are deterministic).
+    /// </summary>
+    private static MatchingProfile DobIdentifierProfile(
+        double identifierFloorGate = 0.35,
+        FieldRole dobRoles = FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier) => new()
+    {
+        ContentType = "person",
+        Fields =
+        [
+            new ProfileField { Name = "date_of_birth", SemanticType = SemanticFieldType.DateOfBirth, Roles = dobRoles, SimilarityEvaluator = "date", Weight = 2.0 },
+            new ProfileField { Name = "last_name", SemanticType = SemanticFieldType.LastName, Roles = FieldRole.Matchable, SimilarityEvaluator = "fuzzy", Weight = 2.0 },
+            new ProfileField { Name = "address_line", SemanticType = SemanticFieldType.AddressLine, Roles = FieldRole.Matchable, SimilarityEvaluator = "jaccard", Weight = 3.0 },
+            new ProfileField { Name = "postal_code", SemanticType = SemanticFieldType.PostalCode, Roles = FieldRole.Matchable, SimilarityEvaluator = "exact", Weight = 1.0 }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value"],
+        CandidateRetrievalStrategy = "blocking-linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.90,
+        ReviewThreshold = 0.75,
+        IdentifierFloorGate = identifierFloorGate
+    };
+
+    /// <summary>The identifier agrees; everything else disagrees. Weighted = 2/8 = 0.25.</summary>
+    private static List<SimilaritySignal> BareIdentifierSignals() =>
+    [
+        new("date_of_birth", 1.0),
+        new("last_name", 0.0),
+        new("address_line", 0.0),
+        new("postal_code", 0.0)
+    ];
+
+    [Fact]
+    public void IdentifierMatch_WeightedBelowGate_DoesNotFloor_RawWeightedStands()
+    {
+        // weighted 0.25 < default gate 0.35 -> no floor at all: the raw weighted score is final
+        // and the pair stays far below the 0.90 auto band.
+        var result = Scorer.Score(BareIdentifierSignals(), DobIdentifierProfile());
+
+        Assert.Equal(0.25, result.FinalScore, 10);
+        Assert.True(result.FinalScore < 0.90, $"expected no auto merge, got {result.FinalScore}");
+    }
+
+    [Fact]
+    public void IdentifierMatch_WeightedAboveGate_FloorsToAuto()
+    {
+        // date_of_birth 1.0 (w2) + last_name 1.0 (w2) -> weighted 4/8 = 0.50 >= gate 0.35.
+        var result = Scorer.Score(
+            [new("date_of_birth", 1.0), new("last_name", 1.0), new("address_line", 0.0), new("postal_code", 0.0)],
+            DobIdentifierProfile());
+
+        Assert.Equal(0.98, result.FinalScore, 10);
+    }
+
+    [Fact]
+    public void IdentifierMatch_WeightedExactlyAtGate_FloorsToAuto_BoundaryIsInclusive()
+    {
+        // weighted is exactly 0.25 (2/8, binary-exact) and the gate is exactly 0.25:
+        // the comparison is >=, so the floor MUST fire on the boundary itself.
+        var result = Scorer.Score(BareIdentifierSignals(), DobIdentifierProfile(identifierFloorGate: 0.25));
+
+        Assert.Equal(0.98, result.FinalScore, 10);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.25)]
+    [InlineData(0.35)]
+    [InlineData(0.90)]
+    [InlineData(1.0)]
+    public void ProfileWithNoIdentifierField_IsUnaffectedAtAnyGateValue(double gate)
+    {
+        // Same signals, same weights, but date_of_birth carries no Identifier role: the gate is
+        // inert and the raw weighted score stands whatever the gate is set to.
+        var profile = DobIdentifierProfile(gate, dobRoles: FieldRole.Matchable | FieldRole.Blocking);
+
+        var result = Scorer.Score(BareIdentifierSignals(), profile);
+
+        Assert.Equal(0.25, result.FinalScore, 10);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.35)]
+    [InlineData(1.0)]
+    public void ReviewFloor_IsUnchangedByTheIdentifierGate(double gate)
+    {
+        // email (Matchable, NOT Identifier) 1.0 (w3) + first_name 0.0 (w1) -> weighted 0.75,
+        // exactly the review-floor gate -> lifted to the 0.80 review floor, at every gate value.
+        var profile = TwoFieldProfile(FieldRole.Matchable, identifierFloorGate: gate);
+
+        var result = Scorer.Score([new("email", 1.0), new("first_name", 0.0)], profile);
+
+        Assert.Equal(0.80, result.FinalScore, 10);
+    }
+
+    [Fact]
+    public void IdentifierFloor_StillTakesPrecedenceOverReviewFloor_WhenTheGateIsCleared()
+    {
+        // date_of_birth 1.0 (w2) + address_line 1.0 (w3) + last_name 0.5 (w2) -> weighted
+        // (2 + 3 + 1)/8 = 0.75. Both floors are reachable; the identifier floor wins (0.98),
+        // never the 0.80 review floor. The two floors stay mutually exclusive, identifier first.
+        var result = Scorer.Score(
+            [new("date_of_birth", 1.0), new("address_line", 1.0), new("last_name", 0.5), new("postal_code", 0.0)],
+            DobIdentifierProfile());
+
+        Assert.Equal(0.98, result.FinalScore, 10);
+    }
+
+    [Fact]
+    public void IdentifierMatchBlockedByGate_FallsThroughToTheReviewFloor()
+    {
+        // Same weighted 0.75 pair, but a profile that raises the identifier gate to 0.90 blocks
+        // the identifier floor. Control then falls through to the untouched review-floor branch
+        // (0.75 >= ReviewFloorGate 0.75) -> 0.80, not 0.98.
+        var result = Scorer.Score(
+            [new("date_of_birth", 1.0), new("address_line", 1.0), new("last_name", 0.5), new("postal_code", 0.0)],
+            DobIdentifierProfile(identifierFloorGate: 0.90));
+
+        Assert.Equal(0.80, result.FinalScore, 10);
     }
 }

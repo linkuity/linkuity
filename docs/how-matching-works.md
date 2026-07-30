@@ -406,10 +406,11 @@ scorer:
    `weight` — so in the `person` profile, `email` and `phone` (weight 3) and
    `last_name` (weight 2) count more than `first_name` or `postal_code` (weight 1);
 2. applies a **floor**: if any field with the `Identifier` role matched exactly
-   (score 1.0), the pair score is floored to **0.98**; otherwise, **if the weighted
-   average clears the profile's review-floor gate** (`reviewFloorGate`, default
-   **0.75**), it is floored to **0.80** — below the gate no floor applies and the raw
-   weighted average stands;
+   (score 1.0) **and the weighted average clears the profile's identifier
+   corroboration gate** (`identifierFloorGate`, default **0.35**), the pair score is
+   floored to **0.98**; otherwise, **if the weighted average clears the profile's
+   review-floor gate** (`reviewFloorGate`, default **0.75**), it is floored to
+   **0.80** — below both gates no floor applies and the raw weighted average stands;
 3. returns `max(floor, weighted-average)`, or `0` if the pair had no comparable
    fields at all.
 
@@ -417,9 +418,11 @@ The `0.80` floor is deliberate: because retrieval only ever hands the scorer
 candidates that already **share a blocking key**, a shared block *plus* enough field
 agreement to clear the **review-floor gate** (default `0.75`) is treated as enough
 evidence to reach the **review** band. Stronger field agreement pushes the score up
-from there; an exact identifier match jumps it to `0.98` (auto). But a candidate that
-shares only a coarse block and otherwise *disagrees* stays below the gate and keeps
-its low raw score — a **no-match**. The practical consequence — **a shared block
+from there; a **corroborated** exact identifier match jumps it to `0.98` (auto). But a
+candidate that shares only a coarse block and otherwise *disagrees* stays below the gate
+and keeps its low raw score — a **no-match**, and that stays true even when the coarse
+block was an `Identifier` field, because the identifier floor has its own gate
+(`identifierFloorGate`, default `0.35`). The practical consequence — **a shared block
 reaches review only when field agreement clears the gate** — is the single most
 important thing to internalize before reading decision bands and tuning.
 
@@ -464,8 +467,9 @@ profile: `similarityStrategy` (`field-weighted`) and `scoringStrategy`
 
 Recall from scoring that a candidate sharing a block floors at `0.80` **only when its
 field agreement clears the review-floor gate** (default `0.75`), and an exact
-identifier match floors at `0.98`. So in practice, with the built-in profiles: an
-exact identifier match lands in **auto**; a shared-block candidate with enough field
+identifier match floors at `0.98` **only when its field agreement clears the identifier
+corroboration gate** (default `0.35`). So in practice, with the built-in profiles: a
+corroborated identifier match lands in **auto**; a shared-block candidate with enough field
 agreement lands in **review** (or **auto** if agreement is strong); and a
 **no-match** comes both from records that never shared a block (never compared) *and*
 from shared-block candidates whose field agreement falls below the gate — compared,
@@ -684,7 +688,8 @@ profile.
   - **`roles`** — any of `Searchable`, `Matchable`, `Blocking`, `Identifier`. The two
     that change matching most: **`Blocking`** makes the field eligible to produce
     blocking keys, and **`Identifier`** marks it a *strong identifier* — an exact
-    match on it auto-matches the pair (via the 0.98 floor) and it also produces an
+    match on it auto-matches the pair (via the 0.98 floor, provided the pair also
+    clears `identifierFloorGate`) and it also produces an
     exact blocking key. This is how `Email`/`Phone` act as identifiers for people,
     and how a `Sku`/`Gtin` does the same in other domains **with no engine change**.
   - **`similarityEvaluator`** and **`weight`** — how the field is compared and how
@@ -704,6 +709,15 @@ profile.
   common surname) from flooding the review queue. Lower it below `reviewThreshold` to promote
   strongly-evidenced sub-threshold pairs into review; leave it at the default for maximum review
   precision.
+- **`identifierFloorGate`** (optional, default `0.35`) — the minimum weighted per-field similarity a
+  pair must reach on its own before an exact `Identifier` match is allowed to floor it to `0.98`.
+  An identifier match promotes a plausible pair to auto; it does not rescue an implausible one.
+  This matters because profiles routinely give the `Identifier` role to fields that are *not*
+  unique to one entity — `date_of_birth`, a switchboard `phone`, a `domain_name` shared by sibling
+  companies — and without the gate any such coincidence auto-merged two records that agreed on
+  nothing else. Below the gate the identifier floor does not apply and the pair falls through to
+  the review-floor logic. Raise it to demand more corroboration; set it to `0` for the old
+  unconditional floor.
 
 **The worked profile (`person`).** The example in this guide runs on the built-in
 `person` profile. Its most relevant fields:
@@ -776,7 +790,9 @@ will save them. Common causes and fixes:
   audit` before assuming a raised cap will help.
 - **Thresholds too high.** Lower `autoMatchThreshold` cautiously — but prefer adding
   a reliable `Identifier` field, which auto-matches via the 0.98 floor without
-  loosening everything.
+  loosening everything. If a pair that agrees on an identifier still fails to
+  auto-match, check `identifierFloorGate` — the rest of the record may not be
+  corroborating it.
 
 ### Diagnosing over-merging
 

@@ -17,6 +17,7 @@ public sealed class MatchingProfileDocument
     public double? AutoMatchThreshold { get; init; }
     public double? ReviewThreshold { get; init; }
     public double? ReviewFloorGate { get; init; }
+    public double? IdentifierFloorGate { get; init; }
     public int? MaxBlockSize { get; init; }
 }
 

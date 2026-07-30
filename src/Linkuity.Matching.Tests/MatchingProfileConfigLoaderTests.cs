@@ -138,6 +138,37 @@ public class MatchingProfileConfigLoaderTests
     }
 
     [Fact]
+    public void LoadFromJson_IdentifierFloorGateAbsent_DefaultsTo035()
+    {
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, Registry());
+        Assert.Equal(0.35, profile.IdentifierFloorGate); // absent in JSON -> default
+    }
+
+    [Fact]
+    public void LoadFromJson_ReadsExplicitIdentifierFloorGate()
+    {
+        var json = OrganizationJson.Replace(
+            "\"reviewThreshold\": 0.75",
+            "\"reviewThreshold\": 0.75,\n      \"identifierFloorGate\": 0.5");
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
+        Assert.Equal(0.5, profile.IdentifierFloorGate);
+    }
+
+    [Theory]
+    [InlineData("1.5")]
+    [InlineData("-0.1")]
+    public void LoadFromJson_RejectsOutOfRangeIdentifierFloorGate(string value)
+    {
+        var json = OrganizationJson.Replace(
+            "\"reviewThreshold\": 0.75",
+            $"\"reviewThreshold\": 0.75,\n      \"identifierFloorGate\": {value}");
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(json, Registry()));
+        Assert.Contains("identifierFloorGate", ex.Message);
+        Assert.Contains("[0, 1]", ex.Message);
+    }
+
+    [Fact]
     public void LoadFromJson_RejectsDuplicateFieldName()
     {
         var json = JsonWith("\"name\": \"domain_name\"", "\"name\": \"source\"");

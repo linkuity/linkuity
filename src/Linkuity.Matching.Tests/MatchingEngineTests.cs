@@ -71,4 +71,51 @@ public class MatchingEngineTests
         Assert.Equal(0.98, result.Candidates[0].Score);
         Assert.True(result.Candidates[0].Score >= result.Candidates[1].Score);
     }
+
+    // ── Defect regression: two unrelated people sharing nothing but a birth date ──────────
+    // On the FEBRL corpus the unconditional identifier floor produced 313 false auto-merges,
+    // 100 % of them bare date-of-birth collisions: distinct people fused because they share a
+    // birth date while name, contact details and address all disagree. Modelled on the real
+    // pair rec-1069-dup-0 | rec-774-org (see .superpowers/phase0/baseline.md, Task C2).
+    private static readonly Linkuity.Matching.Profiles.MatchingProfile IdentifierProfile =
+        Linkuity.Matching.Profiles.DefaultMatchingProfileProvider.CreatePersonProfile()
+            .WithCandidateRetrievalStrategy("blocking-linear");
+
+    private static EntityRecord StoredWithIdentifierProfile(string id, IReadOnlyDictionary<string, string> fields)
+        => TestRecords.Person(id, fields, KeyEngine.GenerateBlockingKeys(
+            TestRecords.Person(id, fields, []), IdentifierProfile));
+
+    [Fact]
+    public void SharedDateOfBirthAlone_DoesNotMergeDistinctPeople()
+    {
+        var corpus = new[]
+        {
+            StoredWithIdentifierProfile("connor", new Dictionary<string, string>
+            {
+                ["first_name"] = "Connor",
+                ["last_name"] = "Moerlakd",
+                ["date_of_birth"] = "1935-12-22",
+                ["email"] = "connor.moerlakd@example.com",
+                ["phone"] = "0299991111",
+                ["address_line"] = "Arthur Circle",
+                ["postal_code"] = "2680"
+            })
+        };
+        var incoming = StoredWithIdentifierProfile("jade", new Dictionary<string, string>
+        {
+            ["first_name"] = "Jade",
+            ["last_name"] = "Zimmermann",
+            ["date_of_birth"] = "1935-12-22",
+            ["email"] = "jade.zimmermann@example.org",
+            ["phone"] = "0733332222",
+            ["address_line"] = "Nepean Place",
+            ["postal_code"] = "4573"
+        });
+
+        var result = Engine.Resolve(incoming, corpus, IdentifierProfile);
+
+        Assert.NotEqual(MatchDecision.AutoMatch, result.Decision);
+        Assert.True(result.FinalScore < IdentifierProfile.AutoMatchThreshold,
+            $"a bare date-of-birth collision must not auto-merge, got {result.FinalScore}");
+    }
 }

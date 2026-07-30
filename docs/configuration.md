@@ -93,7 +93,8 @@ annotated:
   "autoMatchThreshold": 0.90,
   "reviewThreshold": 0.75
 
-  // reviewFloorGate omitted here -> defaults to 0.75 (see below).
+  // reviewFloorGate omitted here -> defaults to 0.75, and
+  // identifierFloorGate -> 0.35 (see below).
 }
 ```
 
@@ -119,12 +120,13 @@ annotated block above is not fiction, it will load as-is.)
 | `maxBlockSize` | no | Absolute cap on how many records a single blocking key may match before that key is suppressed entirely (produces zero candidates rather than being ranked/truncated). Distinct from `MaxCandidates` (a retrieval-time top-N cap per query, not a key-frequency cap). Omitted ⇒ no suppression on the in-process `linear` path; the durable Lucene path derives a default from `MaxCandidates` when unset. Must be ≥ 1 if present. The built-in `organization` profile sets it to `50`. See [how-matching-works.md](how-matching-works.md#blocking) and `match blocking audit` for measuring its effect. |
 | `candidateRetrievalStrategy` | yes | `linear` or `blocking-linear` in the in-process engine registry (durable ingest overrides this with an index-backed retrieval — Lucene — regardless of what's declared here; see [Batch vs. durable usage](#batch-vs-durable-usage-of-the-same-files)). Must be registered. |
 | `similarityStrategy` | yes | `default` or `field-weighted` (the built-in profiles use `field-weighted`, which honors per-field `similarityEvaluator`/`weight`). Must be registered. |
-| `scoringStrategy` | yes | `default`, `weighted`, or `identifier-weighted` (the built-in profiles use `identifier-weighted`, which floors a pair to `0.98` on an exact `Identifier` match). Must be registered. |
+| `scoringStrategy` | yes | `default`, `weighted`, or `identifier-weighted` (the built-in profiles use `identifier-weighted`, which floors a pair to `0.98` on an exact `Identifier` match that also clears `identifierFloorGate`). Must be registered. |
 | `decisionStrategy` | yes | `threshold` (the only built-in decision strategy). Must be registered. |
 | `clusteringStrategy` | yes | `union-find` (the only built-in clustering strategy). Must be registered. |
 | `autoMatchThreshold` | yes | Score ≥ this auto-matches. Must be in `[0, 1]`. |
 | `reviewThreshold` | yes | Score in `[reviewThreshold, autoMatchThreshold)` becomes a review task. Must be in `[0, 1]`, and **`autoMatchThreshold` must be strictly greater than `reviewThreshold`** — the loader rejects the equal boundary. |
 | `reviewFloorGate` | no | Minimum weighted per-field similarity a non-identifier candidate must reach before the scorer's `0.80` review floor applies. Defaults to `0.75` when omitted. Must be in `[0, 1]`; there is no required relationship to `reviewThreshold` — it's a free tuning knob (see [how-matching-works.md](how-matching-works.md#the-profile-model)). |
+| `identifierFloorGate` | no | Corroboration gate for the identifier floor: the minimum weighted per-field similarity a pair must reach on its own before a field with the `Identifier` role matching at `1.0` may floor it to `0.98` (auto). Defaults to `0.35` when omitted; must be in `[0, 1]`. An identifier match promotes a *plausible* pair to auto; it does not rescue an implausible one. Raise it when a profile marks something not truly unique to one entity as an `Identifier` (`date_of_birth`, a shared switchboard `phone`, a `domain_name` shared by sibling companies); set it to `0` to restore an unconditional floor. Because the weighted average is normalized over the fields *both* records populate, the right value depends on the profile's field shape — re-measure rather than copying it across very different profiles. |
 
 Source: [`MatchingProfileConfigLoader.Build`/`BuildField`](../src/Linkuity.Matching/Profiles/Configuration/MatchingProfileConfigLoader.cs) and
 [`MatchingProfileDocument`](../src/Linkuity.Matching/Profiles/Configuration/MatchingProfileDocument.cs).
