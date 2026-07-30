@@ -128,6 +128,18 @@ annotated block above is not fiction, it will load as-is.)
 | `reviewFloorGate` | no | Minimum weighted per-field similarity a non-identifier candidate must reach before the scorer's `0.80` review floor applies. Defaults to `0.75` when omitted. Must be in `[0, 1]`; there is no required relationship to `reviewThreshold` — it's a free tuning knob (see [how-matching-works.md](how-matching-works.md#the-profile-model)). |
 | `identifierFloorGate` | no | Corroboration gate for the identifier floor: the minimum weighted per-field similarity a pair must reach on its own before a field with the `Identifier` role matching at `1.0` may floor it to `0.98` (auto). Defaults to `0.35` when omitted; must be in `[0, 1]`. An identifier match promotes a *plausible* pair to auto; it does not rescue an implausible one. Raise it when a profile marks something not truly unique to one entity as an `Identifier` (`date_of_birth`, a shared switchboard `phone`, a `domain_name` shared by sibling companies); set it to `0` to restore an unconditional floor. Because the weighted average is normalized over the fields *both* records populate, the right value depends on the profile's field shape — re-measure rather than copying it across very different profiles. |
 
+**Known limitation:** `identifierFloorGate` is one number per profile, so it can't
+tell apart an identifier that's sufficient alone from one that only means
+something with corroboration. `samples/durable/product-360/product.profile.json`
+shows the problem: `gtin` (globally unique — a match really does mean the same
+product) and `sku` (vendor-scoped only, so a lone match doesn't) both carry
+weight `3.0` of `9.0` total, giving a bare-identifier-only match a weighted score
+of `0.333` — just under the `0.35` default gate. In practice, a lone `gtin` match
+with nothing else agreeing will not auto-merge on that profile. Lowering the gate
+to admit it would simultaneously admit lone-`sku` merges, which are wrong, so the
+gate is deliberately left as-is. Per-field identifier configuration (rather than
+one gate per profile) is the real fix and is planned.
+
 Source: [`MatchingProfileConfigLoader.Build`/`BuildField`](../src/Linkuity.Matching/Profiles/Configuration/MatchingProfileConfigLoader.cs) and
 [`MatchingProfileDocument`](../src/Linkuity.Matching/Profiles/Configuration/MatchingProfileDocument.cs).
 
@@ -141,7 +153,7 @@ is *for*:
 | `Searchable` | The field can be used to look up records (informational; doesn't itself change matching). |
 | `Matchable` | The field's similarity is compared and contributes to the weighted pair score. |
 | `Blocking` | The field is eligible to produce blocking keys — only records sharing a blocking key are ever compared. |
-| `Identifier` | The field is a *strong identifier*: an exact match on it is decisive evidence (the `identifier-weighted` scorer floors such a pair near auto-match), and it also produces an exact blocking key. Normally paired with `Matchable` and `Blocking`. |
+| `Identifier` | The field is a *strong identifier*: an exact match on it is decisive evidence — once the pair's weighted score also clears `identifierFloorGate`, the `identifier-weighted` scorer floors such a pair near auto-match — and it also produces an exact blocking key. Normally paired with `Matchable` and `Blocking`. |
 
 An empty `roles: []` means the field is carried through the pipeline (e.g.
 into the golden record) but plays no part in matching — the usual choice for

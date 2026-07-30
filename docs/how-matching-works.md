@@ -801,10 +801,15 @@ clearly aren't the same entity.
 
 Common causes and fixes:
 
-- **A non-unique field is marked `Identifier`.** An `Identifier` exact match forces
-  an auto-merge, so marking a shared value (a company-wide email domain, a household
-  phone) as `Identifier` will fuse unrelated records. Fix: remove the `Identifier`
-  role from fields that aren't truly unique per entity.
+- **A non-unique field is marked `Identifier`.** An `Identifier` exact match floors
+  a pair toward auto-match once the pair's weighted score clears `identifierFloorGate`
+  (default `0.35`), so a shared value (a company-wide email domain, a household
+  phone) marked `Identifier` can still fuse unrelated records that agree on little
+  else. Fix: raise `identifierFloorGate` first — it demands more independent
+  corroboration before the floor applies, at far less recall cost than removing the
+  role (measured at −13 points of FEBRL recall). Only remove the `Identifier` role
+  when the field isn't really an identifier at all (e.g. a display name), not when
+  it's a real identifier that just needs corroboration.
 - **Fuzzy generosity on short values.** Recall that `fuzzy` scores a substring at
   1.0 (`Rob` = `Robert`, `J` = `John`). Two genuinely different people with a
   substring-related name and otherwise agreeing fields can auto-merge. Fix: raise
