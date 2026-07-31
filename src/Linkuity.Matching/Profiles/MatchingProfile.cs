@@ -3,8 +3,13 @@ namespace Linkuity.Matching.Profiles;
 /// <summary>
 /// Metadata-driven matching configuration selected per content type. Names
 /// reference strategies registered in the <see cref="Strategies.IStrategyRegistry"/>.
+///
+/// A record so that callers needing a variant use <c>with</c> rather than hand-copying
+/// every property. Hand-copies drift: the durable resolver's copy silently dropped
+/// <see cref="MaxBlockSize"/>, which disabled block suppression on every durable
+/// organization ingest without any configuration change or error.
 /// </summary>
-public sealed class MatchingProfile
+public sealed record MatchingProfile
 {
     public required string ContentType { get; init; }
     public required IReadOnlyList<ProfileField> Fields { get; init; }
@@ -63,21 +68,6 @@ public sealed class MatchingProfile
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.
     /// </summary>
-    public MatchingProfile WithCandidateRetrievalStrategy(string strategy) => new()
-    {
-        ContentType = ContentType,
-        Fields = Fields,
-        NormalizationStrategy = NormalizationStrategy,
-        BlockingStrategies = BlockingStrategies,
-        CandidateRetrievalStrategy = strategy,
-        SimilarityStrategy = SimilarityStrategy,
-        ScoringStrategy = ScoringStrategy,
-        DecisionStrategy = DecisionStrategy,
-        ClusteringStrategy = ClusteringStrategy,
-        AutoMatchThreshold = AutoMatchThreshold,
-        ReviewThreshold = ReviewThreshold,
-        ReviewFloorGate = ReviewFloorGate,
-        IdentifierFloorGate = IdentifierFloorGate,
-        MaxBlockSize = MaxBlockSize
-    };
+    public MatchingProfile WithCandidateRetrievalStrategy(string strategy)
+        => this with { CandidateRetrievalStrategy = strategy };
 }

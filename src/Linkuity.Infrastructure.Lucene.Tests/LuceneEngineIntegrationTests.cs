@@ -14,24 +14,7 @@ public class LuceneEngineIntegrationTests
     // A person profile whose only change is selecting Lucene retrieval; everything
     // else (weighted similarity + scoring + thresholds) is the real default.
     private static MatchingProfile LuceneProfile()
-    {
-        var baseline = DefaultMatchingProfileProvider.CreatePersonProfile();
-        return new MatchingProfile
-        {
-            ContentType = baseline.ContentType,
-            Fields = baseline.Fields,
-            NormalizationStrategy = baseline.NormalizationStrategy,
-            BlockingStrategies = baseline.BlockingStrategies,
-            CandidateRetrievalStrategy = "lucene",
-            SimilarityStrategy = baseline.SimilarityStrategy,
-            ScoringStrategy = baseline.ScoringStrategy,
-            DecisionStrategy = baseline.DecisionStrategy,
-            ClusteringStrategy = baseline.ClusteringStrategy,
-            AutoMatchThreshold = baseline.AutoMatchThreshold,
-            ReviewThreshold = baseline.ReviewThreshold,
-            ReviewFloorGate = baseline.ReviewFloorGate
-        };
-    }
+        => DefaultMatchingProfileProvider.CreatePersonProfile() with { CandidateRetrievalStrategy = "lucene" };
 
     [Fact]
     public void Engine_WithLuceneRetrieval_ScoresFromTheScorer_NotLuceneRelevance()

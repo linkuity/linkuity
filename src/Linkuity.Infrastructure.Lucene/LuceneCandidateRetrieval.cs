@@ -140,11 +140,29 @@ public sealed class LuceneCandidateRetrieval : IIndexedCandidateRetrievalStrateg
         {
             handle?.Dispose();
             var reader = DirectoryReader.Open(_directory);
+            EnsureProjectIdIsIndexed(reader);
             handle = new ReaderHandle { Reader = reader, Searcher = new IndexSearcher(reader), Generation = generation };
             _threadReader.Value = handle;
             Interlocked.Increment(ref _reopenCount);
         }
         return handle.Searcher;
+    }
+
+    /// <summary>
+    /// Rejects an index written before project_id became a searchable field. Retrieval now
+    /// requires that term, so on such an index every query matches nothing — the index looks
+    /// healthy, retrieval returns empty, and the run silently resolves no duplicates at all.
+    /// Failing loudly is the only safe reading of a populated index with no project terms.
+    /// </summary>
+    private static void EnsureProjectIdIsIndexed(DirectoryReader reader)
+    {
+        if (reader.NumDocs == 0)
+            return;
+
+        if (MultiFields.GetTerms(reader, LuceneFields.ProjectId) is null)
+            throw new InvalidOperationException(
+                $"This Lucene index predates project-scoped retrieval: '{LuceneFields.ProjectId}' is stored but " +
+                "not indexed, so no candidate can ever match. Delete the index directory and re-ingest to rebuild it.");
     }
 
     public void Update(EntityRecord record)
