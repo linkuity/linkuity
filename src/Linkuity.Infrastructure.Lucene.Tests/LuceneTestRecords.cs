@@ -24,12 +24,21 @@ internal static class LuceneTestRecords
         CompositeBlockingStrategy.DobLastNamePhonetic()
     ];
 
-    public static EntityRecord Person(string sourceRecordId, IDictionary<string, string> fields, Guid? id = null)
+    /// <summary>
+    /// The project every test record belongs to unless one is named explicitly. Retrieval is
+    /// scoped to the querying record's project, so records built for the same scenario have to
+    /// share one; handing each record a fresh project id would make every corpus invisible to
+    /// every query.
+    /// </summary>
+    public static readonly Guid DefaultProjectId = new("11111111-1111-1111-1111-111111111111");
+
+    public static EntityRecord Person(
+        string sourceRecordId, IDictionary<string, string> fields, Guid? id = null, Guid? projectId = null)
     {
         var record = new EntityRecord
         {
             Id = id ?? Guid.NewGuid(),
-            ProjectId = Guid.NewGuid(),
+            ProjectId = projectId ?? DefaultProjectId,
             SourceId = Guid.NewGuid(),
             IngestBatchId = Guid.NewGuid(),
             SourceRecordId = sourceRecordId,

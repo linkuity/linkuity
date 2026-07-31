@@ -25,7 +25,11 @@ internal static class EntityRecordDocumentMapper
         var doc = new Document
         {
             new StringField(LuceneFields.Id, record.Id.ToString(), LuceneField.Store.YES),
-            new StoredField(LuceneFields.ProjectId, record.ProjectId.ToString()),
+            // Indexed as well as stored: retrieval filters candidates to the querying record's
+            // project inside the query, so this field has to be searchable. Stored only, as it
+            // was, the filter could run no earlier than after Top-N selection — by which point
+            // a foreign project's records have already consumed the candidate budget.
+            new StringField(LuceneFields.ProjectId, record.ProjectId.ToString(), LuceneField.Store.YES),
             new StoredField(LuceneFields.SourceId, record.SourceId.ToString()),
             new StoredField(LuceneFields.IngestBatchId, record.IngestBatchId.ToString()),
             new StoredField(LuceneFields.SourceRecordId, record.SourceRecordId),

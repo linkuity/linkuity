@@ -14,6 +14,12 @@ namespace Linkuity.Infrastructure.Lucene;
 /// frequency store) exceeds maxBlockSize are suppressed entirely, including their
 /// derived phonetic/fuzzy clauses: a block bigger than what Top-N can return was
 /// already being truncated arbitrarily.
+///
+/// The whole thing is wrapped in a project filter. The wrapping matters: adding the
+/// project clause beside the key clauses would make them optional (a BooleanQuery with
+/// a required clause no longer requires any SHOULD to match) and every record in the
+/// project would become a candidate. Nesting them under one required clause keeps
+/// "in this project AND sharing at least one active blocking key".
 /// </summary>
 internal static class CandidateQueryBuilder
 {
@@ -23,7 +29,7 @@ internal static class CandidateQueryBuilder
     public static Query? Build(EntityRecord record, LuceneCandidateRetrievalOptions options, IndexReader reader, int maxBlockSize)
     {
         var policy = new BlockingKeySuppressionPolicy(maxBlockSize);
-        var query = new BooleanQuery();
+        var keyClauses = new BooleanQuery();
         var added = false;
 
         foreach (var key in record.BlockingKeys)
@@ -32,21 +38,28 @@ internal static class CandidateQueryBuilder
             if (policy.IsSuppressed(key, reader.DocFreq(term)))
                 continue;
 
-            query.Add(new TermQuery(term) { Boost = options.BlockingKeyBoost }, Occur.SHOULD);
+            keyClauses.Add(new TermQuery(term) { Boost = options.BlockingKeyBoost }, Occur.SHOULD);
             added = true;
 
             if (key.StartsWith(PhoneticPrefix, StringComparison.Ordinal))
             {
                 var code = key[PhoneticPrefix.Length..];
-                query.Add(new TermQuery(new Term(LuceneFields.Phonetic, code)) { Boost = options.PhoneticBoost }, Occur.SHOULD);
+                keyClauses.Add(new TermQuery(new Term(LuceneFields.Phonetic, code)) { Boost = options.PhoneticBoost }, Occur.SHOULD);
             }
             else if (key.StartsWith(NamePrefix, StringComparison.Ordinal) && options.FuzzyMaxEdits > 0)
             {
                 var token = key[NamePrefix.Length..];
-                query.Add(new FuzzyQuery(new Term(LuceneFields.Name, token), options.FuzzyMaxEdits) { Boost = options.FuzzyBoost }, Occur.SHOULD);
+                keyClauses.Add(new FuzzyQuery(new Term(LuceneFields.Name, token), options.FuzzyMaxEdits) { Boost = options.FuzzyBoost }, Occur.SHOULD);
             }
         }
 
-        return added ? query : null;
+        if (!added)
+            return null;
+
+        return new BooleanQuery
+        {
+            { new TermQuery(new Term(LuceneFields.ProjectId, record.ProjectId.ToString())), Occur.MUST },
+            { keyClauses, Occur.MUST }
+        };
     }
 }
