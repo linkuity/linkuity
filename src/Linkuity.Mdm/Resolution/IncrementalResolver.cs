@@ -34,6 +34,14 @@ public sealed class IncrementalResolver
     public IReadOnlyList<string> GenerateBlockingKeys(EntityRecord record, MatchingProfile profile)
         => _engine.GenerateBlockingKeys(record, profile);
 
+    /// <summary>
+    /// Normalizes field values and derives blocking keys from them, in that order. Durable stores
+    /// call this on every incoming record so ingest normalization cannot be skipped by one backend
+    /// and applied by another.
+    /// </summary>
+    public EntityRecord PrepareForStorage(EntityRecord record, MatchingProfile profile)
+        => _engine.PrepareForStorage(record, profile);
+
     // incomingRecords MUST already carry blocking keys. Returns counts + the targeted mutations to apply.
     public (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
         IncrementalIngestRequest request,

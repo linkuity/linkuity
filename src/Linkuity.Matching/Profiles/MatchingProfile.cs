@@ -1,3 +1,5 @@
+using Linkuity.Core.Models;
+
 namespace Linkuity.Matching.Profiles;
 
 /// <summary>
@@ -70,4 +72,12 @@ public sealed record MatchingProfile
     /// </summary>
     public MatchingProfile WithCandidateRetrievalStrategy(string strategy)
         => this with { CandidateRetrievalStrategy = strategy };
+
+    /// <summary>
+    /// Field name to semantic type, for ingest-time normalization. Case-insensitive, matching
+    /// how fields are resolved elsewhere. Built here rather than at each call site so the batch
+    /// and durable ingest paths cannot disagree about which fields get normalized.
+    /// </summary>
+    public Dictionary<string, SemanticFieldType> SemanticFieldMap()
+        => Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
 }

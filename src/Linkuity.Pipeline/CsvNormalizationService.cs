@@ -15,10 +15,7 @@ public class CsvNormalizationService
     public CsvNormalizationService(IBlobStore blobs) => _blobs = blobs;
 
     public Task<int> NormalizeAsync(Guid jobId, MatchingProfile profile, CancellationToken ct = default)
-    {
-        var fieldMap = profile.Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
-        return NormalizeAsync(jobId, fieldMap, ct);
-    }
+        => NormalizeAsync(jobId, profile.SemanticFieldMap(), ct);
 
     private async Task<int> NormalizeAsync(Guid jobId, IReadOnlyDictionary<string, SemanticFieldType> fieldMap, CancellationToken ct)
     {
@@ -46,9 +43,7 @@ public class CsvNormalizationService
             foreach (var header in headers)
             {
                 var value = csvReader.GetField(header) ?? string.Empty;
-                if (fieldMap.TryGetValue(header, out var fieldType))
-                    value = FieldNormalizer.Normalize(value, fieldType);
-                csvWriter.WriteField(value);
+                csvWriter.WriteField(RecordNormalizer.NormalizeValue(header, value, fieldMap));
             }
             csvWriter.NextRecord();
         }

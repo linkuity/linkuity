@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Core.Normalization;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -77,6 +78,22 @@ public sealed class MatchingEngine : IMatchingEngine
                 keys.Add(key);
         }
         return keys.Order(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public EntityRecord PrepareForStorage(EntityRecord record, MatchingProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(profile);
+
+        // Normalization is idempotent, so applying it to input that was already normalized
+        // upstream (the batch pipeline's normalized.csv, replayed through persist-batch) is a
+        // no-op rather than a second transformation.
+        var normalized = record with { Fields = RecordNormalizer.NormalizeFields(record.Fields, profile.SemanticFieldMap()) };
+
+        // Keys already present are honoured: a caller that computed them deliberately keeps them.
+        return normalized.BlockingKeys.Count > 0
+            ? normalized
+            : normalized with { BlockingKeys = GenerateBlockingKeys(normalized, profile) };
     }
 
     private EntityRecord EnsureBlockingKeys(EntityRecord record, MatchingProfile profile)

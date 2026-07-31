@@ -302,7 +302,7 @@ public sealed class LocalBatchRunner
         var jobPath = Path.Combine(artifactRoot, jobId);
         var now = DateTimeOffset.UtcNow;
 
-        var records = ReadNormalizedRecords(Path.Combine(jobPath, "normalized.csv"), projectId, sourceId, batchId, now);
+        var records = ReadRecords(Path.Combine(jobPath, "normalized.csv"), projectId, sourceId, batchId, now);
         var recordIdBySourceId = records.ToDictionary(r => r.SourceRecordId, r => r.Id, StringComparer.OrdinalIgnoreCase);
         var edges = ReadMatchEdges(Path.Combine(jobPath, "matches.csv"), projectId, batchId, recordIdBySourceId, now);
         var golden = ReadGoldenRecords(Path.Combine(jobPath, "golden_records.csv"), projectId, batchId, recordIdBySourceId, now);
@@ -348,7 +348,7 @@ public sealed class LocalBatchRunner
         if (batchSize is null)
         {
             var batchId = Guid.Parse(Required(options, "batch-id"));
-            var records = ReadNormalizedRecords(inputPath, projectId, sourceId, batchId, now);
+            var records = ReadRecords(inputPath, projectId, sourceId, batchId, now);
             var result = await store.SaveIncrementalIngestAsync(
                 new IncrementalIngestRequest(projectId, sourceId, batchId, records, autoThreshold, reviewThreshold), ct);
             PrintIngestResult(result.RecordsAdded, result.AutoMatches, result.ReviewTasks, result.SingletonClusters, result.GoldenRecordVersionsCreated);
@@ -802,7 +802,14 @@ public sealed class LocalBatchRunner
             CreatedAt = createdAt
         }).ToList();
 
-    private static List<EntityRecord> ReadNormalizedRecords(string path, Guid projectId, Guid sourceId, Guid batchId, DateTimeOffset createdAt)
+    /// <summary>
+    /// Reads records from a CSV. Values are left exactly as the file holds them; the store
+    /// normalizes on write, so every durable caller gets the same treatment whether it arrives
+    /// through the CLI, the API or Postgres. The previous name (ReadNormalizedRecords) claimed
+    /// normalization this method never performed, which is how durable ingest came to store raw
+    /// values while appearing not to.
+    /// </summary>
+    private static List<EntityRecord> ReadRecords(string path, Guid projectId, Guid sourceId, Guid batchId, DateTimeOffset createdAt)
         => BuildRecords(ReadRawRows(path), projectId, sourceId, batchId, createdAt);
 
     private static List<MatchEdge> ReadMatchEdges(

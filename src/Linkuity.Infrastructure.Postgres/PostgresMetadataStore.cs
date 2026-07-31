@@ -293,12 +293,10 @@ public sealed class PostgresMetadataStore : IMetadataStore
         var recordsWithKeys = completedBatch.EntityRecords
             .Select(record =>
             {
-                if (record.BlockingKeys.Count > 0)
-                    return record;
                 var contentType = projectMap.TryGetValue(record.ProjectId, out var proj)
                     ? proj.ContentType : "person";
                 var profile = _profileProvider.GetProfile(contentType);
-                return WithBlockingKeys(record, _engine.GenerateBlockingKeys(record, profile));
+                return _engine.PrepareForStorage(record, profile);
             })
             .ToList();
         var completedBatchWithKeys = completedBatch with { EntityRecords = recordsWithKeys };
@@ -351,9 +349,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
         // 6. Build incoming records with blocking keys (generated only when absent). No full backfill —
         //    blocking keys are stored at insert time on Postgres, so there is no scan over existing rows.
         var incomingRecords = request.Records
-            .Select(record => record.BlockingKeys.Count > 0
-                ? record
-                : WithBlockingKeys(record, _engine.GenerateBlockingKeys(record, profile)))
+            .Select(record => _engine.PrepareForStorage(record, profile))
             .ToList();
 
         // 7. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
@@ -826,19 +822,6 @@ public sealed class PostgresMetadataStore : IMetadataStore
             _index.Index(record);
         _index.Commit();
     }
-
-    private static EntityRecord WithBlockingKeys(EntityRecord record, IReadOnlyList<string> blockingKeys)
-        => new()
-        {
-            Id             = record.Id,
-            ProjectId      = record.ProjectId,
-            SourceId       = record.SourceId,
-            IngestBatchId  = record.IngestBatchId,
-            SourceRecordId = record.SourceRecordId,
-            Fields         = record.Fields,
-            BlockingKeys   = blockingKeys,
-            CreatedAt      = record.CreatedAt
-        };
 
     // ──────────────────────────────── Validation ────────────────────────────────
 
