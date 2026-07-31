@@ -20,26 +20,27 @@ namespace Linkuity.Core.Normalization;
 public static class RecordNormalizer
 {
     /// <summary>Normalizes one value, or returns it unchanged when the field is unmapped.</summary>
-    public static string NormalizeValue(
-        string field, string value, IReadOnlyDictionary<string, SemanticFieldType> fieldMap)
+    public static string NormalizeValue(string field, string value, NormalizationSettings settings)
     {
-        ArgumentNullException.ThrowIfNull(fieldMap);
-        return fieldMap.TryGetValue(field, out var type) ? FieldNormalizer.Normalize(value, type) : value;
+        ArgumentNullException.ThrowIfNull(settings);
+        return settings.FieldMap.TryGetValue(field, out var type)
+            ? FieldNormalizer.Normalize(value, type, settings.PhoneRegion)
+            : value;
     }
 
     /// <summary>
-    /// Normalizes every mapped field, preserving the dictionary's comparer so callers do not
-    /// silently lose case-insensitive field lookup.
+    /// Normalizes every mapped field. The result is case-insensitive on field name, matching how
+    /// profiles resolve fields, so a caller cannot lose that lookup by round-tripping through here.
     /// </summary>
     public static Dictionary<string, string> NormalizeFields(
-        IReadOnlyDictionary<string, string> fields, IReadOnlyDictionary<string, SemanticFieldType> fieldMap)
+        IReadOnlyDictionary<string, string> fields, NormalizationSettings settings)
     {
         ArgumentNullException.ThrowIfNull(fields);
-        ArgumentNullException.ThrowIfNull(fieldMap);
+        ArgumentNullException.ThrowIfNull(settings);
 
         var normalized = new Dictionary<string, string>(fields.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var (field, value) in fields)
-            normalized[field] = NormalizeValue(field, value, fieldMap);
+            normalized[field] = NormalizeValue(field, value, settings);
         return normalized;
     }
 }

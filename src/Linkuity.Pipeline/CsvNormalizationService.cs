@@ -15,9 +15,9 @@ public class CsvNormalizationService
     public CsvNormalizationService(IBlobStore blobs) => _blobs = blobs;
 
     public Task<int> NormalizeAsync(Guid jobId, MatchingProfile profile, CancellationToken ct = default)
-        => NormalizeAsync(jobId, profile.SemanticFieldMap(), ct);
+        => NormalizeAsync(jobId, profile.NormalizationSettings(), ct);
 
-    private async Task<int> NormalizeAsync(Guid jobId, IReadOnlyDictionary<string, SemanticFieldType> fieldMap, CancellationToken ct)
+    private async Task<int> NormalizeAsync(Guid jobId, NormalizationSettings settings, CancellationToken ct)
     {
         using var inputStream = await _blobs.DownloadAsync($"{jobId}/input.csv", ct);
         using var reader = new StreamReader(inputStream);
@@ -43,7 +43,7 @@ public class CsvNormalizationService
             foreach (var header in headers)
             {
                 var value = csvReader.GetField(header) ?? string.Empty;
-                csvWriter.WriteField(RecordNormalizer.NormalizeValue(header, value, fieldMap));
+                csvWriter.WriteField(RecordNormalizer.NormalizeValue(header, value, settings));
             }
             csvWriter.NextRecord();
         }

@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Core.Normalization;
 
 namespace Linkuity.Matching.Profiles;
 
@@ -66,6 +67,15 @@ public sealed record MatchingProfile
     public int? MaxBlockSize { get; init; }
 
     /// <summary>
+    /// Two-letter region code used to interpret phone numbers written without a country code.
+    /// Defaults to <c>US</c>, which is what the normalizer previously hardcoded — a default, not
+    /// a correct answer. A feed of national numbers from anywhere else needs this set, or those
+    /// numbers are either stamped as US or left un-normalized with nothing reported. Numbers that
+    /// carry an explicit country code ignore it.
+    /// </summary>
+    public string DefaultPhoneRegion { get; init; } = FieldNormalizer.DefaultPhoneRegion;
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.
@@ -74,10 +84,12 @@ public sealed record MatchingProfile
         => this with { CandidateRetrievalStrategy = strategy };
 
     /// <summary>
-    /// Field name to semantic type, for ingest-time normalization. Case-insensitive, matching
-    /// how fields are resolved elsewhere. Built here rather than at each call site so the batch
-    /// and durable ingest paths cannot disagree about which fields get normalized.
+    /// Everything ingest-time normalization needs from this profile. Built here rather than at
+    /// each call site so the batch and durable ingest paths cannot disagree about which fields
+    /// get normalized or how bare phone numbers are interpreted.
     /// </summary>
-    public Dictionary<string, SemanticFieldType> SemanticFieldMap()
-        => Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase);
+    public NormalizationSettings NormalizationSettings()
+        => new(
+            Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase),
+            DefaultPhoneRegion);
 }

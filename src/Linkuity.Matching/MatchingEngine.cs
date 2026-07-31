@@ -88,7 +88,7 @@ public sealed class MatchingEngine : IMatchingEngine
         // Normalization is idempotent, so applying it to input that was already normalized
         // upstream (the batch pipeline's normalized.csv, replayed through persist-batch) is a
         // no-op rather than a second transformation.
-        var normalized = record with { Fields = RecordNormalizer.NormalizeFields(record.Fields, profile.SemanticFieldMap()) };
+        var normalized = record with { Fields = RecordNormalizer.NormalizeFields(record.Fields, profile.NormalizationSettings()) };
 
         // Keys already present are honoured: a caller that computed them deliberately keeps them.
         return normalized.BlockingKeys.Count > 0

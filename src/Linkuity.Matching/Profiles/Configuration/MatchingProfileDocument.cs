@@ -19,6 +19,7 @@ public sealed class MatchingProfileDocument
     public double? ReviewFloorGate { get; init; }
     public double? IdentifierFloorGate { get; init; }
     public int? MaxBlockSize { get; init; }
+    public string? DefaultPhoneRegion { get; init; }
 }
 
 public sealed class MatchingProfileFieldDocument
