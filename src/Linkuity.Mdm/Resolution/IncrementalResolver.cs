@@ -171,22 +171,18 @@ public sealed class IncrementalResolver
         return (result, mutations);
     }
 
+    /// <summary>
+    /// Applies the per-call overrides the request carries — retrieval strategy and the two
+    /// thresholds — leaving every other profile setting exactly as configured. Written as a
+    /// <c>with</c> expression on purpose: the hand-written copy this replaced dropped
+    /// MaxBlockSize, silently disabling block suppression for the whole durable path.
+    /// </summary>
     private static MatchingProfile WithCallOverrides(MatchingProfile profile, string retrievalStrategy, double autoMatchThreshold, double reviewThreshold)
-        => new()
+        => profile with
         {
-            ContentType = profile.ContentType,
-            Fields = profile.Fields,
-            NormalizationStrategy = profile.NormalizationStrategy,
-            BlockingStrategies = profile.BlockingStrategies,
             CandidateRetrievalStrategy = retrievalStrategy,
-            SimilarityStrategy = profile.SimilarityStrategy,
-            ScoringStrategy = profile.ScoringStrategy,
-            DecisionStrategy = profile.DecisionStrategy,
-            ClusteringStrategy = profile.ClusteringStrategy,
             AutoMatchThreshold = autoMatchThreshold,
-            ReviewThreshold = reviewThreshold,
-            ReviewFloorGate = profile.ReviewFloorGate,
-            IdentifierFloorGate = profile.IdentifierFloorGate
+            ReviewThreshold = reviewThreshold
         };
 
     private static void ReplaceCluster(ResolutionWorkingSet ws, Cluster cluster, IReadOnlyList<Guid> members)
