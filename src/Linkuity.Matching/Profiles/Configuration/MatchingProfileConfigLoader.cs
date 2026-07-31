@@ -132,6 +132,13 @@ public sealed class MatchingProfileConfigLoader
         var reviewFloorGate = document.ReviewFloorGate ?? 0.75;
         RequireRange(reviewFloorGate, "reviewFloorGate", source);
 
+        // Optional corroboration gate for the identifier floor (absent -> 0.35, the measured
+        // default). Range-validated only; it is deliberately unconstrained relative to the
+        // thresholds — 0 restores the unconditional floor, higher values demand more
+        // corroboration before a matching identifier may promote a pair to auto.
+        var identifierFloorGate = document.IdentifierFloorGate ?? 0.35;
+        RequireRange(identifierFloorGate, "identifierFloorGate", source);
+
         // Optional suppression threshold (2b). Absent -> path defaults (indexed: MaxCandidates;
         // linear: no suppression). Validated only for a sane lower bound.
         if (document.MaxBlockSize is { } maxBlockSize && maxBlockSize < 1)
@@ -152,6 +159,7 @@ public sealed class MatchingProfileConfigLoader
             AutoMatchThreshold = auto,
             ReviewThreshold = review,
             ReviewFloorGate = reviewFloorGate,
+            IdentifierFloorGate = identifierFloorGate,
             MaxBlockSize = document.MaxBlockSize
         };
     }

@@ -185,7 +185,8 @@ public sealed class IncrementalResolver
             ClusteringStrategy = profile.ClusteringStrategy,
             AutoMatchThreshold = autoMatchThreshold,
             ReviewThreshold = reviewThreshold,
-            ReviewFloorGate = profile.ReviewFloorGate
+            ReviewFloorGate = profile.ReviewFloorGate,
+            IdentifierFloorGate = profile.IdentifierFloorGate
         };
 
     private static void ReplaceCluster(ResolutionWorkingSet ws, Cluster cluster, IReadOnlyList<Guid> members)

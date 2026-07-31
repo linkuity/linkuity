@@ -30,6 +30,23 @@ public sealed class MatchingProfile
     public double ReviewFloorGate { get; init; } = 0.75;
 
     /// <summary>
+    /// Corroboration gate for the identifier floor: the minimum weighted per-field similarity a
+    /// pair must reach on its own before a field carrying <see cref="FieldRole.Identifier"/>
+    /// matching at 1.0 is allowed to floor it into the auto band (0.98). An identifier match
+    /// promotes a plausible pair to auto; it does not rescue an implausible one. Below this the
+    /// identifier floor does not apply and the pair falls through to the ordinary review-floor
+    /// logic. Default 0.35 — measured, not chosen: on the FEBRL corpus it blocks all 313 bare
+    /// date-of-birth false auto-merges while costing 0 true positives after clustering
+    /// (<c>.superpowers/phase0/corroboration-separation.md</c>). Raise it to demand more
+    /// corroboration for identifiers that are not truly unique to one entity (date of birth,
+    /// shared switchboard phone, a domain shared by sibling companies); set it to 0 to restore
+    /// the unconditional floor. Consumed by <c>IdentifierAwareWeightedScoringStrategy</c>.
+    /// The value is a normalized weighted average over the fields BOTH records populate, so it is
+    /// not portable across profiles of very different field shape — re-measure before reusing it.
+    /// </summary>
+    public double IdentifierFloorGate { get; init; } = 0.35;
+
+    /// <summary>
     /// Optional blocking-key suppression threshold: keys whose block size EXCEEDS this value
     /// stop driving candidate generation (a block exactly at the threshold stays active).
     /// Unset (null): the indexed/Lucene path derives its threshold from MaxCandidates (a block
@@ -60,6 +77,7 @@ public sealed class MatchingProfile
         AutoMatchThreshold = AutoMatchThreshold,
         ReviewThreshold = ReviewThreshold,
         ReviewFloorGate = ReviewFloorGate,
+        IdentifierFloorGate = IdentifierFloorGate,
         MaxBlockSize = MaxBlockSize
     };
 }
