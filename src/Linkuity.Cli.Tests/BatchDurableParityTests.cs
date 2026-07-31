@@ -443,8 +443,8 @@ public sealed class BatchDurableParityTests : IDisposable
     public async Task NormalizationDrift_DateFormat_BatchRetrievesDurableDoesNot()
     {
         var csv = PeopleHeader +
-            "d-1,CRM,Carl,Osgood,carl.osgood@example.com,(415) 555-0111,1980-01-15,10 First St,94100,Osgood Co\n" +
-            "d-2,Billing,Dana,Pruitt,dana.pruitt@example.net,(212) 555-0222,01/15/1980,22 Second Ave,94200,Pruitt Inc\n";
+            "d-1,CRM,Carl,Osgood,carl.osgood@example.com,(415) 555-0111,1980-01-15,10 First St,94100,\n" +
+            "d-2,Billing,Carl,Pruitt,carl.pruitt@example.net,(212) 555-0222,01/15/1980,10 First St,94100,\n";
 
         var (_, profile, merge) = LoadSample("people-multi-source");
 
