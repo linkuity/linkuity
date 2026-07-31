@@ -496,6 +496,17 @@ The Lucene candidate-retrieval index continues to live on local disk beside the
 working directory. It is the authoritative retrieval path for both backends and
 is rebuildable from Postgres at any time.
 
+One index may hold records for many projects, and retrieval is scoped to the
+querying record's project inside the Lucene query itself rather than by filtering
+the results. The distinction is not cosmetic: Lucene selects its top-N by
+relevance across everything it holds, so filtering afterwards would let one
+project's records displace another's out of the result set entirely.
+
+**Indexes built before project-scoped retrieval must be rebuilt.** They stored
+`project_id` without indexing it, so no query can match against them. Such an
+index is rejected on open with an instruction to rebuild — delete the index
+directory and re-ingest. The index is a derived artifact, so nothing is lost.
+
 **Per-operation overhead note:** Postgres has higher per-operation overhead than
 the JSON store at very small project sizes. The Postgres backend earns its keep as
 project size grows; the JSON store remains the better default for small and
