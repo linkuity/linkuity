@@ -9,19 +9,7 @@ public class LuceneSuppressionTests
     private static readonly IReadOnlyCollection<EntityRecord> NoCorpus = [];
 
     private static MatchingProfile Profile(int? maxBlockSize)
-    {
-        var p = DefaultMatchingProfileProvider.CreatePersonProfile();
-        return new MatchingProfile
-        {
-            ContentType = p.ContentType, Fields = p.Fields,
-            NormalizationStrategy = p.NormalizationStrategy, BlockingStrategies = p.BlockingStrategies,
-            CandidateRetrievalStrategy = p.CandidateRetrievalStrategy, SimilarityStrategy = p.SimilarityStrategy,
-            ScoringStrategy = p.ScoringStrategy, DecisionStrategy = p.DecisionStrategy,
-            ClusteringStrategy = p.ClusteringStrategy, AutoMatchThreshold = p.AutoMatchThreshold,
-            ReviewThreshold = p.ReviewThreshold, ReviewFloorGate = p.ReviewFloorGate,
-            MaxBlockSize = maxBlockSize
-        };
-    }
+        => DefaultMatchingProfileProvider.CreatePersonProfile() with { MaxBlockSize = maxBlockSize };
 
     private static LuceneCandidateRetrieval NewIndex(int maxCandidates = 50)
         => new(new LuceneCandidateRetrievalOptions { IndexDirectory = LuceneTestRecords.TempDir(), MaxCandidates = maxCandidates });

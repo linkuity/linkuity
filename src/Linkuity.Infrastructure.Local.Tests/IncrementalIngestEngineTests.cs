@@ -168,22 +168,8 @@ public class IncrementalIngestEngineTests
     }
 
     private static MatchingProfile PhoneticEnabledPersonProfile()
-    {
-        var baseProfile = DefaultMatchingProfileProvider.CreatePersonProfile();
-        return new MatchingProfile
+        => DefaultMatchingProfileProvider.CreatePersonProfile() with
         {
-            ContentType = baseProfile.ContentType,
-            Fields = baseProfile.Fields,
-            NormalizationStrategy = baseProfile.NormalizationStrategy,
-            BlockingStrategies = ["exact-value", "token-name", "phonetic"],
-            CandidateRetrievalStrategy = baseProfile.CandidateRetrievalStrategy,
-            SimilarityStrategy = baseProfile.SimilarityStrategy,
-            ScoringStrategy = baseProfile.ScoringStrategy,
-            DecisionStrategy = baseProfile.DecisionStrategy,
-            ClusteringStrategy = baseProfile.ClusteringStrategy,
-            AutoMatchThreshold = baseProfile.AutoMatchThreshold,
-            ReviewThreshold = baseProfile.ReviewThreshold,
-            ReviewFloorGate = baseProfile.ReviewFloorGate
+            BlockingStrategies = ["exact-value", "token-name", "phonetic"]
         };
-    }
 }
