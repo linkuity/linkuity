@@ -1,10 +1,10 @@
 using Linkuity.TestSupport;
 using Npgsql;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
-public sealed class SchemaMigrationTests
+[Collection(PostgresCollection.Name)]
+public sealed class SchemaMigrationTests(SharedPostgresContainer shared)
 {
     private static readonly string[] ExpectedTables =
     [
@@ -23,15 +23,11 @@ public sealed class SchemaMigrationTests
     [SkippableFact]
     public async Task EnsureSchema_CreatesAllTenTables()
     {
-        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
-        await using var pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .Build();
-
-        await pg.StartAsync();
-
-        string connectionString = pg.GetConnectionString();
+        // A fresh database, not a fresh container: this asserts the migration creates every
+        // table in an empty database, which a new database satisfies exactly as well.
+        string connectionString = await shared.CreateDatabaseAsync(nameof(SchemaMigrationTests));
 
         // Run migration
         DbUpMigrator.EnsureSchema(connectionString);

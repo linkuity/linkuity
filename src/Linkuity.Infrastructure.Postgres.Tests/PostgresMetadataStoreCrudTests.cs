@@ -2,7 +2,6 @@ using Linkuity.Core.Models;
 using Linkuity.TestSupport;
 using Npgsql;
 using NpgsqlTypes;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
@@ -10,24 +9,18 @@ namespace Linkuity.Infrastructure.Postgres.Tests;
 /// Smoke tests for PostgresMetadataStore CRUD and read-back paths.
 /// Gated on Docker availability; spins a postgres:16-alpine Testcontainer per class.
 /// </summary>
-public sealed class PostgresMetadataStoreCrudTests : IAsyncLifetime
+[Collection(PostgresCollection.Name)]
+public sealed class PostgresMetadataStoreCrudTests(SharedPostgresContainer shared) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
     private string? _connectionString;
     private PostgresMetadataStore? _store;
 
     public async Task InitializeAsync()
     {
-        if (!DockerProbe.IsAvailable())
+        if (!shared.IsAvailable)
             return; // tests will self-skip
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .Build();
-
-        await _pg.StartAsync();
-        _connectionString = _pg.GetConnectionString();
-
+        _connectionString = await shared.CreateDatabaseAsync(nameof(PostgresMetadataStoreCrudTests));
         DbUpMigrator.EnsureSchema(_connectionString);
 
         _store = new PostgresMetadataStore(
@@ -37,11 +30,8 @@ public sealed class PostgresMetadataStoreCrudTests : IAsyncLifetime
             indexedRetrieval: null);
     }
 
-    public async Task DisposeAsync()
-    {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
-    }
+    // The container outlives this class; the database is left in place for post-mortem.
+    public Task DisposeAsync() => Task.CompletedTask;
 
     [SkippableFact]
     public async Task ProjectSourceBatch_RoundTrip_WithMergeConfiguration()
