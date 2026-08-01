@@ -25,6 +25,8 @@ public sealed class WeightedFieldSimilarityStrategy : ISimilarityStrategy
 
     public string Name => "field-weighted";
 
+    public SignalShape Produces => SignalShape.PerField;
+
     public IReadOnlyList<SimilaritySignal> Evaluate(EntityRecord left, EntityRecord right, MatchingProfile profile)
     {
         var signals = new List<SimilaritySignal>();

@@ -117,15 +117,38 @@ public sealed class MatchingProfileConfigLoader
         var clustering = Require(document.ClusteringStrategy, "clusteringStrategy", source);
         RequireRegistered(registry.Clustering, clustering, "clustering strategy", source);
 
+        // A similarity strategy that emits whole-record aggregates and a scorer that expects one
+        // signal per field will happily run together and produce a number. The scorer finds no
+        // field named "shared-blocking-keys", weighs nothing, and returns a score unrelated to
+        // the records. Rejecting the pairing here is the only place it can be caught before it
+        // reaches a merge decision.
+        var produces = registry.Similarity[similarity].Produces;
+        var consumes = registry.Scoring[scoring].Consumes;
+        if (produces != consumes)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' pairs similarityStrategy '{similarity}' (emits {produces} signals) " +
+                $"with scoringStrategy '{scoring}' (expects {consumes} signals). They cannot be combined: the " +
+                "scorer would consume signals it cannot interpret and return a meaningless score.");
+
         var auto = RequireDouble(document.AutoMatchThreshold, "autoMatchThreshold", source);
         var review = RequireDouble(document.ReviewThreshold, "reviewThreshold", source);
-        RequireRange(auto, "autoMatchThreshold", source);
-        RequireRange(review, "reviewThreshold", source);
-        // The durable store requires autoMatchThreshold strictly greater than
-        // reviewThreshold; reject the equal boundary here so it fails at load time.
-        if (auto <= review)
+
+        // Thresholds are validated against the scale the chosen scorer actually produces, not
+        // against an assumed [0,1]. MatchThresholds owns those rules, including the requirement
+        // that autoMatchThreshold be strictly greater than reviewThreshold.
+        var scale = registry.Scoring[scoring].Scale;
+        try
+        {
+            _ = new MatchThresholds(auto, review, scale);
+        }
+        catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
+        {
+            // Name the JSON keys, not MatchThresholds' parameter names: the reader has to edit
+            // 'autoMatchThreshold' in a file, and 'autoMatch' does not appear there.
             throw new MatchingProfileConfigException(
-                $"Matching profile '{source}' has autoMatchThreshold ({auto}) not greater than reviewThreshold ({review}).");
+                $"Matching profile '{source}' has invalid autoMatchThreshold ({auto}) / reviewThreshold ({review}) " +
+                $"for scoringStrategy '{scoring}' on the {scale} scale. {ReasonOf(ex)}");
+        }
 
         // Optional (absent -> 0.75, preserving Milestone 27's default). Range-validated only; no
         // constraint relative to reviewThreshold (a free tuning knob — below reviewThreshold it
@@ -196,15 +219,39 @@ public sealed class MatchingProfileConfigLoader
         if (field.SimilarityEvaluator is not null)
             RequireRegistered(registry.Evaluators, field.SimilarityEvaluator, "similarity evaluator", source);
 
+        // Weights divide the weighted average, so a negative or non-finite one does not merely
+        // skew the score, it breaks the arithmetic: a negative weight can push a score above 1
+        // and a NaN weight makes every comparison against a threshold false, landing the pair
+        // silently in no-match. Zero is rejected too — a field that contributes nothing should
+        // be removed from the profile, not weighted out of it, so the profile keeps saying what
+        // it means.
+        var weight = field.Weight ?? 1.0;
+        if (double.IsNaN(weight) || double.IsInfinity(weight) || weight <= 0)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' field '{name}' has weight {weight}; it must be a finite number " +
+                "greater than zero. Remove the field rather than giving it zero weight.");
+
         return new ProfileField
         {
             Name = name,
             SemanticType = semanticType,
             Roles = roles,
             SimilarityEvaluator = field.SimilarityEvaluator,
-            Weight = field.Weight ?? 1.0,
+            Weight = weight,
             EvaluatorOptions = field.EvaluatorOptions
         };
+    }
+
+    /// <summary>
+    /// The explanatory half of an argument exception, without the trailing "(Parameter 'x')"
+    /// the runtime appends — that parameter name is an implementation detail here, and the
+    /// caller is editing JSON keys rather than calling a constructor.
+    /// </summary>
+    private static string ReasonOf(Exception ex)
+    {
+        var message = ex.Message;
+        var marker = message.IndexOf(" (Parameter", StringComparison.Ordinal);
+        return marker < 0 ? message : message[..marker];
     }
 
     private static void RequireRegistered<T>(IReadOnlyDictionary<string, T> registered, string name, string kind, string source)

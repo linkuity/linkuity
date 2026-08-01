@@ -13,6 +13,9 @@ public sealed class WeightedScoringStrategy : IScoringStrategy
 {
     public string Name => "weighted";
 
+    public SignalShape Consumes => SignalShape.PerField;
+    public ScoreScale Scale => ScoreScale.UnitInterval;
+
     public ScoreResult Score(IReadOnlyList<SimilaritySignal> signals, MatchingProfile profile)
     {
         if (signals.Count == 0)

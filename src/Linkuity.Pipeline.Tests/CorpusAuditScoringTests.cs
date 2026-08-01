@@ -12,6 +12,9 @@ internal sealed class AsymmetricSimilarityStrategy : ISimilarityStrategy
 {
     public string Name => "asymmetric-test";
 
+    // Emits one signal per profile field, so it pairs with the per-field scorers.
+    public SignalShape Produces => SignalShape.PerField;
+
     public IReadOnlyList<SimilaritySignal> Evaluate(EntityRecord left, EntityRecord right, MatchingProfile profile)
         => [new SimilaritySignal("organization_name",
             string.CompareOrdinal(left.SourceRecordId, right.SourceRecordId) < 0 ? 0.9 : 0.1)];

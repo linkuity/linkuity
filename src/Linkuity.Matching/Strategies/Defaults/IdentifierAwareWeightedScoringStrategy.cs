@@ -38,6 +38,9 @@ public sealed class IdentifierAwareWeightedScoringStrategy : IScoringStrategy
 
     public string Name => "identifier-weighted";
 
+    public SignalShape Consumes => SignalShape.PerField;
+    public ScoreScale Scale => ScoreScale.UnitInterval;
+
     public ScoreResult Score(IReadOnlyList<SimilaritySignal> signals, MatchingProfile profile)
     {
         if (signals.Count == 0)
