@@ -1,8 +1,7 @@
-using Npgsql;
+using Linkuity.TestSupport;
 using Testcontainers.PostgreSql;
-using Xunit;
 
-namespace Linkuity.TestSupport;
+namespace Linkuity.Infrastructure.Postgres.Tests;
 
 /// <summary>
 /// One Postgres container per test assembly, handing each test class its own database.

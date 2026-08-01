@@ -6,12 +6,20 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
+
+    <!--
+      A shared helper library, NOT a test project. Stated explicitly because it is easy to
+      make it one by accident: adding an xunit reference here was enough for `dotnet test` on
+      the solution to try to execute this assembly as a test host, which failed to resolve its
+      dependencies and aborted the run. Anything requiring xunit or Testcontainers belongs in
+      the test assembly that uses it.
+    -->
+    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Testcontainers.PostgreSql" Version="4.0.0" />
+    <!-- For PostgresDatabaseFactory. No test-framework or container packages: see above. -->
     <PackageReference Include="Npgsql" Version="9.0.2" />
-    <PackageReference Include="xunit" Version="2.9.3" />
   </ItemGroup>
 
 </Project>
