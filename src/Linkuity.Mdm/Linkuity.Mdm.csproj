@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="libphonenumber-csharp" Version="9.0.35" />
     <ProjectReference Include="..\Linkuity.Core\Linkuity.Core.csproj" />
     <ProjectReference Include="..\Linkuity.Matching\Linkuity.Matching.csproj" />
   </ItemGroup>

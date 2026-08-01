@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <!-- For PostgresDatabaseFactory. No test-framework or container packages: see above. -->
-    <PackageReference Include="Npgsql" Version="9.0.2" />
+    <PackageReference Include="Npgsql" Version="9.0.5" />
   </ItemGroup>
 
 </Project>
