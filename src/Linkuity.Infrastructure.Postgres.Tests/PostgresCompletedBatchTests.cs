@@ -1,6 +1,5 @@
 using Linkuity.Core.Models;
 using Linkuity.TestSupport;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
@@ -9,35 +8,28 @@ namespace Linkuity.Infrastructure.Postgres.Tests;
 /// 1. Recomputes golden fields from the project merge policy (not the imported values).
 /// 2. Rolls back completely on validation failure (no orphaned rows).
 /// </summary>
-public sealed class PostgresCompletedBatchTests : IAsyncLifetime
+[Collection(PostgresCollection.Name)]
+public sealed class PostgresCompletedBatchTests(SharedPostgresContainer shared) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
     private PostgresMetadataStore? _store;
 
     public async Task InitializeAsync()
     {
-        if (!DockerProbe.IsAvailable())
+        if (!shared.IsAvailable)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .Build();
-
-        await _pg.StartAsync();
-        DbUpMigrator.EnsureSchema(_pg.GetConnectionString());
+        var connectionString = await shared.CreateDatabaseAsync(nameof(PostgresCompletedBatchTests));
+        DbUpMigrator.EnsureSchema(connectionString);
 
         _store = new PostgresMetadataStore(
-            new PostgresMetadataStoreOptions { ConnectionString = _pg.GetConnectionString() },
+            new PostgresMetadataStoreOptions { ConnectionString = connectionString },
             engine: null,
             profileProvider: null,
             indexedRetrieval: null);
     }
 
-    public async Task DisposeAsync()
-    {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
-    }
+    // The container outlives this class; the database is left in place for post-mortem.
+    public Task DisposeAsync() => Task.CompletedTask;
 
     // ── Test 1 ─────────────────────────────────────────────────────────────────
     // A completed batch for a project WITH a MergeConfiguration must recompute

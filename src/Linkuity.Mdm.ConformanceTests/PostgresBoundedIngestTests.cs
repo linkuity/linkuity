@@ -3,7 +3,6 @@ using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.Infrastructure.Postgres;
 using Linkuity.TestSupport;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Mdm.ConformanceTests;
 
@@ -13,8 +12,12 @@ namespace Linkuity.Mdm.ConformanceTests;
 /// rises ~O(N) due to whole-file rewrites.
 ///
 /// Gated on Docker. Skipped (not failed) when Docker is unavailable.
+///
+/// Takes a fresh database from the assembly's shared Postgres rather than starting a container
+/// of its own: this measures growth, so it needs an empty database, not an empty server.
 /// </summary>
-public sealed class PostgresBoundedIngestTests
+[Collection(PostgresConformanceCollection.Name)]
+public sealed class PostgresBoundedIngestTests(PostgresContainerFixture fixture)
 {
     /*
      * Metric: per-batch elapsed_ms (Stopwatch around SaveIncrementalIngestAsync).
@@ -45,7 +48,7 @@ public sealed class PostgresBoundedIngestTests
     [SkippableFact]
     public async Task PerBatchTime_StaysFlat_AsProjectGrows()
     {
-        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+        Skip.IfNot(fixture.ConnectionString is not null, "Docker not available — skipping Testcontainers test");
 
         const int batchSize           = 500;
         const int phase1Count         = 4;   // early measurement batches (batches 0–3)
@@ -53,7 +56,7 @@ public sealed class PostgresBoundedIngestTests
         const int phase2Count         = 4;   // late measurement batches (batches 8–11)
         const double toleranceFactor  = 3.0; // median(phase2) ≤ 3× median(phase1)
 
-        await using var h = await Harness.CreateAsync();
+        await using var h = await Harness.CreateAsync(fixture);
         var now = DateTimeOffset.UtcNow;
 
         var project = await h.Store.CreateProjectAsync("bounded-test", "person", null, now);
@@ -148,18 +151,14 @@ public sealed class PostgresBoundedIngestTests
 
     private sealed class Harness : IAsyncDisposable
     {
-        public required PostgreSqlContainer  Container { get; init; }
         public required LuceneCandidateRetrieval Index { get; init; }
         public required PostgresMetadataStore    Store { get; init; }
         public required string                IndexDir { get; init; }
 
-        public static async Task<Harness> CreateAsync()
+        public static async Task<Harness> CreateAsync(PostgresContainerFixture fixture)
         {
-            var pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .Build();
-            await pg.StartAsync();
-            DbUpMigrator.EnsureSchema(pg.GetConnectionString());
+            var connectionString = await fixture.CreateDatabaseAsync(nameof(PostgresBoundedIngestTests));
+            DbUpMigrator.EnsureSchema(connectionString);
 
             var indexDir = Path.Combine(
                 Path.GetTempPath(), "linkuity-pg-bounded-" + Guid.NewGuid().ToString("N"));
@@ -170,12 +169,12 @@ public sealed class PostgresBoundedIngestTests
                 new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir, FuzzyMaxEdits = 0 });
 
             var store = new PostgresMetadataStore(
-                new PostgresMetadataStoreOptions { ConnectionString = pg.GetConnectionString() },
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
                 engine: null,
                 profileProvider: null,
                 indexedRetrieval: index);
 
-            return new Harness { Container = pg, Index = index, Store = store, IndexDir = indexDir };
+            return new Harness { Index = index, Store = store, IndexDir = indexDir };
         }
 
         public async ValueTask DisposeAsync()
@@ -188,7 +187,6 @@ public sealed class PostgresBoundedIngestTests
             if (storeAsObj is IAsyncDisposable ad) await ad.DisposeAsync();
             else if (storeAsObj is IDisposable d) d.Dispose();
             Index.Dispose();
-            await Container.DisposeAsync();
             try
             {
                 if (Directory.Exists(IndexDir))

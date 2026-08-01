@@ -9,11 +9,14 @@ using Testcontainers.PostgreSql;
 namespace Linkuity.Mdm.ConformanceTests;
 
 /// <summary>
-/// Manages a single PostgreSQL Testcontainer for the entire
-/// <see cref="PostgresMetadataStoreConformanceTests"/> class.
-/// Shared via <c>IClassFixture</c> so the container starts once and is reused
-/// across all 17 facts; per-fact isolation is achieved by truncating tables in
-/// <see cref="PostgresMetadataStoreConformanceTests.CreateStoreAsync"/>.
+/// Manages a single PostgreSQL instance for every container-backed class in this assembly.
+/// Shared via a collection fixture so the container starts once for the whole assembly rather
+/// than once per class; per-fact isolation comes from truncating tables in
+/// <see cref="PostgresMetadataStoreConformanceTests.CreateStoreAsync"/>, and classes needing a
+/// genuinely empty database ask for one with <see cref="CreateDatabaseAsync"/>.
+///
+/// Prefers an external instance named by LINKUITY_CONFORMANCE_POSTGRES, which avoids Docker
+/// entirely; falls back to a Testcontainer.
 /// </summary>
 public sealed class PostgresContainerFixture : IAsyncLifetime
 {
@@ -85,11 +88,32 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
         return target.ConnectionString;
     }
 
+    /// <summary>
+    /// Creates an isolated, empty database on whichever instance is in use. For tests that
+    /// cannot share the truncated conformance database — a growth measurement, for example,
+    /// which needs to start from genuinely nothing.
+    /// </summary>
+    public Task<string> CreateDatabaseAsync(string label)
+        => ConnectionString is null
+            ? throw new InvalidOperationException(
+                "No Postgres available. Guard the test with Skip.IfNot(fixture.ConnectionString is not null, ...).")
+            : PostgresDatabaseFactory.CreateDatabaseAsync(ConnectionString, label);
+
     public async Task DisposeAsync()
     {
         if (_container is not null)
             await _container.DisposeAsync();
     }
+}
+
+/// <summary>
+/// Binds every container-backed class in this assembly to one shared Postgres. Also stops the
+/// two classes running simultaneously and competing for the same daemon.
+/// </summary>
+[CollectionDefinition(PostgresConformanceCollection.Name)]
+public sealed class PostgresConformanceCollection : ICollectionFixture<PostgresContainerFixture>
+{
+    public const string Name = "postgres-conformance";
 }
 
 /// <summary>
@@ -99,8 +123,9 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
 /// via a full TRUNCATE of the 10 MDM tables and a fresh per-fact Lucene index.
 /// When Docker is not available every fact is skipped (not failed).
 /// </summary>
+[Collection(PostgresConformanceCollection.Name)]
 public sealed class PostgresMetadataStoreConformanceTests
-    : MetadataStoreConformanceTests, IClassFixture<PostgresContainerFixture>, IDisposable
+    : MetadataStoreConformanceTests, IDisposable
 {
     private readonly PostgresContainerFixture _fixture;
     private readonly List<LuceneCandidateRetrieval> _indices = [];

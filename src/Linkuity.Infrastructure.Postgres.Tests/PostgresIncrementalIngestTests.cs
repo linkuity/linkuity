@@ -1,7 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.TestSupport;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
@@ -11,10 +10,13 @@ namespace Linkuity.Infrastructure.Postgres.Tests;
 ///   1. Shared-email incoming auto-matches an existing record and joins its cluster.
 ///   2. Two net-new in-batch duplicates co-cluster within one batch.
 ///   3. Bridge-merge: incoming auto-joins one cluster + auto-matches a second → one merge event.
-/// Each test spins its own postgres:16-alpine container + a fresh Lucene index (temp dir),
-/// so the store always carries an index and the index Count tracks COUNT(*) entity_records.
+/// Each test gets its own database in the assembly's shared container, plus a fresh Lucene
+/// index (temp dir), so the store always carries an index and the index Count tracks COUNT(*)
+/// entity_records. A container per test previously made this the heaviest Docker consumer in
+/// the suite.
 /// </summary>
-public sealed class PostgresIncrementalIngestTests
+[Collection(PostgresCollection.Name)]
+public sealed class PostgresIncrementalIngestTests(SharedPostgresContainer shared)
 {
     private static EntityRecord Record(Guid projectId, Guid sourceId, Guid batchId, string srid, Dictionary<string, string> fields, DateTimeOffset at) => new()
     {
@@ -31,9 +33,9 @@ public sealed class PostgresIncrementalIngestTests
     [SkippableFact]
     public async Task SharedEmail_Incoming_AutoMatches_AndJoinsExistingCluster()
     {
-        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
-        await using var h = await Harness.CreateAsync();
+        await using var h = await Harness.CreateAsync(shared);
         var store = h.Store;
         var now = DateTimeOffset.UtcNow;
 
@@ -73,9 +75,9 @@ public sealed class PostgresIncrementalIngestTests
     [SkippableFact]
     public async Task TwoNetNewInBatchDuplicates_CoCluster_InOneBatch()
     {
-        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
-        await using var h = await Harness.CreateAsync();
+        await using var h = await Harness.CreateAsync(shared);
         var store = h.Store;
         var now = DateTimeOffset.UtcNow;
 
@@ -103,9 +105,9 @@ public sealed class PostgresIncrementalIngestTests
     [SkippableFact]
     public async Task BridgeMerge_AutoJoinsOneCluster_AndAutoMatchesSecond_MergesIntoOneSurvivor()
     {
-        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
-        await using var h = await Harness.CreateAsync();
+        await using var h = await Harness.CreateAsync(shared);
         var store = h.Store;
         var now = DateTimeOffset.UtcNow;
 
@@ -151,18 +153,14 @@ public sealed class PostgresIncrementalIngestTests
     // ── Harness ──────────────────────────────────────────────────────────────────
     private sealed class Harness : IAsyncDisposable
     {
-        public required PostgreSqlContainer Container { get; init; }
         public required LuceneCandidateRetrieval Index { get; init; }
         public required PostgresMetadataStore Store { get; init; }
         public required string IndexDir { get; init; }
 
-        public static async Task<Harness> CreateAsync()
+        public static async Task<Harness> CreateAsync(SharedPostgresContainer shared)
         {
-            var pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .Build();
-            await pg.StartAsync();
-            DbUpMigrator.EnsureSchema(pg.GetConnectionString());
+            var connectionString = await shared.CreateDatabaseAsync(nameof(PostgresIncrementalIngestTests));
+            DbUpMigrator.EnsureSchema(connectionString);
 
             var indexDir = Path.Combine(Path.GetTempPath(), "linkuity-pg-inc-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(indexDir);
@@ -170,18 +168,17 @@ public sealed class PostgresIncrementalIngestTests
                 new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
 
             var store = new PostgresMetadataStore(
-                new PostgresMetadataStoreOptions { ConnectionString = pg.GetConnectionString() },
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
                 engine: null,
                 profileProvider: null,
                 indexedRetrieval: index);
 
-            return new Harness { Container = pg, Index = index, Store = store, IndexDir = indexDir };
+            return new Harness { Index = index, Store = store, IndexDir = indexDir };
         }
 
         public async ValueTask DisposeAsync()
         {
             Index.Dispose();
-            await Container.DisposeAsync();
             try
             {
                 if (Directory.Exists(IndexDir))

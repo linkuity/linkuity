@@ -1,34 +1,31 @@
 using Linkuity.Cli;
 using Linkuity.Core.Models;
 using Linkuity.TestSupport;
-using Testcontainers.PostgreSql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
 /// <summary>Gated on Docker. Proves the Postgres source adapter reads project records for the audit.</summary>
-public sealed class PostgresBlockingAuditTests : IAsyncLifetime
+[Collection(PostgresCollection.Name)]
+public sealed class PostgresBlockingAuditTests(SharedPostgresContainer shared) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _connectionString;
 
     public async Task InitializeAsync()
     {
-        if (!DockerProbe.IsAvailable()) return;
-        _pg = new PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
-        await _pg.StartAsync();
-        DbUpMigrator.EnsureSchema(_pg.GetConnectionString());
+        if (!shared.IsAvailable) return;
+        _connectionString = await shared.CreateDatabaseAsync(nameof(PostgresBlockingAuditTests));
+        DbUpMigrator.EnsureSchema(_connectionString);
     }
 
-    public async Task DisposeAsync()
-    {
-        if (_pg is not null) await _pg.DisposeAsync();
-    }
+    // The container outlives this class; the database is left in place for post-mortem.
+    public Task DisposeAsync() => Task.CompletedTask;
 
     [SkippableFact]
     public async Task Audit_PostgresSource_ReadsProjectRecords()
     {
         Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
 
-        var cs = _pg!.GetConnectionString();
+        var cs = _connectionString!;
         var store = new PostgresMetadataStore(
             new PostgresMetadataStoreOptions { ConnectionString = cs },
             engine: null, profileProvider: null, indexedRetrieval: null);
