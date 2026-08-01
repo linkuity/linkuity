@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Linkuity.Core.Models;
+using Linkuity.Core.Normalization;
 using Linkuity.Matching.Strategies;
 
 namespace Linkuity.Matching.Profiles.Configuration;
@@ -145,6 +146,16 @@ public sealed class MatchingProfileConfigLoader
             throw new MatchingProfileConfigException(
                 $"Matching profile '{source}' value 'maxBlockSize' ({maxBlockSize}) must be at least 1.");
 
+        // Region used to read phone numbers written without a country code. Validated as a shape
+        // (two letters) rather than against a region list: libphonenumber owns that list, and an
+        // unknown-but-well-formed code fails closed — the number stays un-normalized rather than
+        // being assigned to the wrong country.
+        var phoneRegion = document.DefaultPhoneRegion ?? FieldNormalizer.DefaultPhoneRegion;
+        if (phoneRegion.Length != 2 || !phoneRegion.All(char.IsAsciiLetterUpper))
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'defaultPhoneRegion' ('{phoneRegion}') must be a " +
+                "two-letter uppercase ISO 3166-1 region code, for example 'US' or 'GB'.");
+
         return new MatchingProfile
         {
             ContentType = contentType,
@@ -160,7 +171,8 @@ public sealed class MatchingProfileConfigLoader
             ReviewThreshold = review,
             ReviewFloorGate = reviewFloorGate,
             IdentifierFloorGate = identifierFloorGate,
-            MaxBlockSize = document.MaxBlockSize
+            MaxBlockSize = document.MaxBlockSize,
+            DefaultPhoneRegion = phoneRegion
         };
     }
 

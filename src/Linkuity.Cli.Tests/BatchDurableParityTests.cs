@@ -323,7 +323,7 @@ public sealed class BatchDurableParityTests : IDisposable
     /// universe, hard-coded "source" versus configurable source field, IsNullOrEmpty versus
     /// IsNullOrWhiteSpace) is exercised by these corpora — they are real in code but latent here.
     /// </summary>
-    [Theory(Skip = "Documents known defect: durable golden records keep un-normalized field values (engine audit C1a). Phase 1 fix pending.")]
+    [Theory]
     [MemberData(nameof(Samples))]
     public async Task GoldenRecordFieldValues_AgreeAcrossPaths(string sample)
     {
@@ -391,7 +391,7 @@ public sealed class BatchDurableParityTests : IDisposable
     /// therefore has two independent normalization layers, and only the SEMANTIC residue that
     /// MatchKey cannot absorb (country code, date reformatting, honorifics) still diverges.
     /// </summary>
-    [Fact(Skip = "Documents known defect: batch normalizes, durable does not (engine audit C1a). Phase 1 fix pending.")]
+    [Fact]
     public async Task NormalizationDrift_PhoneCountryCode_BatchMergesDurableDoesNot()
     {
         var csv = PeopleHeader +
@@ -439,7 +439,7 @@ public sealed class BatchDurableParityTests : IDisposable
     /// pair no other shared blocking key at all (different last_name, email, phone, company), so the
     /// batch arm retrieves and merges it while the durable arm never generates a candidate.
     /// </summary>
-    [Fact(Skip = "Documents known defect: batch normalizes, durable does not (engine audit C1a). Phase 1 fix pending.")]
+    [Fact]
     public async Task NormalizationDrift_DateFormat_BatchRetrievesDurableDoesNot()
     {
         var csv = PeopleHeader +

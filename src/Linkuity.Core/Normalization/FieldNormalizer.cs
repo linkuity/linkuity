@@ -5,6 +5,13 @@ namespace Linkuity.Core.Normalization;
 
 public static class FieldNormalizer
 {
+    /// <summary>
+    /// Region assumed for phone numbers written without a country code. US by default because
+    /// that is what this previously hardcoded; it is a default, not a correct answer, and any
+    /// non-US deployment should set it on the profile.
+    /// </summary>
+    public const string DefaultPhoneRegion = "US";
+
     private static readonly string[] Honorifics = ["Mr.", "Mrs.", "Ms.", "Miss", "Dr.", "Prof."];
 
     private static readonly string[] DateFormats =
@@ -17,7 +24,7 @@ public static class FieldNormalizer
         "MMMM d yyyy"
     ];
 
-    public static string Normalize(string value, SemanticFieldType type)
+    public static string Normalize(string value, SemanticFieldType type, string phoneRegion = DefaultPhoneRegion)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
@@ -26,7 +33,7 @@ public static class FieldNormalizer
         {
             SemanticFieldType.Email => value.Trim().ToLowerInvariant(),
             SemanticFieldType.DomainName => value.Trim().ToLowerInvariant(),
-            SemanticFieldType.Phone => PhoneNormalizer.Normalize(value) ?? value,
+            SemanticFieldType.Phone => PhoneNormalizer.Normalize(value, phoneRegion) ?? value,
             SemanticFieldType.DateOfBirth => NormalizeDate(value),
             SemanticFieldType.FirstName or SemanticFieldType.LastName or SemanticFieldType.FullName
                 => StripHonorific(value),

@@ -221,10 +221,11 @@ public sealed class FileMetadataStore : IMetadataStore
             if (_index is not null)
                 EnsureIndexCurrent(db);
 
+            // Normalize then key, in the store rather than the caller: the CLI, the API and the
+            // Postgres backend all arrive here, and normalizing in any one of them would leave the
+            // others storing raw values.
             var incomingRecords = request.Records
-                .Select(record => record.BlockingKeys.Count > 0
-                    ? record
-                    : WithBlockingKeys(record, GenerateEngineBlockingKeys(record, profile)))
+                .Select(record => _resolver.PrepareForStorage(record, profile))
                 .ToList();
 
             var (result, mutations) = _resolver.Resolve(
@@ -443,12 +444,14 @@ public sealed class FileMetadataStore : IMetadataStore
             .Select(r => r.ProjectId)
             .Distinct()
             .ToDictionary(pid => pid, pid => ProfileFor(ContentTypeOf(db, pid)));
+        // Normalized here too, not just on the incremental path. Records replayed through
+        // persist-batch nominally arrive normalized, but nothing enforces that — the shipped
+        // sample artifacts carry raw phone numbers. Normalizing one path and not the other is
+        // how the two ended up storing different values for the same entity.
         return completedBatch with
         {
             EntityRecords = completedBatch.EntityRecords
-                .Select(record => record.BlockingKeys.Count > 0
-                    ? record
-                    : WithBlockingKeys(record, GenerateEngineBlockingKeys(record, profilesByProject[record.ProjectId])))
+                .Select(record => _resolver.PrepareForStorage(record, profilesByProject[record.ProjectId]))
                 .ToList()
         };
     }
