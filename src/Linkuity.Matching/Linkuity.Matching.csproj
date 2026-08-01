@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="FuzzySharp" Version="2.0.2" />
+    <PackageReference Include="libphonenumber-csharp" Version="9.0.35" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
   </ItemGroup>
 
