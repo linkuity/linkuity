@@ -31,6 +31,25 @@ public sealed class IncrementalResolver
         _degreeOfParallelism = Math.Max(1, degreeOfParallelism);
     }
 
+    /// <summary>
+    /// The request's thresholds, validated. Both metadata stores checked these inline with
+    /// identical copied code, which is the shape every drifted duplicate in this codebase has
+    /// started as. Rules live in <see cref="MatchThresholds"/>; this only restates the failure
+    /// against the parameter the caller actually passed.
+    /// </summary>
+    public static MatchThresholds ThresholdsFor(IncrementalIngestRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            return new MatchThresholds(request.AutoMatchThreshold, request.ReviewThreshold);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ArgumentException(ex.Message, nameof(request), ex);
+        }
+    }
+
     public IReadOnlyList<string> GenerateBlockingKeys(EntityRecord record, MatchingProfile profile)
         => _engine.GenerateBlockingKeys(record, profile);
 
@@ -283,12 +302,19 @@ public sealed class IncrementalResolver
     {
         var edges = new Dictionary<(Guid, Guid), ResolutionEdge>();
 
+        // Built once per resolve rather than per edge: constructing it validates the request's
+        // thresholds, and an invalid pair should fail the whole call rather than the first edge
+        // that happens to be scored.
+        var thresholds = new MatchThresholds(request.AutoMatchThreshold, request.ReviewThreshold);
+
         void AddEdge(Guid a, Guid b, double score, IReadOnlyList<MatchScoreFactor> breakdown)
         {
             if (a == b) return;
-            var band = score >= request.AutoMatchThreshold ? MatchDecision.AutoMatch
-                     : score >= request.ReviewThreshold ? MatchDecision.Review
-                     : MatchDecision.NoMatch;
+
+            // comparable: true — an edge only exists because the engine produced and kept a
+            // scored candidate, so there was something to compare. A pair with nothing in common
+            // never reaches here; it is discarded before scoring.
+            var band = MatchBandClassifier.Classify(score, comparable: true, thresholds);
             if (band == MatchDecision.NoMatch) return;
             var (lo, hi) = a.CompareTo(b) <= 0 ? (a, b) : (b, a);
             if (!edges.TryGetValue((lo, hi), out var current) || score > current.Score)

@@ -204,10 +204,8 @@ public sealed class FileMetadataStore : IMetadataStore
     public async Task<IncrementalIngestResult> SaveIncrementalIngestAsync(IncrementalIngestRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.AutoMatchThreshold <= request.ReviewThreshold)
-            throw new ArgumentException("Auto-match threshold must be greater than review threshold.", nameof(request));
-        if (request.ReviewThreshold < 0 || request.AutoMatchThreshold > 1)
-            throw new ArgumentException("Thresholds must be between 0 and 1.", nameof(request));
+        // Validated by construction, before any work is done. See IncrementalResolver.ThresholdsFor.
+        _ = IncrementalResolver.ThresholdsFor(request);
 
         await _gate.WaitAsync(ct);
         try

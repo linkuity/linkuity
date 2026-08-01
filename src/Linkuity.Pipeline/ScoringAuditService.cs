@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -101,15 +102,23 @@ public sealed class ScoringAuditService
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
         var scoring = _registry.Scoring[profile.ScoringStrategy];
 
+        // Thresholds are read on the scale the selected scorer actually produces.
+        var thresholds = new MatchThresholds(auto, review, scoring.Scale);
+
         ScoredPair Score(string left, string right, bool reachable, bool? isTrue)
         {
             var signals = similarity.Evaluate(bySource[left], bySource[right], profile);
             var result = scoring.Score(signals, profile);
             var comparable = signals.Count > 0;
-            var band = !comparable ? ScoreBand.NonComparable
-                : result.FinalScore >= auto ? ScoreBand.Auto
-                : result.FinalScore >= review ? ScoreBand.Review
-                : ScoreBand.NoMatch;
+            // ScoreBand is kept rather than replaced: it is serialized into audit reports, and it
+            // carries Unreachable, a ground-truth concept the score classifier has no view of.
+            var band = MatchBandClassifier.Classify(result.FinalScore, comparable, thresholds) switch
+            {
+                MatchDecision.AutoMatch => ScoreBand.Auto,
+                MatchDecision.Review => ScoreBand.Review,
+                MatchDecision.NonComparable => ScoreBand.NonComparable,
+                _ => ScoreBand.NoMatch
+            };
             return reachable
                 ? new ScoredPair(left, right, true, comparable, result.FinalScore, null, band, null, isTrue, result.Breakdown)
                 : new ScoredPair(left, right, false, comparable, null, result.FinalScore,

@@ -321,11 +321,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. Threshold validation (parity with FileMetadataStore) — before opening the txn.
-        if (request.AutoMatchThreshold <= request.ReviewThreshold)
-            throw new ArgumentException("Auto-match threshold must be greater than review threshold.", nameof(request));
-        if (request.ReviewThreshold < 0 || request.AutoMatchThreshold > 1)
-            throw new ArgumentException("Thresholds must be between 0 and 1.", nameof(request));
+        // 1. Threshold validation — before opening the txn. Shared with FileMetadataStore rather
+        //    than copied into it, which is how the two previously stayed in step by hand.
+        _ = IncrementalResolver.ThresholdsFor(request);
 
         // 2. One READ COMMITTED transaction for the whole bounded ingest.
         await using var conn = await OpenConnectionAsync(ct);
