@@ -2,7 +2,12 @@ using Linkuity.Core.Models;
 
 namespace Linkuity.Matching.Profiles;
 
-public sealed class ProfileField
+/// <summary>
+/// A record for the same reason <see cref="MatchingProfile"/> is: a variant should be derived
+/// with <c>with</c> rather than by restating every property, because a hand-copy that omits one
+/// silently changes matching rather than failing to compile.
+/// </summary>
+public sealed record ProfileField
 {
     public required string Name { get; init; }
     public required SemanticFieldType SemanticType { get; init; }

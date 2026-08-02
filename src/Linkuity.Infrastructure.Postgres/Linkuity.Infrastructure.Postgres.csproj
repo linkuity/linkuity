@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Migrations\0001_initial_schema.sql" />
+    <EmbeddedResource Include="Migrations\0002_score_provenance.sql" />
   </ItemGroup>
 
 </Project>

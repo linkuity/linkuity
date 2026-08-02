@@ -506,6 +506,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 method                  AS "Method",
                 decision                AS "Decision",
                 breakdown::text         AS "BreakdownJson",
+                scorer                  AS "Scorer",
+                profile_content_type    AS "ProfileContentType",
+                profile_fingerprint     AS "ProfileFingerprint",
                 created_at              AS "CreatedAt"
             FROM match_edges
             WHERE project_id = @ProjectId
@@ -909,6 +912,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public string Method { get; set; } = "";
         public string Decision { get; set; } = "";
         public string BreakdownJson { get; set; } = "[]";
+        public string Scorer { get; set; } = "";
+        public string ProfileContentType { get; set; } = "";
+        public string ProfileFingerprint { get; set; } = "";
         public DateTime CreatedAt { get; set; }
     }
 
@@ -1031,6 +1037,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
         Method = row.Method,
         Decision = row.Decision,
         Breakdown = JsonSerializer.Deserialize<MatchScoreFactor[]>(row.BreakdownJson, JsonOpts) ?? [],
+        Scorer = row.Scorer,
+        ProfileContentType = row.ProfileContentType,
+        ProfileFingerprint = row.ProfileFingerprint,
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
     };
 

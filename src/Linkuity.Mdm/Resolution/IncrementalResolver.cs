@@ -170,6 +170,9 @@ public sealed class IncrementalResolver
                 Method = "incremental",
                 Decision = "auto",
                 Breakdown = edge.Breakdown,
+                Scorer = profile.ScoringStrategy,
+                ProfileContentType = profile.ContentType,
+                ProfileFingerprint = ProfileFingerprint.Of(profile),
                 CreatedAt = now
             });
             autoMatches++;
