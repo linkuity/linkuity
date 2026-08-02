@@ -20,6 +20,7 @@ public sealed class MatchingProfileDocument
     public double? IdentifierFloorGate { get; init; }
     public int? MaxBlockSize { get; init; }
     public string? DefaultPhoneRegion { get; init; }
+    public string? DefaultDateOrder { get; init; }
 }
 
 public sealed class MatchingProfileFieldDocument

@@ -150,6 +150,15 @@ public sealed class MatchingProfileConfigLoader
         // (two letters) rather than against a region list: libphonenumber owns that list, and an
         // unknown-but-well-formed code fails closed — the number stays un-normalized rather than
         // being assigned to the wrong country.
+        // Parsed strictly rather than defaulted on a typo: silently reading a DayFirst feed as
+        // MonthFirst mislabels every date before the thirteenth of a month and reports nothing.
+        var dateOrder = DateFieldOrder.MonthFirst;
+        if (document.DefaultDateOrder is { } orderText
+            && !Enum.TryParse(orderText, ignoreCase: true, out dateOrder))
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'defaultDateOrder' ('{orderText}') must be " +
+                $"'{nameof(DateFieldOrder.MonthFirst)}' or '{nameof(DateFieldOrder.DayFirst)}'.");
+
         var phoneRegion = document.DefaultPhoneRegion ?? FieldNormalizer.DefaultPhoneRegion;
         if (phoneRegion.Length != 2 || !phoneRegion.All(char.IsAsciiLetterUpper))
             throw new MatchingProfileConfigException(
@@ -172,7 +181,8 @@ public sealed class MatchingProfileConfigLoader
             ReviewFloorGate = reviewFloorGate,
             IdentifierFloorGate = identifierFloorGate,
             MaxBlockSize = document.MaxBlockSize,
-            DefaultPhoneRegion = phoneRegion
+            DefaultPhoneRegion = phoneRegion,
+            DefaultDateOrder = dateOrder
         };
     }
 

@@ -76,6 +76,15 @@ public sealed record MatchingProfile
     public string DefaultPhoneRegion { get; init; } = FieldNormalizer.DefaultPhoneRegion;
 
     /// <summary>
+    /// How to read a slash-separated date whose first two components could each be day or month.
+    /// <c>03/04/1980</c> is 3 April under the default and 4 March under DayFirst, and nothing in
+    /// the value says which. Reading a feed under the wrong order does not fail: dates with a day
+    /// past the twelfth pass through unparsed while the rest parse to confidently wrong values.
+    /// Set it for any feed that is not written US-style.
+    /// </summary>
+    public DateFieldOrder DefaultDateOrder { get; init; } = DateFieldOrder.MonthFirst;
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.
@@ -91,5 +100,6 @@ public sealed record MatchingProfile
     public NormalizationSettings NormalizationSettings()
         => new(
             Fields.ToDictionary(f => f.Name, f => f.SemanticType, StringComparer.OrdinalIgnoreCase),
-            DefaultPhoneRegion);
+            DefaultPhoneRegion,
+            DefaultDateOrder);
 }
