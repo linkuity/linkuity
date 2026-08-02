@@ -140,7 +140,7 @@ public sealed class LuceneCandidateRetrieval : IIndexedCandidateRetrievalStrateg
         {
             handle?.Dispose();
             var reader = DirectoryReader.Open(_directory);
-            EnsureProjectIdIsIndexed(reader);
+            EnsureIndexIsCurrent(reader);
             handle = new ReaderHandle { Reader = reader, Searcher = new IndexSearcher(reader), Generation = generation };
             _threadReader.Value = handle;
             Interlocked.Increment(ref _reopenCount);
@@ -149,15 +149,29 @@ public sealed class LuceneCandidateRetrieval : IIndexedCandidateRetrievalStrateg
     }
 
     /// <summary>
-    /// Rejects an index written before project_id became a searchable field. Retrieval now
-    /// requires that term, so on such an index every query matches nothing — the index looks
-    /// healthy, retrieval returns empty, and the run silently resolves no duplicates at all.
-    /// Failing loudly is the only safe reading of a populated index with no project terms.
+    /// Rejects an index whose term layout predates the current queries. Both cases below share a
+    /// failure mode that is invisible from outside: the index opens, retrieval runs, every query
+    /// matches nothing, and the run reports resolving no duplicates rather than reporting an
+    /// error. Failing loudly is the only safe reading.
     /// </summary>
-    private static void EnsureProjectIdIsIndexed(DirectoryReader reader)
+    private static void EnsureIndexIsCurrent(DirectoryReader reader)
     {
         if (reader.NumDocs == 0)
             return;
+
+        // Blocking-key terms are project-scoped so DocFreq measures a per-project block size.
+        // An index written before that carries unscoped keys, which no query can now match.
+        // Checked against the first term only: the writer scopes all keys or none.
+        var blockingTerms = MultiFields.GetTerms(reader, LuceneFields.BlockingKey);
+        if (blockingTerms is not null)
+        {
+            var iterator = blockingTerms.GetEnumerator();
+            if (iterator.MoveNext() && !ScopedBlockingKey.IsScoped(iterator.Term.Utf8ToString()))
+                throw new InvalidOperationException(
+                    $"This Lucene index predates project-scoped blocking keys: '{LuceneFields.BlockingKey}' terms " +
+                    "carry no project scope, so no candidate can ever match. Delete the index directory and " +
+                    "re-ingest to rebuild it.");
+        }
 
         if (MultiFields.GetTerms(reader, LuceneFields.ProjectId) is null)
             throw new InvalidOperationException(

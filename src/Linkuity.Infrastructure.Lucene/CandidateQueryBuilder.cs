@@ -34,7 +34,9 @@ internal static class CandidateQueryBuilder
 
         foreach (var key in record.BlockingKeys)
         {
-            var term = new Term(LuceneFields.BlockingKey, key);
+            // DocFreq of a project-scoped term is this key's block size within this project, so
+            // suppression is no longer influenced by unrelated tenants sharing the index.
+            var term = new Term(LuceneFields.BlockingKey, ScopedBlockingKey.For(record.ProjectId, key));
             if (policy.IsSuppressed(key, reader.DocFreq(term)))
                 continue;
 
