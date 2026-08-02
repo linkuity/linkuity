@@ -25,11 +25,14 @@ public class StrategyRegistryTests
     private sealed class FakeSim : ISimilarityStrategy
     {
         public string Name => "s";
+        public SignalShape Produces => SignalShape.PerField;
         public IReadOnlyList<SimilaritySignal> Evaluate(EntityRecord left, EntityRecord right, MatchingProfile profile) => [];
     }
     private sealed class FakeScore : IScoringStrategy
     {
         public string Name => "sc";
+        public SignalShape Consumes => SignalShape.PerField;
+        public ScoreScale Scale => ScoreScale.UnitInterval;
         public ScoreResult Score(IReadOnlyList<SimilaritySignal> signals, MatchingProfile profile) => new(0, []);
     }
     private sealed class FakeDecide : IDecisionStrategy

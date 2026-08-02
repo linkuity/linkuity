@@ -1,4 +1,5 @@
 using Linkuity.Core.Models;
+using Linkuity.Matching;
 using Linkuity.Matching.Canonicalization;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
@@ -432,11 +433,19 @@ public sealed class CorpusAuditService
         return best.FinalScore;
     }
 
+    /// <summary>
+    /// Maps the shared classifier onto this report's own enum. CorpusBand is kept rather than
+    /// replaced because it is serialized into stored baselines: renaming or renumbering it would
+    /// invalidate every recorded comparison.
+    /// </summary>
     internal static CorpusBand BandOf(double score, bool comparable, MatchingProfile profile)
-        => !comparable ? CorpusBand.NonComparable
-            : score >= profile.AutoMatchThreshold ? CorpusBand.Auto
-            : score >= profile.ReviewThreshold ? CorpusBand.Review
-            : CorpusBand.NoMatch;
+        => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn()) switch
+        {
+            MatchDecision.AutoMatch => CorpusBand.Auto,
+            MatchDecision.Review => CorpusBand.Review,
+            MatchDecision.NonComparable => CorpusBand.NonComparable,
+            _ => CorpusBand.NoMatch
+        };
 
     private static long Choose2(long n) => n * (n - 1) / 2;
 

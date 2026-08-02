@@ -41,8 +41,20 @@ public sealed class NumericSimilarityEvaluator : ISimilarityEvaluator
         return Math.Max(0.0, 1.0 - percentDiff);
     }
 
+    /// <summary>
+    /// Parses a comparable number. <c>double.TryParse</c> accepts the literals "NaN",
+    /// "Infinity" and "-Infinity", which are not values this evaluator can compare: NaN loses
+    /// every comparison including equality, so it propagated through the arithmetic and returned
+    /// NaN as a similarity. That NaN then failed every threshold test and put the pair silently
+    /// in no-match — a wrong answer indistinguishable from a legitimate one.
+    ///
+    /// Rejecting them here yields null, which the evaluator already documents as
+    /// "non-comparable" and which callers already handle.
+    /// </summary>
     private static bool TryParse(string value, out double parsed)
-        => double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed);
+        => double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed)
+           && !double.IsNaN(parsed)
+           && !double.IsInfinity(parsed);
 
     private static double? ReadOption(ProfileField field, string key)
         => field.EvaluatorOptions is not null

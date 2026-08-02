@@ -14,6 +14,9 @@ public sealed class DefaultScoringStrategy : IScoringStrategy
 
     public string Name => "default";
 
+    public SignalShape Consumes => SignalShape.Aggregate;
+    public ScoreScale Scale => ScoreScale.UnitInterval;
+
     public ScoreResult Score(IReadOnlyList<SimilaritySignal> signals, MatchingProfile profile)
     {
         var sharedKeys = Signal(signals, "shared-blocking-keys");

@@ -12,12 +12,13 @@ public sealed class ThresholdDecisionStrategy : IDecisionStrategy
 {
     public string Name => "threshold";
 
+    /// <summary>
+    /// Delegates to the shared classifier. <c>comparable: true</c> is not an assumption that the
+    /// records had comparable fields — it is that this signature cannot tell. It receives only a
+    /// score, by which point the distinction between "compared and weak" and "nothing to compare"
+    /// has already been lost. Reporting NonComparable here would be guessing, so the caller that
+    /// still holds the signals is the one that reports it.
+    /// </summary>
     public MatchDecision Decide(double topScore, MatchingProfile profile)
-    {
-        if (topScore >= profile.AutoMatchThreshold)
-            return MatchDecision.AutoMatch;
-        if (topScore >= profile.ReviewThreshold)
-            return MatchDecision.Review;
-        return MatchDecision.NoMatch;
-    }
+        => MatchBandClassifier.Classify(topScore, comparable: true, profile.ThresholdsOn());
 }

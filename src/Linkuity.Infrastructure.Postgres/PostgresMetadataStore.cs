@@ -321,11 +321,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. Threshold validation (parity with FileMetadataStore) — before opening the txn.
-        if (request.AutoMatchThreshold <= request.ReviewThreshold)
-            throw new ArgumentException("Auto-match threshold must be greater than review threshold.", nameof(request));
-        if (request.ReviewThreshold < 0 || request.AutoMatchThreshold > 1)
-            throw new ArgumentException("Thresholds must be between 0 and 1.", nameof(request));
+        // 1. Threshold validation — before opening the txn. Shared with FileMetadataStore rather
+        //    than copied into it, which is how the two previously stayed in step by hand.
+        _ = IncrementalResolver.ThresholdsFor(request);
 
         // 2. One READ COMMITTED transaction for the whole bounded ingest.
         await using var conn = await OpenConnectionAsync(ct);
@@ -508,6 +506,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 method                  AS "Method",
                 decision                AS "Decision",
                 breakdown::text         AS "BreakdownJson",
+                scorer                  AS "Scorer",
+                profile_content_type    AS "ProfileContentType",
+                profile_fingerprint     AS "ProfileFingerprint",
                 created_at              AS "CreatedAt"
             FROM match_edges
             WHERE project_id = @ProjectId
@@ -911,6 +912,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public string Method { get; set; } = "";
         public string Decision { get; set; } = "";
         public string BreakdownJson { get; set; } = "[]";
+        public string Scorer { get; set; } = "";
+        public string ProfileContentType { get; set; } = "";
+        public string ProfileFingerprint { get; set; } = "";
         public DateTime CreatedAt { get; set; }
     }
 
@@ -1033,6 +1037,9 @@ public sealed class PostgresMetadataStore : IMetadataStore
         Method = row.Method,
         Decision = row.Decision,
         Breakdown = JsonSerializer.Deserialize<MatchScoreFactor[]>(row.BreakdownJson, JsonOpts) ?? [],
+        Scorer = row.Scorer,
+        ProfileContentType = row.ProfileContentType,
+        ProfileFingerprint = row.ProfileFingerprint,
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
     };
 

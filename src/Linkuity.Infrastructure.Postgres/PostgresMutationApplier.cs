@@ -281,7 +281,7 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
             var sql = new StringBuilder(
                 "INSERT INTO match_edges " +
                 "(id, project_id, ingest_batch_id, left_entity_record_id, right_entity_record_id, " +
-                "score, method, decision, breakdown, created_at) VALUES ");
+                "score, method, decision, breakdown, scorer, profile_content_type, profile_fingerprint, created_at) VALUES ");
             await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
             for (int i = 0; i < count; i++)
             {
@@ -289,7 +289,7 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
                 if (i > 0)
                     sql.Append(',');
                 sql.Append(
-                    $"(@id{i}, @pr{i}, @ib{i}, @l{i}, @r{i}, @sc{i}, @me{i}, @de{i}, @bd{i}::jsonb, @ca{i})");
+                    $"(@id{i}, @pr{i}, @ib{i}, @l{i}, @r{i}, @sc{i}, @me{i}, @de{i}, @bd{i}::jsonb, @sn{i}, @pc{i}, @pf{i}, @ca{i})");
                 cmd.Parameters.AddWithValue($"id{i}", edge.Id);
                 cmd.Parameters.AddWithValue($"pr{i}", edge.ProjectId);
                 cmd.Parameters.AddWithValue($"ib{i}", edge.IngestBatchId);
@@ -298,6 +298,9 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
                 cmd.Parameters.AddWithValue($"sc{i}", edge.Score);
                 cmd.Parameters.AddWithValue($"me{i}", edge.Method);
                 cmd.Parameters.AddWithValue($"de{i}", edge.Decision);
+                cmd.Parameters.AddWithValue($"sn{i}", edge.Scorer);
+                cmd.Parameters.AddWithValue($"pc{i}", edge.ProfileContentType);
+                cmd.Parameters.AddWithValue($"pf{i}", edge.ProfileFingerprint);
                 cmd.Parameters.AddWithValue($"bd{i}", JsonSerializer.Serialize(edge.Breakdown, JsonOpts));
                 cmd.Parameters.AddWithValue($"ca{i}", edge.CreatedAt.UtcDateTime);
             }

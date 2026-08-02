@@ -22,5 +22,23 @@ public sealed class MatchEdge
     /// </summary>
     public IReadOnlyList<MatchScoreFactor> Breakdown { get; init; } = [];
 
+    /// <summary>
+    /// The scoring strategy that produced <see cref="Score"/>, e.g. "identifier-weighted".
+    /// <see cref="Method"/> is not this: it records which ingest path wrote the edge, not what
+    /// computed its number.
+    /// </summary>
+    public string Scorer { get; init; } = "";
+
+    /// <summary>The content type of the profile in force when this edge was scored.</summary>
+    public string ProfileContentType { get; init; } = "";
+
+    /// <summary>
+    /// Fingerprint of that profile — see <c>ProfileFingerprint</c>. The content type alone
+    /// cannot attribute a score, because a profile's thresholds and weights can be edited
+    /// without its name changing; two edges can share a name and have been produced by
+    /// materially different rules.
+    /// </summary>
+    public string ProfileFingerprint { get; init; } = "";
+
     public required DateTimeOffset CreatedAt { get; init; }
 }

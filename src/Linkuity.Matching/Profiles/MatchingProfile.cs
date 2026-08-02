@@ -84,6 +84,15 @@ public sealed record MatchingProfile
         => this with { CandidateRetrievalStrategy = strategy };
 
     /// <summary>
+    /// This profile's thresholds as a validated pair. <paramref name="scale"/> is the scale of
+    /// the scorer that will produce the scores being classified — the profile names its scoring
+    /// strategy but does not resolve it, so a caller holding the registry supplies it. Defaults
+    /// to the unit interval, which every scorer shipped today produces.
+    /// </summary>
+    public MatchThresholds ThresholdsOn(ScoreScale scale = ScoreScale.UnitInterval)
+        => new(AutoMatchThreshold, ReviewThreshold, scale);
+
+    /// <summary>
     /// Everything ingest-time normalization needs from this profile. Built here rather than at
     /// each call site so the batch and durable ingest paths cannot disagree about which fields
     /// get normalized or how bare phone numbers are interpreted.

@@ -53,7 +53,11 @@ public sealed class BatchMatchingService
             records.Add(NewRecord(sourceId, fields, now, keys));
         }
 
-        var cut = profile.AutoMatchThreshold;
+        // Batch has nowhere to put a review task, so it keeps only the auto band. Expressed
+        // through the shared classifier rather than as a bare inequality: the two-band behaviour
+        // is then visible as a deliberate narrowing of the four, not a separate implementation
+        // that happens to agree at one boundary.
+        var thresholds = profile.ThresholdsOn();
         var best = new Dictionary<(string, string), double>();
         foreach (var record in records)
         {
@@ -63,7 +67,8 @@ public sealed class BatchMatchingService
             var result = engine.Resolve(record, others, profile);
             foreach (var candidate in result.Candidates)
             {
-                if (candidate.Score < cut) continue;
+                if (MatchBandClassifier.Classify(candidate.Score, comparable: true, thresholds) != MatchDecision.AutoMatch)
+                    continue;
                 var a = record.SourceRecordId;
                 var b = candidate.Record.SourceRecordId;
                 if (string.Equals(a, b, StringComparison.Ordinal)) continue;

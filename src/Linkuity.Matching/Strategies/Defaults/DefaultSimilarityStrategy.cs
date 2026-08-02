@@ -14,6 +14,9 @@ public sealed class DefaultSimilarityStrategy : ISimilarityStrategy
 
     public string Name => "default";
 
+    // Whole-record aggregates: names are fixed here, not drawn from the profile.
+    public SignalShape Produces => SignalShape.Aggregate;
+
     public IReadOnlyList<SimilaritySignal> Evaluate(EntityRecord left, EntityRecord right, MatchingProfile profile)
     {
         var signals = new List<SimilaritySignal>();
