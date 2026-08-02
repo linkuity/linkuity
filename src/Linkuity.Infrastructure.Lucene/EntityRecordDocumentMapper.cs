@@ -42,7 +42,10 @@ internal static class EntityRecordDocumentMapper
             // Indexed only: answers exact term queries. Not stored — the scoring path never reads
             // a reconstructed candidate's BlockingKeys, so storing them was pure payload weight
             // (Milestone 26). The phonetic/name projections below remain the retrieval terms.
-            doc.Add(new StringField(LuceneFields.BlockingKey, key, LuceneField.Store.NO));
+            // Scoped to the project so DocFreq on this term is the key's block size WITHIN the
+            // project. Unscoped, a neighbouring project's records inflated it — see ScopedBlockingKey.
+            doc.Add(new StringField(
+                LuceneFields.BlockingKey, ScopedBlockingKey.For(record.ProjectId, key), LuceneField.Store.NO));
 
             if (key.StartsWith(PhoneticPrefix, StringComparison.Ordinal))
                 doc.Add(new StringField(LuceneFields.Phonetic, key[PhoneticPrefix.Length..], LuceneField.Store.NO));

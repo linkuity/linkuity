@@ -91,7 +91,7 @@ public class LuceneProjectIsolationTests
     /// Fixing it means counting hits for (project AND term) per key instead of an O(1)
     /// DocFreq lookup, which is a hot-path cost that needs measuring before it is taken on.
     /// </summary>
-    [Fact(Skip = "Documents cross-project DocFreq inflation; fix requires per-project term counts.")]
+    [Fact]
     public void Suppression_ForeignProjectRecords_DoNotCountTowardThisProjectsBlockSize()
     {
         using var index = NewIndex();

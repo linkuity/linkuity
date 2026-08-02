@@ -24,7 +24,7 @@ public static class RecordNormalizer
     {
         ArgumentNullException.ThrowIfNull(settings);
         return settings.FieldMap.TryGetValue(field, out var type)
-            ? FieldNormalizer.Normalize(value, type, settings.PhoneRegion)
+            ? FieldNormalizer.Normalize(value, type, settings.PhoneRegion, settings.DateOrder)
             : value;
     }
 

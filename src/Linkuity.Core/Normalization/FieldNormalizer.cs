@@ -12,19 +12,49 @@ public static class FieldNormalizer
     /// </summary>
     public const string DefaultPhoneRegion = "US";
 
-    private static readonly string[] Honorifics = ["Mr.", "Mrs.", "Ms.", "Miss", "Dr.", "Prof."];
+    /// <summary>
+    /// Both punctuated and bare forms: "Mr Smith" is at least as common in real data as
+    /// "Mr. Smith", and only the punctuated variants were recognised. Stripping is guarded by a
+    /// following-whitespace check, so "Drew" keeps its "Dr" and "Mission" keeps its "Miss".
+    /// </summary>
+    private static readonly string[] Honorifics =
+    [
+        "Mr.", "Mrs.", "Ms.", "Dr.", "Prof.",
+        "Mr", "Mrs", "Ms", "Miss", "Dr", "Prof"
+    ];
 
-    private static readonly string[] DateFormats =
+    /// <summary>
+    /// Unambiguous formats, read identically under either date order.
+    /// </summary>
+    private static readonly string[] UnambiguousDateFormats =
     [
         "yyyy-MM-dd",
-        "yyyy/MM/dd",
+        "yyyy/MM/dd"
+    ];
+
+    private static readonly string[] MonthFirstDateFormats =
+    [
+        .. UnambiguousDateFormats,
         "MM/dd/yyyy",
         "M/d/yyyy",
         "MMM d yyyy",
         "MMMM d yyyy"
     ];
 
-    public static string Normalize(string value, SemanticFieldType type, string phoneRegion = DefaultPhoneRegion)
+    private static readonly string[] DayFirstDateFormats =
+    [
+        .. UnambiguousDateFormats,
+        "dd/MM/yyyy",
+        "d/M/yyyy",
+        "d MMM yyyy",
+        "d MMMM yyyy"
+    ];
+
+    public static string Normalize(
+        string value,
+        SemanticFieldType type,
+        string phoneRegion = DefaultPhoneRegion,
+        DateFieldOrder dateOrder = DateFieldOrder.MonthFirst)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
@@ -34,7 +64,7 @@ public static class FieldNormalizer
             SemanticFieldType.Email => value.Trim().ToLowerInvariant(),
             SemanticFieldType.DomainName => value.Trim().ToLowerInvariant(),
             SemanticFieldType.Phone => PhoneNormalizer.Normalize(value, phoneRegion) ?? value,
-            SemanticFieldType.DateOfBirth => NormalizeDate(value),
+            SemanticFieldType.DateOfBirth => NormalizeDate(value, dateOrder),
             SemanticFieldType.FirstName or SemanticFieldType.LastName or SemanticFieldType.FullName
                 => StripHonorific(value),
             SemanticFieldType.AddressLine or SemanticFieldType.PostalCode or SemanticFieldType.OrganizationName
@@ -43,11 +73,15 @@ public static class FieldNormalizer
         };
     }
 
-    private static string NormalizeDate(string value)
+    private static string NormalizeDate(string value, DateFieldOrder order)
     {
-        if (DateTime.TryParseExact(value.Trim(), DateFormats, CultureInfo.InvariantCulture,
+        var formats = order == DateFieldOrder.DayFirst ? DayFirstDateFormats : MonthFirstDateFormats;
+        if (DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var date))
             return date.ToString("yyyy-MM-dd");
+
+        // Unparseable dates pass through rather than becoming empty: the raw value is still
+        // comparable to an identically-written one, where a blank is comparable to nothing.
         return value;
     }
 
