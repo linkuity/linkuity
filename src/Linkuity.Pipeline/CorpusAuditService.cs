@@ -43,16 +43,7 @@ public sealed class CorpusAuditService
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(groundTruth);
 
-        Require(profile.NormalizationStrategy == "identity", "normalizationStrategy",
-            profile.NormalizationStrategy, "identity");
-        Require(profile.SimilarityStrategy == "field-weighted", "similarityStrategy",
-            profile.SimilarityStrategy, "field-weighted");
-        Require(SupportedScoring.Contains(profile.ScoringStrategy, StringComparer.Ordinal),
-            "scoringStrategy", profile.ScoringStrategy, "weighted or identifier-weighted");
-        Require(profile.DecisionStrategy == "threshold", "decisionStrategy",
-            profile.DecisionStrategy, "threshold");
-        Require(profile.ClusteringStrategy == "union-find", "clusteringStrategy",
-            profile.ClusteringStrategy, "union-find");
+        ValidateSupportedStrategies(profile);
 
         var duplicate = records
             .GroupBy(r => r.SourceRecordId, StringComparer.Ordinal)
@@ -479,6 +470,24 @@ public sealed class CorpusAuditService
         foreach (var n in labeledPerCluster.Values) pp += Choose2(n);
         foreach (var n in trueSize.Values) ap += Choose2(n);
         return (tp, pp, ap);
+    }
+
+    /// <summary>
+    /// The configuration both corpus-scale audits model: the blocking-linear batch path. Shared so
+    /// a second audit cannot drift into reporting on a pipeline neither of them implements.
+    /// </summary>
+    internal static void ValidateSupportedStrategies(MatchingProfile profile)
+    {
+        Require(profile.NormalizationStrategy == "identity", "normalizationStrategy",
+            profile.NormalizationStrategy, "identity");
+        Require(profile.SimilarityStrategy == "field-weighted", "similarityStrategy",
+            profile.SimilarityStrategy, "field-weighted");
+        Require(SupportedScoring.Contains(profile.ScoringStrategy, StringComparer.Ordinal),
+            "scoringStrategy", profile.ScoringStrategy, "weighted or identifier-weighted");
+        Require(profile.DecisionStrategy == "threshold", "decisionStrategy",
+            profile.DecisionStrategy, "threshold");
+        Require(profile.ClusteringStrategy == "union-find", "clusteringStrategy",
+            profile.ClusteringStrategy, "union-find");
     }
 
     private static void Require(bool ok, string setting, string actual, string expected)
