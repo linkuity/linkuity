@@ -38,6 +38,14 @@ public sealed record ClusterShapeRow(
 
     public double EdgesPerRecord => Size == 0 ? 0 : (double)AutoEdges / Size;
 
+    /// <summary>
+    /// Of the pairs inside this cluster the engine actually compared, the share it judged to
+    /// MATCH. The complement is the cluster's own contradiction: pairs the engine looked at,
+    /// decided were different entities, and which transitive closure merged regardless.
+    /// Undefined where nothing inside was compared, which cannot happen for a formed cluster.
+    /// </summary>
+    public double AgreementRate => ComparedPairs == 0 ? 0 : (double)AutoEdges / ComparedPairs;
+
     /// <summary>Share of the cluster still standing once every single-edge join is cut.</summary>
     public double LargestTwoEdgeConnectedFraction
         => Size == 0 ? 0 : (double)LargestTwoEdgeConnectedSize / Size;
@@ -61,7 +69,8 @@ public sealed record ClusterShapeGroupRow(
     double SplitByOneEdgeFraction,
     double MedianEdgesPerRecord,
     double MedianComparedFraction,
-    double MedianLargestTwoEdgeConnectedFraction);
+    double MedianLargestTwoEdgeConnectedFraction,
+    double MedianAgreementRate);
 
 /// <summary>The same shape statistics within one cluster-size band, so a signal that exists only
 /// among small clusters cannot masquerade as a signal that holds everywhere.</summary>
@@ -72,7 +81,23 @@ public sealed record ClusterShapeSizeBandRow(
     int ClustersSplitByOneEdge,
     double MedianEdgesPerRecord,
     double MedianComparedFraction,
-    double MedianLargestTwoEdgeConnectedFraction);
+    double MedianLargestTwoEdgeConnectedFraction,
+    double MedianAgreementRate);
+
+/// <summary>
+/// One candidate setting for a cohesion rule — "do not auto-merge a cluster whose compared pairs
+/// agree less than <see cref="Threshold"/> of the time" — with both sides of the trade it makes.
+/// Correct clusters below the line are the recall cost; over-merged ones are the benefit. A rule
+/// is only worth having where the second column moves faster than the first.
+/// </summary>
+public sealed record ClusterAgreementThresholdRow(
+    double Threshold,
+    int CorrectClustersBelow,
+    double CorrectClusterFraction,
+    long CorrectRecordsBelow,
+    int OverMergedClustersBelow,
+    double OverMergedClusterFraction,
+    long OverMergedRecordsBelow);
 
 public sealed record ClusterShapeCounts(
     int Records,
@@ -93,4 +118,5 @@ public sealed record ClusterShapeResult(
     ClusterShapeCounts Counts,
     IReadOnlyList<ClusterShapeGroupRow> Groups,
     IReadOnlyList<ClusterShapeSizeBandRow> SizeBands,
+    IReadOnlyList<ClusterAgreementThresholdRow> AgreementThresholds,
     IReadOnlyList<ClusterShapeRow> LargestClusters);
