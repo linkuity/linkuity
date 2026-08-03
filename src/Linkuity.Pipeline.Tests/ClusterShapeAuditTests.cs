@@ -109,6 +109,69 @@ public class ClusterShapeAuditTests
     }
 
     [Fact]
+    public void AgreementRate_IsTheShareOfComparedPairsTheEngineJudgedToMatch()
+    {
+        // All three canonicalize to ACME HOLDINGS, so every compared pair also merges: a cluster
+        // with no internal contradiction scores 100%.
+        var records = new List<EntityRecord>
+        {
+            CorpusAuditFixtures.Org("a1", "Acme Holdings Corp"),
+            CorpusAuditFixtures.Org("a2", "Acme Holdings LLC"),
+            CorpusAuditFixtures.Org("a3", "Acme Holdings Co")
+        };
+        var truth = new Dictionary<string, string> { ["a1"] = "A", ["a2"] = "A", ["a3"] = "A" };
+
+        var row = Assert.Single(Run(records, truth).LargestClusters);
+
+        Assert.Equal(3, row.AutoEdges);
+        Assert.Equal(3, row.ComparedPairs);
+        Assert.Equal(1.0, row.AgreementRate, 6);
+    }
+
+    [Fact]
+    public void AgreementRate_FallsWhenTransitivityMergesPairsTheEngineRejected()
+    {
+        // a1 contains every token of a2 and of a3, so it merges with both. a2 and a3 overlap only
+        // on "Zeta" — enough to be COMPARED, far too little to merge. That rejected comparison is
+        // the cluster's contradiction, and it must surface as agreement below 100%.
+        //
+        // The shared token matters: a chain whose ends have no blocking key in common is never
+        // compared at all, and a contradiction that was never evaluated cannot be detected. That
+        // is the limit of this signal, not a flaw in this fixture.
+        var records = new List<EntityRecord>
+        {
+            CorpusAuditFixtures.Org("a1", "Alpha Beta Gamma Zeta Delta Epsilon Theta"),
+            CorpusAuditFixtures.Org("a2", "Alpha Beta Gamma Zeta"),
+            CorpusAuditFixtures.Org("a3", "Delta Epsilon Theta Zeta")
+        };
+        var truth = new Dictionary<string, string> { ["a1"] = "A", ["a2"] = "B", ["a3"] = "C" };
+
+        var row = Assert.Single(Run(records, truth).LargestClusters);
+
+        Assert.Equal(3, row.Size);
+        Assert.True(row.ComparedPairs > row.AutoEdges,
+            "the engine must have compared a pair inside this cluster that it declined to merge");
+        Assert.True(row.AgreementRate < 1.0);
+    }
+
+    [Fact]
+    public void AgreementThresholds_ReportBothSidesOfTheTradeAtEveryCandidateSetting()
+    {
+        var records = new List<EntityRecord>
+        {
+            CorpusAuditFixtures.Org("a1", "Acme Holdings Corp"),
+            CorpusAuditFixtures.Org("a2", "Acme Holdings LLC")
+        };
+        var truth = new Dictionary<string, string> { ["a1"] = "A", ["a2"] = "A" };
+
+        var result = Run(records, truth);
+
+        Assert.Equal(ClusterShapeAuditService.AgreementThresholds.Length, result.AgreementThresholds.Count);
+        // A fully-agreeing cluster sits above every candidate line, so no rule setting costs it.
+        Assert.All(result.AgreementThresholds, t => Assert.Equal(0, t.CorrectClustersBelow));
+    }
+
+    [Fact]
     public void SizeBands_OmitBandsWithNoClusters()
     {
         var records = new List<EntityRecord>

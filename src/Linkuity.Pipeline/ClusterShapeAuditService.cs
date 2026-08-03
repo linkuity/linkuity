@@ -99,6 +99,7 @@ public sealed class ClusterShapeAuditService
             counts,
             BuildGroups(rows),
             BuildSizeBands(rows),
+            BuildAgreementThresholds(rows),
             rows.OrderByDescending(x => x.Size)
                 .ThenBy(x => x.RepresentativeRecordId, StringComparer.Ordinal)
                 .Take(topClusters).ToList());
@@ -175,8 +176,34 @@ public sealed class ClusterShapeAuditService
                 threePlus.Count == 0 ? 0 : (double)threePlus.Count(r => r.SplitByOneEdge) / threePlus.Count,
                 Median(group.Select(r => r.EdgesPerRecord)),
                 Median(group.Select(r => r.ComparedFraction)),
-                Median(group.Select(r => r.LargestTwoEdgeConnectedFraction)));
+                Median(group.Select(r => r.LargestTwoEdgeConnectedFraction)),
+                Median(group.Select(r => r.AgreementRate)));
         }).ToList();
+
+    internal static readonly double[] AgreementThresholds =
+        [0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30];
+
+    /// <summary>
+    /// Sweeps candidate cohesion thresholds and reports both sides of the trade at each. A single
+    /// median cannot answer "is this rule worth having" — the answer lives in how fast the two
+    /// populations fall away from each other as the line moves.
+    /// </summary>
+    private static List<ClusterAgreementThresholdRow> BuildAgreementThresholds(
+        IReadOnlyList<ClusterShapeRow> rows)
+    {
+        var correct = rows.Where(r => r.Verdict == ClusterVerdict.Correct).ToList();
+        var mixed = rows.Where(r => r.Verdict == ClusterVerdict.Mixed).ToList();
+
+        return AgreementThresholds.Select(t =>
+        {
+            var c = correct.Where(r => r.AgreementRate < t).ToList();
+            var m = mixed.Where(r => r.AgreementRate < t).ToList();
+            return new ClusterAgreementThresholdRow(
+                t,
+                c.Count, correct.Count == 0 ? 0 : (double)c.Count / correct.Count, c.Sum(r => (long)r.Size),
+                m.Count, mixed.Count == 0 ? 0 : (double)m.Count / mixed.Count, m.Sum(r => (long)r.Size));
+        }).ToList();
+    }
 
     private static readonly (string Label, int Min, int Max)[] Bands =
     [
@@ -201,7 +228,8 @@ public sealed class ClusterShapeAuditService
                     band.Count(r => r.SplitByOneEdge),
                     Median(band.Select(r => r.EdgesPerRecord)),
                     Median(band.Select(r => r.ComparedFraction)),
-                    Median(band.Select(r => r.LargestTwoEdgeConnectedFraction))));
+                    Median(band.Select(r => r.LargestTwoEdgeConnectedFraction)),
+                    Median(band.Select(r => r.AgreementRate))));
             }
         return result;
     }
