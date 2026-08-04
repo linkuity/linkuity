@@ -97,7 +97,7 @@ public sealed class CorpusAuditService
             emitted++;
             var score = ScorePair(normalized, l, r, similarity, scoring, profile, out var comparable, out var lifted);
             if (lifted) floorLifted++;
-            var band = BandOf(score, comparable, profile);
+            var band = BandOf(score, comparable, profile, scoring.Scale);
             if (band == CorpusBand.Auto) uf.Union(l, r);
             if (truePairs.TryGetValue(Pack(l, r), out var state)) { state.Band = band; state.Score = score; }
         }, ct);
@@ -432,10 +432,14 @@ public sealed class CorpusAuditService
     /// <summary>
     /// Maps the shared classifier onto this report's own enum. CorpusBand is kept rather than
     /// replaced because it is serialized into stored baselines: renaming or renumbering it would
-    /// invalidate every recorded comparison.
+    /// invalidate every recorded comparison. <paramref name="scale"/> defaults to UnitInterval —
+    /// every scorer shipped before "evidence" produces that scale — so existing callers that
+    /// score on the unit interval are unaffected; Audit() passes the resolved scorer's own scale
+    /// so a LogOdds scorer's thresholds are validated against LogOdds, not against [0,1].
     /// </summary>
-    internal static CorpusBand BandOf(double score, bool comparable, MatchingProfile profile)
-        => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn()) switch
+    internal static CorpusBand BandOf(
+        double score, bool comparable, MatchingProfile profile, ScoreScale scale = ScoreScale.UnitInterval)
+        => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn(scale)) switch
         {
             MatchDecision.AutoMatch => CorpusBand.Auto,
             MatchDecision.Review => CorpusBand.Review,

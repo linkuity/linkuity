@@ -157,4 +157,29 @@ public class CorpusAuditScoringTests
 
         Assert.Contains("scoringStrategy", ex.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// ValidateSupportedStrategies accepting "evidence" is not the same as Audit() being able to
+    /// run it: BandOf used to classify every score against ScoreScale.UnitInterval regardless of
+    /// which scorer produced it, and MatchThresholds rejects an autoMatch > 1 on that scale. An
+    /// evidence profile's thresholds are bits, not fractions — 8.0/4.0 here — so this exercises
+    /// the exact path that threw ArgumentOutOfRangeException on the first scored candidate pair
+    /// before BandOf was made to consult the resolved scorer's own Scale.
+    /// </summary>
+    [Fact]
+    public void AuditRunsACandidatePairThroughTheEvidenceScorersOwnScale()
+    {
+        var profile = CorpusAuditFixtures.EvidenceProfile();
+        var records = new[]
+        {
+            CorpusAuditFixtures.Org("a", "ACME WIDGETS INC"),
+            CorpusAuditFixtures.Org("b", "ACME WIDGETS INC")
+        };
+        var groundTruth = new Dictionary<string, string> { ["a"] = "1", ["b"] = "1" };
+        var service = new CorpusAuditService(MatchingDefaults.CreateRegistry());
+
+        var ex = Record.Exception(() => service.Audit(records, profile, groundTruth));
+
+        Assert.Null(ex);
+    }
 }

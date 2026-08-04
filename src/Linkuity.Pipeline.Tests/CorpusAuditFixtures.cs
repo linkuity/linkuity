@@ -61,6 +61,39 @@ internal static class CorpusAuditFixtures
         MaxBlockSize = source.MaxBlockSize
     };
 
+    /// <summary>
+    /// A profile that actually runs on the evidence scorer: unlike Profile(), the matchable field
+    /// carries FieldEvidence (the scorer throws without it), and the thresholds are expressed in
+    /// bits — unbounded log-odds, not [0,1] — which is exactly the shape that exposed the
+    /// ThresholdsOn() defaulting bug in Audit()/BandOf().
+    /// </summary>
+    internal static MatchingProfile EvidenceProfile() => new()
+    {
+        ContentType = "organization",
+        Fields =
+        [
+            new ProfileField
+            {
+                Name = "organization_name",
+                SemanticType = SemanticFieldType.OrganizationName,
+                Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking,
+                SimilarityEvaluator = "canonical-jaccard",
+                Weight = 4.0,
+                Evidence = new FieldEvidence { SameEntityAgreement = 0.9, ChanceAgreement = 0.1, MaxAgreementBits = 6.0 }
+            }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["fingerprint", "token", "acronym"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "evidence",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 8.0,
+        ReviewThreshold = 4.0,
+        MaxBlockSize = 50
+    };
+
     internal static EntityRecord Org(string id, string name) => new()
     {
         Id = Guid.NewGuid(), ProjectId = Guid.Empty, SourceId = Guid.Empty, IngestBatchId = Guid.Empty,
