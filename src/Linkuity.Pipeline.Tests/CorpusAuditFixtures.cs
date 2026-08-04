@@ -44,7 +44,8 @@ internal static class CorpusAuditFixtures
         string? clusteringStrategy = null,
         IReadOnlyList<string>? blockingStrategies = null,
         double? autoMatchThreshold = null,
-        double? reviewThreshold = null) => new()
+        double? reviewThreshold = null,
+        double? minClusterCohesion = null) => new()
     {
         ContentType = source.ContentType,
         Fields = source.Fields,
@@ -58,7 +59,8 @@ internal static class CorpusAuditFixtures
         AutoMatchThreshold = autoMatchThreshold ?? source.AutoMatchThreshold,
         ReviewThreshold = reviewThreshold ?? source.ReviewThreshold,
         ReviewFloorGate = source.ReviewFloorGate,
-        MaxBlockSize = source.MaxBlockSize
+        MaxBlockSize = source.MaxBlockSize,
+        MinClusterCohesion = minClusterCohesion ?? source.MinClusterCohesion
     };
 
     /// <summary>

@@ -1,6 +1,7 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
 using Linkuity.Matching.Canonicalization;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -25,6 +26,10 @@ public sealed class CorpusAuditService
     /// <summary>Stateless — every method reads only static vocabulary — so one shared instance
     /// is safe and keeps the audit on the matcher's own canonicalization.</summary>
     private static readonly OrganizationNameCanonicalizer Canonicalizer = new();
+
+    /// <summary>The same policy production consults (IncrementalResolver). Stateless — it only
+    /// reads the profile and the counts it is handed — so one shared instance is safe here too.</summary>
+    private static readonly IClusterMergePolicy MergePolicy = new CohesionClusterMergePolicy();
 
     private readonly IStrategyRegistry _registry;
 
@@ -92,18 +97,33 @@ public sealed class CorpusAuditService
 
         var uf = new UnionFind(records.Count);
         long emitted = 0, floorLifted = 0;
+        // Every candidate pair the walk scores, kept only long enough to attribute each one to its
+        // FINAL cluster below. Union-find keeps growing for the rest of the walk after this pair is
+        // visited, so "did both endpoints land in the same cluster" is not decidable yet — the same
+        // reason IncrementalResolver.AllComparisons is materialized in full before its own rollup,
+        // rather than tallied against whatever root a record happens to have at visit time.
+        var comparisons = new List<(int Left, int Right, bool IsAuto)>();
         var occurrences = ForEachCandidatePair(index, effectiveMax, (l, r) =>
         {
             emitted++;
             var score = ScorePair(normalized, l, r, similarity, scoring, profile, out var comparable, out var lifted);
             if (lifted) floorLifted++;
             var band = BandOf(score, comparable, profile, scoring.Scale);
-            if (band == CorpusBand.Auto) uf.Union(l, r);
+            var isAuto = band == CorpusBand.Auto;
+            if (isAuto) uf.Union(l, r);
+            comparisons.Add((l, r, isAuto));
             if (truePairs.TryGetValue(Pack(l, r), out var state)) { state.Band = band; state.Score = score; }
         }, ct);
 
         var roots = new int[records.Count];
         for (var i = 0; i < records.Count; i++) roots[i] = uf.Find(i);
+
+        // Mirrors production (IncrementalResolver.MaterializeComponent): a cluster whose own
+        // comparisons contradict it too often is refused and dissolves into singletons. Must run
+        // before SameCluster/ClusterPairCounts below so every number this audit reports — not just
+        // the cluster summary — reflects the clustering production would actually have formed.
+        ApplyClusterMergePolicy(roots, comparisons, profile);
+
         foreach (var state in truePairs.Values) state.SameCluster = roots[state.Left] == roots[state.Right];
 
         var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
@@ -448,6 +468,45 @@ public sealed class CorpusAuditService
         };
 
     private static long Choose2(long n) => n * (n - 1) / 2;
+
+    /// <summary>
+    /// Evaluates every multi-record root the walk produced through the same policy production
+    /// consults, using the SAME agreement definition: an agreement is an auto-band comparison, and
+    /// the denominator is every comparison made between two members of that root's FINAL cluster
+    /// (<paramref name="comparisons"/>, filtered to pairs whose endpoints share a root — never a
+    /// second candidate-pair walk). A root the policy refuses has every member reset to its own
+    /// root, in place, before returning — the audit's existing representation of "unclustered" —
+    /// so the cluster metrics computed after this call see singletons rather than a cluster
+    /// production would never have formed.
+    /// </summary>
+    private static void ApplyClusterMergePolicy(
+        int[] roots, IReadOnlyList<(int Left, int Right, bool IsAuto)> comparisons, MatchingProfile profile)
+    {
+        var membersByRoot = new Dictionary<int, List<int>>();
+        for (var i = 0; i < roots.Length; i++)
+            (membersByRoot.TryGetValue(roots[i], out var list) ? list : membersByRoot[roots[i]] = []).Add(i);
+
+        var tally = new Dictionary<int, (long Comparisons, long Agreements)>();
+        foreach (var (left, right, isAuto) in comparisons)
+        {
+            var root = roots[left];
+            if (root != roots[right]) continue; // endpoints landed in different final clusters
+            var (cmp, agr) = tally.GetValueOrDefault(root);
+            tally[root] = (cmp + 1, agr + (isAuto ? 1 : 0));
+        }
+
+        foreach (var (root, members) in membersByRoot)
+        {
+            if (members.Count < 2) continue; // singleton: no cluster for the policy to refuse
+            var (cmp, agr) = tally.GetValueOrDefault(root);
+            // Members comes from the component's own membership list, never from
+            // default(ClusterEvidenceCounts) — that reads as a fully-agreeing zero-member cluster.
+            var counts = new ClusterEvidenceCounts(members.Count, cmp, agr);
+            if (MergePolicy.Evaluate(counts, profile) == ClusterMergeVerdict.Accepted) continue;
+
+            foreach (var member in members) roots[member] = member;
+        }
+    }
 
     /// <summary>
     /// Pair-counting cluster metrics from a contingency table — never by enumerating pairs inside
