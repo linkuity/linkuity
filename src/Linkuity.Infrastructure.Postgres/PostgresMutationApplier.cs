@@ -107,14 +107,15 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
         {
             int count = Math.Min(MaxRowsPerInsert, distinct.Count - offset);
             var sql = new StringBuilder(
-                "INSERT INTO clusters (id, project_id, created_at, status, merged_into_cluster_id) VALUES ");
+                "INSERT INTO clusters (id, project_id, created_at, status, merged_into_cluster_id, " +
+                "comparisons_inside, agreements_inside) VALUES ");
             await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
             for (int i = 0; i < count; i++)
             {
                 var cluster = distinct[offset + i];
                 if (i > 0)
                     sql.Append(',');
-                sql.Append($"(@id{i}, @pr{i}, @ca{i}, @st{i}, @mi{i})");
+                sql.Append($"(@id{i}, @pr{i}, @ca{i}, @st{i}, @mi{i}, @ci{i}, @ai{i})");
                 cmd.Parameters.AddWithValue($"id{i}", cluster.Id);
                 cmd.Parameters.AddWithValue($"pr{i}", cluster.ProjectId);
                 cmd.Parameters.AddWithValue($"ca{i}", cluster.CreatedAt.UtcDateTime);
@@ -123,9 +124,13 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
                     { Value = cluster.MergedIntoClusterId.HasValue
                         ? (object)cluster.MergedIntoClusterId.Value
                         : DBNull.Value });
+                cmd.Parameters.AddWithValue($"ci{i}", cluster.ComparisonsInside);
+                cmd.Parameters.AddWithValue($"ai{i}", cluster.AgreementsInside);
             }
             sql.Append(" ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, " +
-                       "merged_into_cluster_id = EXCLUDED.merged_into_cluster_id");
+                       "merged_into_cluster_id = EXCLUDED.merged_into_cluster_id, " +
+                       "comparisons_inside = EXCLUDED.comparisons_inside, " +
+                       "agreements_inside = EXCLUDED.agreements_inside");
             cmd.CommandText = sql.ToString();
             await cmd.ExecuteNonQueryAsync(ct);
         }

@@ -28,6 +28,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Migrations\0001_initial_schema.sql" />
     <EmbeddedResource Include="Migrations\0002_score_provenance.sql" />
+    <EmbeddedResource Include="Migrations\0003_cluster_cohesion_counters.sql" />
   </ItemGroup>
 
 </Project>

@@ -530,6 +530,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 project_id              AS "ProjectId",
                 status                  AS "Status",
                 merged_into_cluster_id  AS "MergedIntoClusterId",
+                comparisons_inside      AS "ComparisonsInside",
+                agreements_inside       AS "AgreementsInside",
                 created_at              AS "CreatedAt"
             FROM clusters
             WHERE project_id = @ProjectId
@@ -892,6 +894,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public Guid ProjectId { get; set; }
         public string Status { get; set; } = "active";
         public Guid? MergedIntoClusterId { get; set; }
+        public long ComparisonsInside { get; set; }
+        public long AgreementsInside { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -1022,6 +1026,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
         ProjectId = row.ProjectId,
         Status = row.Status,
         MergedIntoClusterId = row.MergedIntoClusterId,
+        ComparisonsInside = row.ComparisonsInside,
+        AgreementsInside = row.AgreementsInside,
         MemberEntityRecordIds = membersByCluster.TryGetValue(row.Id, out var members) ? members : [],
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
     };

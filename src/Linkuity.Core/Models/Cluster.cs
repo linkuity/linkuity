@@ -12,4 +12,14 @@ public sealed class Cluster
 
     /// <summary>When Status == "merged", the surviving cluster this was absorbed into.</summary>
     public Guid? MergedIntoClusterId { get; init; }
+
+    /// <summary>
+    /// Comparisons the engine made between two members of THIS cluster, across all ingests.
+    /// The denominator of cohesion. Counts confident rejections as well as agreements — without
+    /// them a cluster whose records disagree is indistinguishable from one never looked inside.
+    /// </summary>
+    public long ComparisonsInside { get; init; }
+
+    /// <summary>How many of those comparisons scored in the auto band.</summary>
+    public long AgreementsInside { get; init; }
 }
