@@ -220,6 +220,20 @@ public sealed class MatchingProfileConfigLoader
                 $"Matching profile '{source}' value 'defaultPhoneRegion' ('{phoneRegion}') must be a " +
                 "two-letter uppercase ISO 3166-1 region code, for example 'US' or 'GB'.");
 
+        // Optional cohesion floor (absent -> 0.60, the measured default). It is a rate, so unlike
+        // reviewFloorGate/identifierFloorGate it must additionally reject NaN/Infinity: RequireRange's
+        // < / > comparisons let NaN through silently (every comparison against NaN is false).
+        var minClusterCohesion = document.MinClusterCohesion ?? 0.60;
+        if (double.IsNaN(minClusterCohesion) || double.IsInfinity(minClusterCohesion) || minClusterCohesion is < 0.0 or > 1.0)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'minClusterCohesion' ({minClusterCohesion}) must be a finite number in [0, 1].");
+
+        // Optional cluster-size backstop (absent -> null, off). A cluster cannot be smaller than
+        // 2 records, so a limit below that would block every merge rather than bound the large ones.
+        if (document.MaxAutoClusterSize is { } maxAutoClusterSize && maxAutoClusterSize < 2)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'maxAutoClusterSize' ({maxAutoClusterSize}) must be at least 2.");
+
         return new MatchingProfile
         {
             ContentType = contentType,
@@ -238,7 +252,9 @@ public sealed class MatchingProfileConfigLoader
             MaxBlockSize = document.MaxBlockSize,
             DefaultPhoneRegion = phoneRegion,
             DefaultDateOrder = dateOrder,
-            PlaceholderValues = document.PlaceholderValues ?? []
+            PlaceholderValues = document.PlaceholderValues ?? [],
+            MinClusterCohesion = minClusterCohesion,
+            MaxAutoClusterSize = document.MaxAutoClusterSize
         };
     }
 

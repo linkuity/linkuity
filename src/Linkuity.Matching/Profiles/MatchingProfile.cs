@@ -91,6 +91,21 @@ public sealed record MatchingProfile
     public IReadOnlyList<string> PlaceholderValues { get; init; } = [];
 
     /// <summary>
+    /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the
+    /// cluster does not form. Default 0.60, measured to cost nothing on 11,786 correct SEC
+    /// clusters while rejecting 6,606 over-merged ones.
+    /// </summary>
+    public double MinClusterCohesion { get; init; } = 0.60;
+
+    /// <summary>
+    /// Optional backstop: a cluster larger than this does not form automatically. Null (off) by
+    /// default, and deliberately so — 99.97% of correct SEC clusters hold five records or fewer,
+    /// but that is a property of registrants having few name variants. A customer consolidating
+    /// fifty source systems has large correct clusters, and a shared default would destroy them.
+    /// </summary>
+    public int? MaxAutoClusterSize { get; init; }
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.

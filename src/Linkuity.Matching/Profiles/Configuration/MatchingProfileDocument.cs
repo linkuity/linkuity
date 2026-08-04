@@ -22,6 +22,8 @@ public sealed class MatchingProfileDocument
     public string? DefaultPhoneRegion { get; init; }
     public string? DefaultDateOrder { get; init; }
     public List<string>? PlaceholderValues { get; init; }
+    public double? MinClusterCohesion { get; init; }
+    public int? MaxAutoClusterSize { get; init; }
 }
 
 public sealed class MatchingProfileFieldDocument
