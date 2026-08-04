@@ -477,13 +477,15 @@ public sealed class CorpusAuditService
     /// <summary>
     /// Maps the shared classifier onto this report's own enum. CorpusBand is kept rather than
     /// replaced because it is serialized into stored baselines: renaming or renumbering it would
-    /// invalidate every recorded comparison. <paramref name="scale"/> defaults to UnitInterval —
-    /// every scorer shipped before "evidence" produces that scale — so existing callers that
-    /// score on the unit interval are unaffected; Audit() passes the resolved scorer's own scale
-    /// so a LogOdds scorer's thresholds are validated against LogOdds, not against [0,1].
+    /// invalidate every recorded comparison. <paramref name="scale"/> is required rather than
+    /// defaulted to UnitInterval: a defaulted scale here previously let a call site compile and
+    /// pass its tests while silently assuming the unit interval, a defect found and fixed five
+    /// times across this programme (twice in this class alone). Callers must pass the resolved
+    /// scorer's own scale so a LogOdds scorer's thresholds are validated against LogOdds, not
+    /// against [0,1].
     /// </summary>
     internal static CorpusBand BandOf(
-        double score, bool comparable, MatchingProfile profile, ScoreScale scale = ScoreScale.UnitInterval)
+        double score, bool comparable, MatchingProfile profile, ScoreScale scale)
         => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn(scale)) switch
         {
             MatchDecision.AutoMatch => CorpusBand.Auto,

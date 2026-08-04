@@ -1,3 +1,4 @@
+using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
@@ -30,7 +31,7 @@ public class CorpusAuditBandCharacterizationTests
     [InlineData(0.7499, CorpusBand.NoMatch)]
     [InlineData(0.00, CorpusBand.NoMatch)]
     public void ComparablePair_BandsOnThresholds_Inclusively(double score, CorpusBand expected)
-        => Assert.Equal(expected, CorpusAuditService.BandOf(score, comparable: true, Profile));
+        => Assert.Equal(expected, CorpusAuditService.BandOf(score, comparable: true, Profile, ScoreScale.UnitInterval));
 
     /// <summary>
     /// A pair with no signals is NonComparable whatever its score — the score is meaningless
@@ -41,5 +42,5 @@ public class CorpusAuditBandCharacterizationTests
     [InlineData(0.80)]
     [InlineData(0.00)]
     public void NonComparablePair_IsNeverBandedByScore(double score)
-        => Assert.Equal(CorpusBand.NonComparable, CorpusAuditService.BandOf(score, comparable: false, Profile));
+        => Assert.Equal(CorpusBand.NonComparable, CorpusAuditService.BandOf(score, comparable: false, Profile, ScoreScale.UnitInterval));
 }
