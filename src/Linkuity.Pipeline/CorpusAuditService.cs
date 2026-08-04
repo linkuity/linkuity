@@ -412,7 +412,12 @@ public sealed class CorpusAuditService
     {
         var forwardSignals = similarity.Evaluate(normalized[l], normalized[r], profile);
         var reverseSignals = similarity.Evaluate(normalized[r], normalized[l], profile);
-        comparable = forwardSignals.Count > 0 || reverseSignals.Count > 0;
+        // Signal PRESENCE stopped meaning "a comparison happened" once outcomes arrived: the
+        // similarity strategy now emits one signal per matchable field even when neither side
+        // populates it. Count > 0 would be permanently true for any profile with matchable
+        // fields, so comparability must be asked of the outcomes, not the collection size.
+        comparable = forwardSignals.Any(s => s.Outcome == ComparisonOutcome.Compared)
+                     || reverseSignals.Any(s => s.Outcome == ComparisonOutcome.Compared);
         if (!comparable) { floorLifted = false; return 0; }
 
         var forward = scoring.Score(forwardSignals, profile);

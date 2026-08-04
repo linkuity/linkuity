@@ -43,6 +43,12 @@ public sealed class IdentifierAwareWeightedScoringStrategy : IScoringStrategy
 
     public ScoreResult Score(IReadOnlyList<SimilaritySignal> signals, MatchingProfile profile)
     {
+        // This scorer predates ComparisonOutcome and was written against "one signal per field
+        // that was actually compared" — the similarity strategy now emits one per matchable
+        // field regardless. Filtering to Compared here reproduces the old input shape exactly,
+        // which is what keeps the frozen corpus baseline's arithmetic unchanged.
+        signals = [.. signals.Where(s => s.Outcome == ComparisonOutcome.Compared)];
+
         if (signals.Count == 0)
             return new ScoreResult(0, []);
 

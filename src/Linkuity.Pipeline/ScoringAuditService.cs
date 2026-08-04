@@ -109,7 +109,11 @@ public sealed class ScoringAuditService
         {
             var signals = similarity.Evaluate(bySource[left], bySource[right], profile);
             var result = scoring.Score(signals, profile);
-            var comparable = signals.Count > 0;
+            // Signal PRESENCE stopped meaning "a comparison happened" once outcomes arrived: the
+            // similarity strategy now emits one signal per matchable field even when neither side
+            // populates it. Count > 0 would be permanently true for any profile with matchable
+            // fields, so comparability must be asked of the outcomes, not the collection size.
+            var comparable = signals.Any(s => s.Outcome == ComparisonOutcome.Compared);
             // ScoreBand is kept rather than replaced: it is serialized into audit reports, and it
             // carries Unreachable, a ground-truth concept the score classifier has no view of.
             var band = MatchBandClassifier.Classify(result.FinalScore, comparable, thresholds) switch

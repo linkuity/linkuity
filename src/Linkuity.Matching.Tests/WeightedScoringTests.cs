@@ -55,7 +55,7 @@ public class WeightedScoringTests
     }
 
     [Fact]
-    public void FieldWeighted_SkipsFieldsMissingOnEitherSide()
+    public void FieldWeighted_EmitsMissingOneSideForFieldsMissingOnEitherSide()
     {
         var profile = ProfileWith(Pf("first_name", "fuzzy", 1.0), Pf("phone", "exact", 3.0));
         var strategy = new WeightedFieldSimilarityStrategy(AllEvaluators);
@@ -65,8 +65,11 @@ public class WeightedScoringTests
             Rec(new Dictionary<string, string> { ["first_name"] = "Jon" }),
             profile);
 
-        Assert.Single(signals);
-        Assert.Equal("first_name", signals[0].Name);
+        Assert.Equal(2, signals.Count);
+        Assert.Equal(ComparisonOutcome.Compared, signals.Single(s => s.Name == "first_name").Outcome);
+        var phone = signals.Single(s => s.Name == "phone");
+        Assert.Equal(ComparisonOutcome.MissingOneSide, phone.Outcome);
+        Assert.Equal(0.0, phone.Value);
     }
 
     [Fact]
