@@ -200,6 +200,30 @@ public class ClusterShapeAuditTests
         Assert.Contains("clusteringStrategy", ex.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Mirrors CorpusAuditScoringTests.AuditRunsACandidatePairThroughTheEvidenceScorersOwnScale:
+    /// this service's own BandOf call used to omit the resolved scorer's Scale, so it silently
+    /// inherited the ScoreScale.UnitInterval default and threw ArgumentOutOfRangeException on the
+    /// first scored pair from an evidence profile, whose thresholds are unbounded log-odds bits
+    /// (8.0/4.0 here), not fractions in [0,1].
+    /// </summary>
+    [Fact]
+    public void AuditRunsACandidatePairThroughTheEvidenceScorersOwnScale()
+    {
+        var profile = CorpusAuditFixtures.EvidenceProfile();
+        var records = new[]
+        {
+            CorpusAuditFixtures.Org("a", "ACME WIDGETS INC"),
+            CorpusAuditFixtures.Org("b", "ACME WIDGETS INC")
+        };
+        var groundTruth = new Dictionary<string, string> { ["a"] = "1", ["b"] = "1" };
+        var service = new ClusterShapeAuditService(MatchingDefaults.CreateRegistry());
+
+        var ex = Record.Exception(() => service.Audit(records, profile, groundTruth));
+
+        Assert.Null(ex);
+    }
+
     [Fact]
     public void Median_UsesALowerMedianSoTheValueBelongsToARealCluster()
     {

@@ -59,7 +59,7 @@ public sealed class ClusterShapeAuditService
         {
             candidatePairs++;
             var score = CorpusAuditService.ScorePair(normalized, l, r, similarity, scoring, profile, out var comparable, out _);
-            if (CorpusAuditService.BandOf(score, comparable, profile) == CorpusBand.Auto)
+            if (CorpusAuditService.BandOf(score, comparable, profile, scoring.Scale) == CorpusBand.Auto)
             {
                 uf.Union(l, r);
                 edges.Add((l, r));
