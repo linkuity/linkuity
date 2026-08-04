@@ -75,4 +75,25 @@ public class StrategyRegistryTests
             [new FakeNorm(), new FakeNorm()], [new FakeBlock()], [new FakeRetrieve()], [new FakeSim()],
             [new FakeScore()], [new FakeDecide()], [new FakeCluster()], [new FakeEvaluator()]));
     }
+
+    [Fact]
+    public void TheEvidenceScorerIsRegisteredUnderItsProfileName()
+    {
+        var registry = MatchingDefaults.CreateRegistry();
+
+        var scorer = registry.Scoring["evidence"];
+
+        Assert.Equal(ScoreScale.LogOdds, scorer.Scale);
+    }
+
+    [Fact]
+    public void RegisteringTheEvidenceScorerDoesNotDisplaceTheExistingOnes()
+    {
+        // Stage 1a ships it alongside. Every profile keeps the scorer it names today.
+        var registry = MatchingDefaults.CreateRegistry();
+
+        Assert.True(registry.Scoring.ContainsKey("weighted"));
+        Assert.True(registry.Scoring.ContainsKey("identifier-weighted"));
+        Assert.Equal(ScoreScale.UnitInterval, registry.Scoring["identifier-weighted"].Scale);
+    }
 }

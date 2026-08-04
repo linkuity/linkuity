@@ -85,6 +85,48 @@ public sealed record MatchingProfile
     public DateFieldOrder DefaultDateOrder { get; init; } = DateFieldOrder.MonthFirst;
 
     /// <summary>
+    /// Values that carry no information despite being rare — "N/A", "UNKNOWN", "TEST". They keep
+    /// their ordinary agreement evidence and lose only rarity weighting (stage 2).
+    /// </summary>
+    public IReadOnlyList<string> PlaceholderValues { get; init; } = [];
+
+    /// <summary>
+    /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the
+    /// cluster does not form. Null (off) by default in this stage — stage 1a ships with nothing
+    /// moving. <c>persist-batch</c> imports clusters the engine never pairwise-compared (counters
+    /// read 0/0, which <c>AgreementRate</c> treats as fully agreeing), so enforcing here first
+    /// would pass every imported cluster trivially while changing the durable path's behaviour
+    /// invisibly — the frozen baseline models the batch audit path and never exercises
+    /// <c>IncrementalResolver</c>. Cohesion enforcement ships in stage 1b, once the batch path has
+    /// its own comparison-counting story.
+    /// <para>
+    /// While this is null, <c>IncrementalResolver</c> does not accumulate <c>ComparisonsInside</c>/
+    /// <c>AgreementsInside</c> either (<c>IClusterMergePolicy.CanReject</c> gates the bookkeeping,
+    /// not only the rejection it exists to support — see the fix for the quadratic cost of always
+    /// doing it). Turning this on for a project that already has ingested data is therefore a
+    /// re-ingest, not a live toggle onto retroactively-known history: there is none.
+    /// </para>
+    /// <para>
+    /// When enabled, the recommended value is 0.50 — a simple majority, chosen by argument rather
+    /// than by measurement: a cluster whose own comparisons disagree more often than they agree is
+    /// self-contradictory on its face, and that holds without reference to any corpus. A customer
+    /// with no ground truth cannot re-derive a threshold from their own data, so 0.50 has to be
+    /// defensible on its own terms. (On 1,052,432 labelled SEC records this also costs nothing —
+    /// 11,786 correct clusters survive — but that measurement corroborates the value, it is not
+    /// the reason for it.)
+    /// </para>
+    /// </summary>
+    public double? MinClusterCohesion { get; init; }
+
+    /// <summary>
+    /// Optional backstop: a cluster larger than this does not form automatically. Null (off) by
+    /// default, and deliberately so — 99.97% of correct SEC clusters hold five records or fewer,
+    /// but that is a property of registrants having few name variants. A customer consolidating
+    /// fifty source systems has large correct clusters, and a shared default would destroy them.
+    /// </summary>
+    public int? MaxAutoClusterSize { get; init; }
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.

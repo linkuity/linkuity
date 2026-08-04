@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
@@ -44,7 +45,11 @@ public sealed class FileMetadataStore : IMetadataStore
             : (engine ?? MatchingDefaults.CreateEngine());
         _profileProvider = profileProvider
             ?? new DefaultMatchingProfileProvider(DefaultMatchingProfileProvider.BuiltInProfiles());
-        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null);
+        // CohesionClusterMergePolicy is stateless (the threshold it reads lives on the profile
+        // passed at Resolve time, not on the policy instance), so constructing one here rather than
+        // taking it through DI costs nothing behaviorally while keeping this constructor's public
+        // shape unchanged for every existing caller.
+        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null, new CohesionClusterMergePolicy());
     }
 
     public Task<Project> CreateProjectAsync(string name, string contentType, DateTimeOffset createdAt, CancellationToken ct = default)
@@ -282,6 +287,7 @@ public sealed class FileMetadataStore : IMetadataStore
         db.MatchEdges.AddRange(m.EdgesToInsert);
         db.ReviewTasks.AddRange(m.ReviewTasksToInsert);
         db.ClusterMergeEvents.AddRange(m.MergeEventsToInsert);
+        db.ClusterDissolutionEvents.AddRange(m.DissolutionEventsToInsert);
     }
 
     public async Task<IReadOnlyList<EntityRecord>> ListEntityRecordsAsync(Guid projectId, CancellationToken ct = default)

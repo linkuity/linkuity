@@ -1,3 +1,4 @@
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
 using Linkuity.Matching.Strategies;
@@ -37,8 +38,10 @@ public static class MatchingServiceCollectionExtensions
         services.AddSingleton<IScoringStrategy, DefaultScoringStrategy>();
         services.AddSingleton<IScoringStrategy, WeightedScoringStrategy>();
         services.AddSingleton<IScoringStrategy, IdentifierAwareWeightedScoringStrategy>();
+        services.AddSingleton<IScoringStrategy, EvidenceScoringStrategy>();
         services.AddSingleton<IDecisionStrategy, ThresholdDecisionStrategy>();
         services.AddSingleton<IClusteringStrategy, UnionFindClusteringStrategy>();
+        services.AddSingleton<IClusterMergePolicy, CohesionClusterMergePolicy>();
 
         services.AddSingleton<ISimilarityEvaluator, ExactSimilarityEvaluator>();
         services.AddSingleton<ISimilarityEvaluator, FuzzyTextSimilarityEvaluator>();
@@ -71,6 +74,12 @@ public static class MatchingServiceCollectionExtensions
                     ? loader.LoadFromDirectory(path, registry)
                     : (IEnumerable<MatchingProfile>)[loader.LoadFromFile(path, registry)])
                 .ToList();
+            // This provider feeds the durable ingest path (IncrementalResolver /
+            // ThresholdDecisionStrategy), which always builds thresholds on ScoreScale.UnitInterval
+            // — see MatchingProfileConfigLoader.RequireLiveMatchingScale. A profile loaded here that
+            // resolves to a different scale must fail now, at startup, not on the first ingest.
+            foreach (var profile in loaded)
+                MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, profile.ContentType);
             return new DefaultMatchingProfileProvider(
                 DefaultMatchingProfileProvider.BuiltInProfiles(), loaded);
         });

@@ -80,6 +80,47 @@ public sealed class MatchingProfileConfigLoader
             .ToList();
     }
 
+    /// <summary>
+    /// Refuses a profile whose resolved scoring strategy produces scores on a scale live
+    /// matching cannot carry yet. <see cref="Strategies.IDecisionStrategy.Decide"/>, and the
+    /// threshold construction inside <c>IncrementalResolver</c> and <c>BatchMatchingService</c>,
+    /// all build <see cref="MatchThresholds"/> on the default <see cref="ScoreScale.UnitInterval"/>
+    /// with no way for a caller to supply a different one — giving them that way is an interface
+    /// change (<c>IDecisionStrategy.Decide</c> does not receive the registry a scale would come
+    /// from) reserved for a later stage, not this fix. Before "evidence" (<see cref="ScoreScale.LogOdds"/>)
+    /// was registered, naming it in a profile failed at config time with "unknown scoring
+    /// strategy". This restores that same clean, config-time failure for the paths that would
+    /// otherwise crash on the first scored pair with a bare <see cref="ArgumentOutOfRangeException"/>.
+    /// <para>
+    /// Deliberately NOT called from <see cref="LoadFromJson"/>/<see cref="LoadFromFile"/>/
+    /// <see cref="LoadFromDirectory"/> themselves: <c>CorpusAuditService</c> already threads the
+    /// resolved scale through its own scoring (see its <c>BandOf</c>) and explicitly lists
+    /// "evidence" as a scoring strategy it supports, measuring it is the whole point of stage 1a.
+    /// Folding this check into the loader unconditionally would make that measurement path unable
+    /// to load the very profiles it exists to measure. Call this only where a loaded profile is
+    /// about to be handed to live matching (durable ingest, local batch matching) — see its call
+    /// sites in <c>MatchingServiceCollectionExtensions</c> and <c>LocalBatchRunner</c>.
+    /// </para>
+    /// </summary>
+    public static void RequireLiveMatchingScale(MatchingProfile profile, IStrategyRegistry registry, string source)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(registry);
+
+        var scale = registry.Scoring[profile.ScoringStrategy].Scale;
+        if (scale == ScoreScale.UnitInterval)
+            return;
+
+        throw new MatchingProfileConfigException(
+            $"Matching profile '{source}' uses scoringStrategy '{profile.ScoringStrategy}', which produces " +
+            $"scores on the {scale} scale. Live matching (durable incremental ingest, local batch matching, " +
+            $"and threshold decisions) always classifies bands on the {ScoreScale.UnitInterval} scale and has " +
+            $"no way yet to carry a different one, so autoMatchThreshold ({profile.AutoMatchThreshold}) / " +
+            $"reviewThreshold ({profile.ReviewThreshold}) would throw at the first scored pair instead of " +
+            "classifying anything. This profile can still be loaded for corpus-audit measurement, which does " +
+            "carry its own scale; it cannot yet be used for live matching.");
+    }
+
     private static MatchingProfile Build(MatchingProfileDocument document, IStrategyRegistry registry, string source)
     {
         var contentType = Require(document.ContentType, "contentType", source);
@@ -94,6 +135,18 @@ public sealed class MatchingProfileConfigLoader
             .FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
             throw new MatchingProfileConfigException($"Matching profile '{source}' declares field '{duplicate.Key}' more than once.");
+
+        // Members of one alias group must be priced identically: they are the same fact, so
+        // differing parameters mean the score depends on which spelling a source happened to use.
+        foreach (var group in fields.Where(f => f.AliasGroup is not null).GroupBy(f => f.AliasGroup!, StringComparer.Ordinal))
+        {
+            var distinct = group.Select(f => f.Evidence).Distinct().Count();
+            if (distinct > 1)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' alias group '{group.Key}' has fields with different " +
+                    $"evidence parameters ({string.Join(", ", group.Select(f => f.Name))}). Members of an " +
+                    "alias group are the same fact and must be priced the same.");
+        }
 
         var normalization = Require(document.NormalizationStrategy, "normalizationStrategy", source);
         RequireRegistered(registry.Normalization, normalization, "normalization strategy", source);
@@ -150,6 +203,26 @@ public sealed class MatchingProfileConfigLoader
                 $"for scoringStrategy '{scoring}' on the {scale} scale. {ReasonOf(ex)}");
         }
 
+        // The memo's acceptance criterion, enforced by the system rather than remembered by us:
+        // a single rare descriptive agreement must not on its own exceed the merge threshold.
+        // Load-time rather than a test, because a test only protects the profiles we ship.
+        foreach (var evidenceField in fields.Where(f => f.Evidence is not null))
+        {
+            var cap = evidenceField.Evidence!.MaxAgreementBits;
+
+            if (cap is null && !evidenceField.Roles.HasFlag(FieldRole.Identifier))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{evidenceField.Name}' declares evidence with no " +
+                    "maxAgreementBits. An uncapped field can carry a merge on its own, which is only " +
+                    "appropriate for a verified identifier — declare the identifier role, or set a cap.");
+
+            if (cap is { } bits && bits >= auto)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{evidenceField.Name}' has maxAgreementBits {bits}, " +
+                    $"which is not below autoMatchThreshold {auto}. A single agreement on one " +
+                    "descriptive field would reach the auto-merge band unaided.");
+        }
+
         // Optional (absent -> 0.75, preserving Milestone 27's default). Range-validated only; no
         // constraint relative to reviewThreshold (a free tuning knob — below reviewThreshold it
         // promotes strongly-evidenced sub-threshold pairs into review).
@@ -188,6 +261,23 @@ public sealed class MatchingProfileConfigLoader
                 $"Matching profile '{source}' value 'defaultPhoneRegion' ('{phoneRegion}') must be a " +
                 "two-letter uppercase ISO 3166-1 region code, for example 'US' or 'GB'.");
 
+        // Optional cohesion floor. Absent -> null, off (stage 1a ships with nothing moving; see
+        // MatchingProfile.MinClusterCohesion). Validated only when present — no default is
+        // substituted, mirroring maxAutoClusterSize below. It is a rate, so unlike
+        // reviewFloorGate/identifierFloorGate it must additionally reject NaN/Infinity:
+        // RequireRange's < / > comparisons let NaN through silently (every comparison against
+        // NaN is false).
+        if (document.MinClusterCohesion is { } minClusterCohesion &&
+            (double.IsNaN(minClusterCohesion) || double.IsInfinity(minClusterCohesion) || minClusterCohesion is < 0.0 or > 1.0))
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'minClusterCohesion' ({minClusterCohesion}) must be a finite number in [0, 1].");
+
+        // Optional cluster-size backstop (absent -> null, off). A cluster cannot be smaller than
+        // 2 records, so a limit below that would block every merge rather than bound the large ones.
+        if (document.MaxAutoClusterSize is { } maxAutoClusterSize && maxAutoClusterSize < 2)
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' value 'maxAutoClusterSize' ({maxAutoClusterSize}) must be at least 2.");
+
         return new MatchingProfile
         {
             ContentType = contentType,
@@ -205,7 +295,10 @@ public sealed class MatchingProfileConfigLoader
             IdentifierFloorGate = identifierFloorGate,
             MaxBlockSize = document.MaxBlockSize,
             DefaultPhoneRegion = phoneRegion,
-            DefaultDateOrder = dateOrder
+            DefaultDateOrder = dateOrder,
+            PlaceholderValues = document.PlaceholderValues ?? [],
+            MinClusterCohesion = document.MinClusterCohesion,
+            MaxAutoClusterSize = document.MaxAutoClusterSize
         };
     }
 
@@ -241,6 +334,30 @@ public sealed class MatchingProfileConfigLoader
                 $"Matching profile '{source}' field '{name}' has weight {weight}; it must be a finite number " +
                 "greater than zero. Remove the field rather than giving it zero weight.");
 
+        FieldEvidence? evidence = null;
+        if (field.Evidence is { } e)
+        {
+            if (e.SameEntityAgreement is not { } m || e.ChanceAgreement is not { } u)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{name}' declares evidence but is missing " +
+                    "sameEntityAgreement or chanceAgreement; both are required.");
+            try
+            {
+                evidence = new FieldEvidence
+                {
+                    SameEntityAgreement = m,
+                    ChanceAgreement = u,
+                    MaxAgreementBits = e.MaxAgreementBits
+                };
+                _ = evidence.AgreementBits;   // forces the lazy m > u check at LOAD time
+            }
+            catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
+            {
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{name}' has invalid evidence: {ReasonOf(ex)}");
+            }
+        }
+
         return new ProfileField
         {
             Name = name,
@@ -248,7 +365,9 @@ public sealed class MatchingProfileConfigLoader
             Roles = roles,
             SimilarityEvaluator = field.SimilarityEvaluator,
             Weight = weight,
-            EvaluatorOptions = field.EvaluatorOptions
+            EvaluatorOptions = field.EvaluatorOptions,
+            Evidence = evidence,
+            AliasGroup = field.AliasGroup
         };
     }
 

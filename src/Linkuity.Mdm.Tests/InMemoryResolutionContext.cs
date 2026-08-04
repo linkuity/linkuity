@@ -44,4 +44,27 @@ internal sealed class InMemoryResolutionContext : IResolutionContext
         var idSet = goldenRecordIds.ToHashSet();
         return GoldenRecordVersions.Where(v => idSet.Contains(v.GoldenRecordId)).ToList();
     }
+
+    /// <summary>
+    /// Mirrors FileMetadataStore's own ApplyMutations (source :264). A multi-ingest test that skips
+    /// this sees an empty corpus on the second call — indistinguishable from "never ingested."
+    /// Shared here (rather than duplicated per test class) so every resolver test that needs a
+    /// real multi-ingest fixture applies mutations identically.
+    /// </summary>
+    public void ApplyMutations(MutationSet mutations)
+    {
+        Records.AddRange(mutations.RecordsToInsert);
+        foreach (var cluster in mutations.ClustersToUpsert)
+        {
+            Clusters.RemoveAll(c => c.Id == cluster.Id);
+            Clusters.Add(cluster);
+        }
+        GoldenRecords.RemoveAll(g => mutations.GoldenRecordClusterIdsToClear.Contains(g.ClusterId));
+        foreach (var golden in mutations.GoldenRecordsToUpsert)
+        {
+            GoldenRecords.RemoveAll(g => g.Id == golden.Id);
+            GoldenRecords.Add(golden);
+        }
+        GoldenRecordVersions.AddRange(mutations.VersionsToInsert);
+    }
 }

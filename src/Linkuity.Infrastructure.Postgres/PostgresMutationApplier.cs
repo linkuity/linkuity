@@ -37,6 +37,9 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
 
         foreach (var evt in m.MergeEventsToInsert)
             await InsertClusterMergeEventAsync(evt, ct);
+
+        foreach (var evt in m.DissolutionEventsToInsert)
+            await InsertClusterDissolutionEventAsync(evt, ct);
     }
 
     /// <summary>Max VALUES tuples per multi-row INSERT. Keeps total bound parameters well under
@@ -107,14 +110,15 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
         {
             int count = Math.Min(MaxRowsPerInsert, distinct.Count - offset);
             var sql = new StringBuilder(
-                "INSERT INTO clusters (id, project_id, created_at, status, merged_into_cluster_id) VALUES ");
+                "INSERT INTO clusters (id, project_id, created_at, status, merged_into_cluster_id, " +
+                "comparisons_inside, agreements_inside) VALUES ");
             await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
             for (int i = 0; i < count; i++)
             {
                 var cluster = distinct[offset + i];
                 if (i > 0)
                     sql.Append(',');
-                sql.Append($"(@id{i}, @pr{i}, @ca{i}, @st{i}, @mi{i})");
+                sql.Append($"(@id{i}, @pr{i}, @ca{i}, @st{i}, @mi{i}, @ci{i}, @ai{i})");
                 cmd.Parameters.AddWithValue($"id{i}", cluster.Id);
                 cmd.Parameters.AddWithValue($"pr{i}", cluster.ProjectId);
                 cmd.Parameters.AddWithValue($"ca{i}", cluster.CreatedAt.UtcDateTime);
@@ -123,9 +127,13 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
                     { Value = cluster.MergedIntoClusterId.HasValue
                         ? (object)cluster.MergedIntoClusterId.Value
                         : DBNull.Value });
+                cmd.Parameters.AddWithValue($"ci{i}", cluster.ComparisonsInside);
+                cmd.Parameters.AddWithValue($"ai{i}", cluster.AgreementsInside);
             }
             sql.Append(" ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, " +
-                       "merged_into_cluster_id = EXCLUDED.merged_into_cluster_id");
+                       "merged_into_cluster_id = EXCLUDED.merged_into_cluster_id, " +
+                       "comparisons_inside = EXCLUDED.comparisons_inside, " +
+                       "agreements_inside = EXCLUDED.agreements_inside");
             cmd.CommandText = sql.ToString();
             await cmd.ExecuteNonQueryAsync(ct);
         }
@@ -360,6 +368,31 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
             { Value = evt.TriggerRecordIds.ToArray() });
         cmd.Parameters.AddWithValue("score", evt.Score);
         cmd.Parameters.AddWithValue("breakdown", JsonSerializer.Serialize(evt.Breakdown, JsonOpts));
+        cmd.Parameters.AddWithValue("ingestBatchId", evt.IngestBatchId);
+        cmd.Parameters.AddWithValue("createdAt", evt.CreatedAt.UtcDateTime);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task InsertClusterDissolutionEventAsync(ClusterDissolutionEvent evt, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO cluster_dissolution_events
+                (id, project_id, member_entity_record_ids, previous_cluster_id,
+                 reason, comparisons_inside, agreements_inside, ingest_batch_id, created_at)
+            VALUES
+                (@id, @projectId, @memberIds, @previousClusterId,
+                 @reason, @comparisonsInside, @agreementsInside, @ingestBatchId, @createdAt)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("id", evt.Id);
+        cmd.Parameters.AddWithValue("projectId", evt.ProjectId);
+        cmd.Parameters.Add(new NpgsqlParameter("memberIds", NpgsqlDbType.Array | NpgsqlDbType.Uuid)
+            { Value = evt.MemberEntityRecordIds.ToArray() });
+        cmd.Parameters.Add(new NpgsqlParameter("previousClusterId", NpgsqlDbType.Uuid)
+            { Value = evt.PreviousClusterId.HasValue ? (object)evt.PreviousClusterId.Value : DBNull.Value });
+        cmd.Parameters.AddWithValue("reason", evt.Reason);
+        cmd.Parameters.AddWithValue("comparisonsInside", evt.ComparisonsInside);
+        cmd.Parameters.AddWithValue("agreementsInside", evt.AgreementsInside);
         cmd.Parameters.AddWithValue("ingestBatchId", evt.IngestBatchId);
         cmd.Parameters.AddWithValue("createdAt", evt.CreatedAt.UtcDateTime);
         await cmd.ExecuteNonQueryAsync(ct);

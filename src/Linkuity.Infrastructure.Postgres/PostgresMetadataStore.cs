@@ -4,6 +4,7 @@ using Dapper;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
@@ -40,7 +41,11 @@ public sealed class PostgresMetadataStore : IMetadataStore
             : (engine ?? MatchingDefaults.CreateEngine());
         _profileProvider = profileProvider
             ?? new DefaultMatchingProfileProvider(DefaultMatchingProfileProvider.BuiltInProfiles());
-        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null, options.IngestParallelism);
+        // CohesionClusterMergePolicy is stateless (the threshold it reads lives on the profile
+        // passed at Resolve time, not on the policy instance), so constructing one here rather than
+        // taking it through DI costs nothing behaviorally while keeping this constructor's public
+        // shape unchanged for every existing caller.
+        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null, new CohesionClusterMergePolicy(), options.IngestParallelism);
     }
 
     // ──────────────────────────────── connection ────────────────────────────────
@@ -530,6 +535,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 project_id              AS "ProjectId",
                 status                  AS "Status",
                 merged_into_cluster_id  AS "MergedIntoClusterId",
+                comparisons_inside      AS "ComparisonsInside",
+                agreements_inside       AS "AgreementsInside",
                 created_at              AS "CreatedAt"
             FROM clusters
             WHERE project_id = @ProjectId
@@ -892,6 +899,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public Guid ProjectId { get; set; }
         public string Status { get; set; } = "active";
         public Guid? MergedIntoClusterId { get; set; }
+        public long ComparisonsInside { get; set; }
+        public long AgreementsInside { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -1022,6 +1031,8 @@ public sealed class PostgresMetadataStore : IMetadataStore
         ProjectId = row.ProjectId,
         Status = row.Status,
         MergedIntoClusterId = row.MergedIntoClusterId,
+        ComparisonsInside = row.ComparisonsInside,
+        AgreementsInside = row.AgreementsInside,
         MemberEntityRecordIds = membersByCluster.TryGetValue(row.Id, out var members) ? members : [],
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
     };

@@ -27,6 +27,16 @@ public sealed class MatchingEngine : IMatchingEngine
     /// must pass already-normalized records so exact-identifier matching stays consistent.
     /// </summary>
     public MatchResult Resolve(EntityRecord record, IReadOnlyCollection<EntityRecord> corpus, MatchingProfile profile)
+        => Resolve(record, corpus, profile, captureAll: false, out _);
+
+    public MatchResult Resolve(EntityRecord record, IReadOnlyCollection<EntityRecord> corpus, MatchingProfile profile, out IReadOnlyList<ScoredCandidate> allComparisons)
+        => Resolve(record, corpus, profile, captureAll: true, out allComparisons);
+
+    // captureAll gates whether the below-review candidates are materialized at all. Every
+    // existing caller goes through the 3-arg overload with captureAll: false, so it allocates
+    // and evaluates exactly what it did before this method grew a second output — no ScoredCandidate
+    // is built for a below-review candidate unless a caller actually asked to see it.
+    private MatchResult Resolve(EntityRecord record, IReadOnlyCollection<EntityRecord> corpus, MatchingProfile profile, bool captureAll, out IReadOnlyList<ScoredCandidate> allComparisons)
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(corpus);
@@ -44,13 +54,23 @@ public sealed class MatchingEngine : IMatchingEngine
         var candidates = retrieval.Retrieve(resolved, corpus, profile);
 
         var scored = new List<ScoredCandidate>();
+        var all = captureAll ? new List<ScoredCandidate>() : null;
         foreach (var candidate in candidates)
         {
             var signals = similarity.Evaluate(resolved, candidate, profile);
             var score = scoring.Score(signals, profile);
             if (score.FinalScore >= profile.ReviewThreshold)
-                scored.Add(new ScoredCandidate(candidate, score.FinalScore, score.Breakdown));
+            {
+                var scoredCandidate = new ScoredCandidate(candidate, score.FinalScore, score.Breakdown);
+                scored.Add(scoredCandidate);
+                all?.Add(scoredCandidate);
+            }
+            else if (all is not null)
+            {
+                all.Add(new ScoredCandidate(candidate, score.FinalScore, score.Breakdown));
+            }
         }
+        allComparisons = (IReadOnlyList<ScoredCandidate>?)all ?? [];
 
         // The durable path orders by score only; the ThenBy tiebreaker here is an
         // intentional, decision-neutral addition that makes Candidates[0]/Breakdown

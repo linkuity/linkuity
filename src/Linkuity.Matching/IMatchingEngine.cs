@@ -6,6 +6,18 @@ namespace Linkuity.Matching;
 public interface IMatchingEngine
 {
     MatchResult Resolve(EntityRecord record, IReadOnlyCollection<EntityRecord> corpus, MatchingProfile profile);
+
+    /// <summary>
+    /// As <see cref="Resolve(EntityRecord, IReadOnlyCollection{EntityRecord}, MatchingProfile)"/>,
+    /// but also reports every comparison the engine made against <paramref name="corpus"/> —
+    /// including ones scoring below <c>ReviewThreshold</c>, which never become a
+    /// <see cref="ScoredCandidate"/> on <see cref="MatchResult.Candidates"/>. A caller that needs
+    /// to know "compared and rejected" from "never compared" (cluster cohesion counting) has no
+    /// other way to see that population: the three-arg overload's returned candidates are bounded
+    /// by the review threshold by design, and that filter is not going away.
+    /// </summary>
+    MatchResult Resolve(EntityRecord record, IReadOnlyCollection<EntityRecord> corpus, MatchingProfile profile, out IReadOnlyList<ScoredCandidate> allComparisons);
+
     IReadOnlyList<string> GenerateBlockingKeys(EntityRecord record, MatchingProfile profile);
 
     /// <summary>

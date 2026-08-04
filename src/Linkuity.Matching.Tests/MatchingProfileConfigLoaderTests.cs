@@ -71,6 +71,32 @@ public class MatchingProfileConfigLoaderTests
     private static string JsonWith(string replaceFrom, string replaceTo)
         => OrganizationJson.Replace(replaceFrom, replaceTo);
 
+    private const string MinimalOrganizationJsonWithEvidenceTemplate = """
+    {
+      "contentType": "organization",
+      "fields": [
+        { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable"], "similarityEvaluator": "fuzzy", "weight": 1.0, "evidence": { %EVIDENCE% } }
+      ],
+      "normalizationStrategy": "identity",
+      "blockingStrategies": ["exact-value"],
+      "candidateRetrievalStrategy": "linear",
+      "similarityStrategy": "field-weighted",
+      "scoringStrategy": "identifier-weighted",
+      "decisionStrategy": "threshold",
+      "clusteringStrategy": "union-find",
+      "autoMatchThreshold": 0.90,
+      "reviewThreshold": 0.75
+    }
+    """;
+
+    private static string ProfileJsonWithFieldEvidence(double sameEntityAgreement, double chanceAgreement)
+        => MinimalOrganizationJsonWithEvidenceTemplate.Replace("%EVIDENCE%",
+            $"\"sameEntityAgreement\": {sameEntityAgreement}, \"chanceAgreement\": {chanceAgreement}");
+
+    private static string ProfileJsonWithPartialFieldEvidence(double sameEntityAgreement)
+        => MinimalOrganizationJsonWithEvidenceTemplate.Replace("%EVIDENCE%",
+            $"\"sameEntityAgreement\": {sameEntityAgreement}");
+
     [Theory]
     [InlineData("\"normalizationStrategy\": \"identity\"", "\"normalizationStrategy\": \"no-such-norm\"", "no-such-norm")]
     [InlineData("\"blockingStrategies\": [\"exact-value\", \"token-name\"]", "\"blockingStrategies\": [\"no-such-block\"]", "no-such-block")]
@@ -209,6 +235,153 @@ public class MatchingProfileConfigLoaderTests
             Assert.Contains("bad.profile.json", ex.Message);
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void EvidenceWithChanceAboveMatchRate_IsRejectedAtLoad_NotAtScoreTime()
+    {
+        // Lazily validated on the type, eagerly validated here: a bad profile must fail when it
+        // is read, not on whichever pair happens to be scored first.
+        var json = ProfileJsonWithFieldEvidence(sameEntityAgreement: 0.2, chanceAgreement: 0.5);
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(json, Registry()));
+
+        Assert.Contains("invalid evidence", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EvidenceMissingOneProbability_IsRejected()
+    {
+        var json = ProfileJsonWithPartialFieldEvidence(sameEntityAgreement: 0.9);
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(json, Registry()));
+
+        Assert.Contains("chanceAgreement", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoadFromJson_PlaceholderValuesAbsent_DefaultsToEmpty()
+    {
+        // A frozen measurement baseline depends on shipped profiles that omit this key loading
+        // exactly as they did before it existed.
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, Registry());
+        Assert.Empty(profile.PlaceholderValues);
+    }
+
+    [Fact]
+    public void LoadFromJson_ReadsExplicitPlaceholderValues()
+    {
+        var json = OrganizationJson.Replace(
+            "\"reviewThreshold\": 0.75",
+            "\"reviewThreshold\": 0.75,\n      \"placeholderValues\": [\"N/A\", \"UNKNOWN\"]");
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
+        Assert.Equal(["N/A", "UNKNOWN"], profile.PlaceholderValues);
+    }
+
+    // Two OrganizationName fields sharing an alias group, %EVIDENCE_A%/%EVIDENCE_B% independently
+    // substitutable so one test can keep them identical (accepted) and another can diverge them
+    // (rejected) without duplicating the surrounding profile shape.
+    private const string TwoFieldAliasGroupJsonTemplate = """
+    {
+      "contentType": "organization",
+      "fields": [
+        { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable"], "weight": 1.0, "aliasGroup": "org_name", "evidence": { %EVIDENCE_A% } },
+        { "name": "trade_name",        "semanticType": "OrganizationName", "roles": ["Matchable"], "weight": 1.0, "aliasGroup": "org_name", "evidence": { %EVIDENCE_B% } }
+      ],
+      "normalizationStrategy": "identity",
+      "blockingStrategies": ["exact-value"],
+      "candidateRetrievalStrategy": "linear",
+      "similarityStrategy": "field-weighted",
+      "scoringStrategy": "identifier-weighted",
+      "decisionStrategy": "threshold",
+      "clusteringStrategy": "union-find",
+      "autoMatchThreshold": 0.90,
+      "reviewThreshold": 0.75
+    }
+    """;
+
+    private const string SharedFieldEvidence = "\"sameEntityAgreement\": 0.9, \"chanceAgreement\": 0.1, \"maxAgreementBits\": 0.5";
+
+    private static string AliasGroupJson(string evidenceA, string evidenceB)
+        => TwoFieldAliasGroupJsonTemplate.Replace("%EVIDENCE_A%", evidenceA).Replace("%EVIDENCE_B%", evidenceB);
+
+    [Fact]
+    public void LoadFromJson_ReadsAliasGroupFromField()
+    {
+        // Deleting `AliasGroup = field.AliasGroup` from the loader's field-building code leaves
+        // every other test in this file green (I3 finding): nothing exercises the config-loaded
+        // path specifically, only hand-built ProfileField objects elsewhere. This asserts the
+        // wiring directly, through JSON, the way a real profile file declares it.
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(
+            AliasGroupJson(SharedFieldEvidence, SharedFieldEvidence), Registry());
+
+        Assert.Equal("org_name", profile.Fields.Single(f => f.Name == "organization_name").AliasGroup);
+        Assert.Equal("org_name", profile.Fields.Single(f => f.Name == "trade_name").AliasGroup);
+    }
+
+    [Fact]
+    public void LoadFromJson_AliasGroupWithDivergentEvidence_IsRejected()
+    {
+        // Members of one alias group are the same fact and must be priced identically (see the
+        // consistency check in MatchingProfileConfigLoader.Build); this exercises that rejection
+        // through the config loader rather than through hand-built ProfileField objects, so a
+        // regression in the loader's own wiring (not just the check itself) would be caught here.
+        var divergent = "\"sameEntityAgreement\": 0.7, \"chanceAgreement\": 0.1, \"maxAgreementBits\": 0.5";
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(
+                AliasGroupJson(SharedFieldEvidence, divergent), Registry()));
+
+        Assert.Contains("alias group", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("org_name", ex.Message, StringComparison.Ordinal);
+    }
+
+    // [I2] RequireLiveMatchingScale is deliberately NOT called from LoadFromJson/LoadFromFile/
+    // LoadFromDirectory (see its own doc comment) — CorpusAuditService needs to keep loading
+    // "evidence" profiles to measure them. These exercise the guard directly, the way its two
+    // production call sites (MatchingServiceCollectionExtensions, LocalBatchRunner) use it.
+    private const string EvidenceScoringOrganizationJson = """
+    {
+      "contentType": "organization",
+      "fields": [
+        { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable", "Identifier"], "weight": 1.0, "evidence": { "sameEntityAgreement": 0.9, "chanceAgreement": 0.1 } }
+      ],
+      "normalizationStrategy": "identity",
+      "blockingStrategies": ["exact-value"],
+      "candidateRetrievalStrategy": "linear",
+      "similarityStrategy": "field-weighted",
+      "scoringStrategy": "evidence",
+      "decisionStrategy": "threshold",
+      "clusteringStrategy": "union-find",
+      "autoMatchThreshold": 8.0,
+      "reviewThreshold": 4.0
+    }
+    """;
+
+    [Fact]
+    public void RequireLiveMatchingScale_RejectsAProfileOnANonUnitIntervalScale()
+    {
+        var registry = Registry();
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(EvidenceScoringOrganizationJson, registry);
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, "evidence.profile.json"));
+
+        Assert.Contains("evidence.profile.json", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("LogOdds", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RequireLiveMatchingScale_AcceptsAProfileOnTheUnitIntervalScale()
+    {
+        var registry = Registry();
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, registry);
+
+        // Must not throw: "identifier-weighted" produces ScoreScale.UnitInterval, which every
+        // live matching call site already assumes.
+        MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, "organization.profile.json");
     }
 
     [Fact]

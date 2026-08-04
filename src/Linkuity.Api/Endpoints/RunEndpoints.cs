@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Linkuity.Core.Models;
+using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
 using Linkuity.Pipeline;
@@ -49,6 +50,12 @@ public static class RunEndpoints
         try
         {
             resolved = ProfileResolver.ResolveNameOrJson(profile);
+            // This endpoint drives BatchRunService -> BatchMatchingService, which builds
+            // thresholds on ScoreScale.UnitInterval unconditionally — see RequireLiveMatchingScale.
+            // Without this, an "evidence" (log-odds) profile loads fine here and then throws an
+            // unhandled ArgumentOutOfRangeException on the first scored pair, after normalization
+            // has already written artifacts.
+            MatchingProfileConfigLoader.RequireLiveMatchingScale(resolved, MatchingDefaults.CreateRegistry(), "request profile");
         }
         catch (MatchingProfileConfigException ex)
         {

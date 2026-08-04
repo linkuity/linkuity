@@ -106,4 +106,75 @@ public class ProfileFingerprintTests
         => Assert.NotEqual(
             ProfileFingerprint.Of(DefaultMatchingProfileProvider.CreatePersonProfile()),
             ProfileFingerprint.Of(DefaultMatchingProfileProvider.CreateOrganizationProfile()));
+
+    /// <summary>
+    /// Locks the built-in profiles' fingerprints to the literal values produced BEFORE
+    /// FieldEvidence/AliasGroup/MinClusterCohesion/MaxAutoClusterSize/PlaceholderValues were added
+    /// to the canonical string (verified by hand against the pre-change code before committing
+    /// this test). Neither built-in profile sets any of the five, so if this value ever changes,
+    /// either a new key stopped being conditional on non-null/non-empty, or one of the five
+    /// defaults changed — either way, every score already stored under these fingerprints would
+    /// silently stop matching what re-fingerprinting the same profile produces.
+    /// </summary>
+    [Fact]
+    public void BuiltInProfiles_FingerprintUnchangedByTheFiveNewSettings()
+    {
+        Assert.Equal("9355cbf5d83938de", ProfileFingerprint.Of(DefaultMatchingProfileProvider.CreatePersonProfile()));
+        Assert.Equal("ca4feabd60296705", ProfileFingerprint.Of(DefaultMatchingProfileProvider.CreateOrganizationProfile()));
+    }
+
+    // ── The five new settings must change the fingerprint when set ──────────────
+
+    [Fact]
+    public void MinClusterCohesionChange_ChangesFingerprint()
+        => Assert.NotEqual(
+            ProfileFingerprint.Of(Base()),
+            ProfileFingerprint.Of(Base() with { MinClusterCohesion = 0.5 }));
+
+    [Fact]
+    public void MaxAutoClusterSizeChange_ChangesFingerprint()
+        => Assert.NotEqual(
+            ProfileFingerprint.Of(Base()),
+            ProfileFingerprint.Of(Base() with { MaxAutoClusterSize = 50 }));
+
+    [Fact]
+    public void PlaceholderValuesChange_ChangesFingerprint()
+        => Assert.NotEqual(
+            ProfileFingerprint.Of(Base()),
+            ProfileFingerprint.Of(Base() with { PlaceholderValues = ["N/A", "UNKNOWN"] }));
+
+    [Fact]
+    public void PlaceholderValuesOrder_DoesNotChangeFingerprint()
+    {
+        var profile = Base() with { PlaceholderValues = ["N/A", "UNKNOWN"] };
+        var reordered = profile with { PlaceholderValues = ["UNKNOWN", "N/A"] };
+
+        Assert.Equal(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(reordered));
+    }
+
+    [Fact]
+    public void AliasGroupChange_ChangesFingerprint()
+    {
+        var profile = Base();
+        var aliased = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { AliasGroup = "g1" } : f).ToList()
+        };
+
+        Assert.NotEqual(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(aliased));
+    }
+
+    [Fact]
+    public void FieldEvidenceChange_ChangesFingerprint()
+    {
+        var profile = Base();
+        var withEvidence = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0
+                ? f with { Evidence = new FieldEvidence { SameEntityAgreement = 0.9, ChanceAgreement = 0.1 } }
+                : f).ToList()
+        };
+
+        Assert.NotEqual(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(withEvidence));
+    }
 }

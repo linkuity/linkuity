@@ -1,6 +1,7 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
 using Linkuity.Matching.Canonicalization;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 
@@ -8,13 +9,16 @@ namespace Linkuity.Pipeline;
 
 /// <summary>
 /// Corpus-scale recall and precision audit. Unlike ScoringAuditService, which materializes every
-/// candidate pair with a full per-field breakdown, this service is aggregate-only and allocates
-/// no pair set: candidate pairs are owned by their lowest shared active key and emitted exactly
-/// once. See docs/superpowers/specs/2026-07-28-missed-merge-detection-design.md.
+/// candidate pair with a full per-field breakdown, this service is aggregate-only BY DEFAULT:
+/// candidate pairs are owned by their lowest shared active key and emitted exactly once, with no
+/// pair set retained. A pair set is materialized only when the profile configures a cluster merge
+/// policy that could actually act on it (<see cref="MatchingProfile.MinClusterCohesion"/> or
+/// <see cref="MatchingProfile.MaxAutoClusterSize"/>) — see the guard in <see cref="Audit"/>. See
+/// docs/superpowers/specs/2026-07-28-missed-merge-detection-design.md.
 /// </summary>
 public sealed class CorpusAuditService
 {
-    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted"];
+    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted", "evidence"];
 
     /// <summary>Interned blocking-key index. RecordKeys rows are ascending — Task 4's
     /// lowest-shared-key ownership rule needs it for a linear intersection scan.</summary>
@@ -27,9 +31,22 @@ public sealed class CorpusAuditService
     private static readonly OrganizationNameCanonicalizer Canonicalizer = new();
 
     private readonly IStrategyRegistry _registry;
+    private readonly IClusterMergePolicy _mergePolicy;
 
-    public CorpusAuditService(IStrategyRegistry registry)
-        => _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    // clusterMergePolicy is OPTIONAL here, unlike IncrementalResolver's required constructor
+    // parameter: that seam exists so a resolver can never be built with no policy by accident,
+    // but this audit already has ~10 call sites (7 of them test fixtures asserting on the
+    // default profile, where MinClusterCohesion/MaxAutoClusterSize are null and any policy
+    // implementation behaves identically). Forcing all of them to thread a policy through would
+    // be churn with no behavioural payoff. What matters is that production's OWN policy — not a
+    // second, independently hardcoded instance — is what the audit consults when a profile could
+    // actually exercise it, and that the CLI (the only caller that reports on real profiles) does
+    // not lean on this default: see CorpusAuditCommands.cs, which passes one explicitly.
+    public CorpusAuditService(IStrategyRegistry registry, IClusterMergePolicy? clusterMergePolicy = null)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _mergePolicy = clusterMergePolicy ?? new CohesionClusterMergePolicy();
+    }
 
     public CorpusAuditResult Audit(
         IReadOnlyList<EntityRecord> records,
@@ -92,18 +109,46 @@ public sealed class CorpusAuditService
 
         var uf = new UnionFind(records.Count);
         long emitted = 0, floorLifted = 0;
+
+        // Asked of the INJECTED policy, not inlined here: which profile fields make rejection
+        // possible is that policy's own knowledge (CohesionClusterMergePolicy.CanReject mirrors
+        // its own Evaluate). Hardcoding CohesionClusterMergePolicy's specific null-checks in this
+        // caller would silently strand a differently-behaved policy injected through the
+        // constructor — the same hardcoding bug the constructor seam exists to close, one layer
+        // down. Every profile shipped today makes CanReject false for the default cohesion policy,
+        // so the audit stays aggregate-only — no pair set, matching the class doc above.
+        var mergePolicyCanReject = _mergePolicy.CanReject(profile);
+
+        // Every candidate pair the walk scores, kept only long enough to attribute each one to its
+        // FINAL cluster below. Union-find keeps growing for the rest of the walk after this pair is
+        // visited, so "did both endpoints land in the same cluster" is not decidable yet — the same
+        // reason IncrementalResolver.AllComparisons is materialized in full before its own rollup,
+        // rather than tallied against whatever root a record happens to have at visit time. Null,
+        // not an empty list, when the policy cannot reject anything: allocating and filling
+        // 11,000,007 entries (the SEC gate corpus) to feed a rollup with nothing to decide is the
+        // exact cost this class exists to avoid.
+        var comparisons = mergePolicyCanReject ? new List<(int Left, int Right, bool IsAuto)>() : null;
         var occurrences = ForEachCandidatePair(index, effectiveMax, (l, r) =>
         {
             emitted++;
             var score = ScorePair(normalized, l, r, similarity, scoring, profile, out var comparable, out var lifted);
             if (lifted) floorLifted++;
-            var band = BandOf(score, comparable, profile);
-            if (band == CorpusBand.Auto) uf.Union(l, r);
+            var band = BandOf(score, comparable, profile, scoring.Scale);
+            var isAuto = band == CorpusBand.Auto;
+            if (isAuto) uf.Union(l, r);
+            comparisons?.Add((l, r, isAuto));
             if (truePairs.TryGetValue(Pack(l, r), out var state)) { state.Band = band; state.Score = score; }
         }, ct);
 
         var roots = new int[records.Count];
         for (var i = 0; i < records.Count; i++) roots[i] = uf.Find(i);
+
+        // Mirrors production (IncrementalResolver.MaterializeComponent): a cluster whose own
+        // comparisons contradict it too often is refused and dissolves into singletons. Must run
+        // before SameCluster/ClusterPairCounts below so every number this audit reports — not just
+        // the cluster summary — reflects the clustering production would actually have formed.
+        if (mergePolicyCanReject) ApplyClusterMergePolicy(roots, comparisons!, profile, _mergePolicy);
+
         foreach (var state in truePairs.Values) state.SameCluster = roots[state.Left] == roots[state.Right];
 
         var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
@@ -412,7 +457,12 @@ public sealed class CorpusAuditService
     {
         var forwardSignals = similarity.Evaluate(normalized[l], normalized[r], profile);
         var reverseSignals = similarity.Evaluate(normalized[r], normalized[l], profile);
-        comparable = forwardSignals.Count > 0 || reverseSignals.Count > 0;
+        // Signal PRESENCE stopped meaning "a comparison happened" once outcomes arrived: the
+        // similarity strategy now emits one signal per matchable field even when neither side
+        // populates it. Count > 0 would be permanently true for any profile with matchable
+        // fields, so comparability must be asked of the outcomes, not the collection size.
+        comparable = forwardSignals.Any(s => s.Outcome == ComparisonOutcome.Compared)
+                     || reverseSignals.Any(s => s.Outcome == ComparisonOutcome.Compared);
         if (!comparable) { floorLifted = false; return 0; }
 
         var forward = scoring.Score(forwardSignals, profile);
@@ -427,10 +477,14 @@ public sealed class CorpusAuditService
     /// <summary>
     /// Maps the shared classifier onto this report's own enum. CorpusBand is kept rather than
     /// replaced because it is serialized into stored baselines: renaming or renumbering it would
-    /// invalidate every recorded comparison.
+    /// invalidate every recorded comparison. <paramref name="scale"/> defaults to UnitInterval —
+    /// every scorer shipped before "evidence" produces that scale — so existing callers that
+    /// score on the unit interval are unaffected; Audit() passes the resolved scorer's own scale
+    /// so a LogOdds scorer's thresholds are validated against LogOdds, not against [0,1].
     /// </summary>
-    internal static CorpusBand BandOf(double score, bool comparable, MatchingProfile profile)
-        => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn()) switch
+    internal static CorpusBand BandOf(
+        double score, bool comparable, MatchingProfile profile, ScoreScale scale = ScoreScale.UnitInterval)
+        => MatchBandClassifier.Classify(score, comparable, profile.ThresholdsOn(scale)) switch
         {
             MatchDecision.AutoMatch => CorpusBand.Auto,
             MatchDecision.Review => CorpusBand.Review,
@@ -439,6 +493,48 @@ public sealed class CorpusAuditService
         };
 
     private static long Choose2(long n) => n * (n - 1) / 2;
+
+    /// <summary>
+    /// Evaluates every multi-record root the walk produced through <paramref name="mergePolicy"/>
+    /// — the SAME policy instance <see cref="Audit"/> was given, never one hardcoded here, so a
+    /// production policy swap or decoration is guaranteed to be reflected in what this audit
+    /// reports rather than silently left behind — using the SAME agreement definition: an
+    /// agreement is an auto-band comparison, and the denominator is every comparison made between
+    /// two members of that root's FINAL cluster (<paramref name="comparisons"/>, filtered to pairs
+    /// whose endpoints share a root — never a second candidate-pair walk). A root the policy
+    /// refuses has every member reset to its own root, in place, before returning — the audit's
+    /// existing representation of "unclustered" — so the cluster metrics computed after this call
+    /// see singletons rather than a cluster production would never have formed.
+    /// </summary>
+    private static void ApplyClusterMergePolicy(
+        int[] roots, IReadOnlyList<(int Left, int Right, bool IsAuto)> comparisons, MatchingProfile profile,
+        IClusterMergePolicy mergePolicy)
+    {
+        var membersByRoot = new Dictionary<int, List<int>>();
+        for (var i = 0; i < roots.Length; i++)
+            (membersByRoot.TryGetValue(roots[i], out var list) ? list : membersByRoot[roots[i]] = []).Add(i);
+
+        var tally = new Dictionary<int, (long Comparisons, long Agreements)>();
+        foreach (var (left, right, isAuto) in comparisons)
+        {
+            var root = roots[left];
+            if (root != roots[right]) continue; // endpoints landed in different final clusters
+            var (cmp, agr) = tally.GetValueOrDefault(root);
+            tally[root] = (cmp + 1, agr + (isAuto ? 1 : 0));
+        }
+
+        foreach (var (root, members) in membersByRoot)
+        {
+            if (members.Count < 2) continue; // singleton: no cluster for the policy to refuse
+            var (cmp, agr) = tally.GetValueOrDefault(root);
+            // Members comes from the component's own membership list, never from
+            // default(ClusterEvidenceCounts) — that reads as a fully-agreeing zero-member cluster.
+            var counts = new ClusterEvidenceCounts(members.Count, cmp, agr);
+            if (mergePolicy.Evaluate(counts, profile) == ClusterMergeVerdict.Accepted) continue;
+
+            foreach (var member in members) roots[member] = member;
+        }
+    }
 
     /// <summary>
     /// Pair-counting cluster metrics from a contingency table — never by enumerating pairs inside
@@ -483,7 +579,7 @@ public sealed class CorpusAuditService
         Require(profile.SimilarityStrategy == "field-weighted", "similarityStrategy",
             profile.SimilarityStrategy, "field-weighted");
         Require(SupportedScoring.Contains(profile.ScoringStrategy, StringComparer.Ordinal),
-            "scoringStrategy", profile.ScoringStrategy, "weighted or identifier-weighted");
+            "scoringStrategy", profile.ScoringStrategy, "weighted, identifier-weighted or evidence");
         Require(profile.DecisionStrategy == "threshold", "decisionStrategy",
             profile.DecisionStrategy, "threshold");
         Require(profile.ClusteringStrategy == "union-find", "clusteringStrategy",

@@ -1,6 +1,7 @@
 using System.Text;
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Mdm.Resolution;
 
@@ -11,7 +12,7 @@ public sealed class IncrementalResolverParallelTests
     private static readonly MatchingProfile PersonProfile = DefaultMatchingProfileProvider.CreatePersonProfile();
 
     private static IncrementalResolver NewResolver(int dop)
-        => new(MatchingDefaults.CreateEngine(), hasIndex: false, degreeOfParallelism: dop);
+        => new(MatchingDefaults.CreateEngine(), hasIndex: false, new CohesionClusterMergePolicy(), degreeOfParallelism: dop);
 
     // Deterministic incoming batch: a hot block of identical records (many tied auto-match
     // edges — stresses the parallel reduce and first-wins tie-break), a second smaller

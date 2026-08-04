@@ -21,6 +21,9 @@ public sealed class MatchingProfileDocument
     public int? MaxBlockSize { get; init; }
     public string? DefaultPhoneRegion { get; init; }
     public string? DefaultDateOrder { get; init; }
+    public List<string>? PlaceholderValues { get; init; }
+    public double? MinClusterCohesion { get; init; }
+    public int? MaxAutoClusterSize { get; init; }
 }
 
 public sealed class MatchingProfileFieldDocument
@@ -31,4 +34,13 @@ public sealed class MatchingProfileFieldDocument
     public string? SimilarityEvaluator { get; init; }
     public double? Weight { get; init; }
     public Dictionary<string, string>? EvaluatorOptions { get; init; }
+    public FieldEvidenceDocument? Evidence { get; init; }
+    public string? AliasGroup { get; init; }
+}
+
+public sealed class FieldEvidenceDocument
+{
+    public double? SameEntityAgreement { get; init; }
+    public double? ChanceAgreement { get; init; }
+    public double? MaxAgreementBits { get; init; }
 }

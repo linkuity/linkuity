@@ -15,4 +15,5 @@ public sealed class ResolutionWorkingSet
     public List<GoldenRecordVersion> GoldenRecordVersions { get; init; } = [];
     public List<ReviewTask> ReviewTasks { get; init; } = [];
     public List<ClusterMergeEvent> ClusterMergeEvents { get; init; } = [];
+    public List<ClusterDissolutionEvent> ClusterDissolutionEvents { get; init; } = [];
 }

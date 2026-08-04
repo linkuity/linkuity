@@ -36,6 +36,8 @@ internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTra
                 project_id              AS "ProjectId",
                 status                  AS "Status",
                 merged_into_cluster_id  AS "MergedIntoClusterId",
+                comparisons_inside      AS "ComparisonsInside",
+                agreements_inside       AS "AgreementsInside",
                 created_at              AS "CreatedAt"
             FROM clusters
             WHERE project_id = @p
@@ -67,6 +69,8 @@ internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTra
             ProjectId = r.ProjectId,
             Status = r.Status,
             MergedIntoClusterId = r.MergedIntoClusterId,
+            ComparisonsInside = r.ComparisonsInside,
+            AgreementsInside = r.AgreementsInside,
             MemberEntityRecordIds = membersByCluster.TryGetValue(r.Id, out var members) ? members : [],
             CreatedAt = new DateTimeOffset(r.CreatedAt, TimeSpan.Zero)
         }).ToList();
@@ -191,6 +195,8 @@ internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTra
         public Guid ProjectId { get; set; }
         public string Status { get; set; } = "active";
         public Guid? MergedIntoClusterId { get; set; }
+        public long ComparisonsInside { get; set; }
+        public long AgreementsInside { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
 using Linkuity.Pipeline;
@@ -143,7 +144,10 @@ public static class CorpusAuditCommands
         CorpusAuditResult result;
         try
         {
-            result = new CorpusAuditService(MatchingDefaults.CreateRegistry())
+            // Passed explicitly rather than left to CorpusAuditService's own default: this is the
+            // one caller that reports on real profiles, so it must never lean on a fallback the
+            // audit only carries to keep test call sites from having to thread a policy through.
+            result = new CorpusAuditService(MatchingDefaults.CreateRegistry(), new CohesionClusterMergePolicy())
                 .Audit(records, profile, truth, maxBlockSize, gateMode, ct);
         }
         catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException)
