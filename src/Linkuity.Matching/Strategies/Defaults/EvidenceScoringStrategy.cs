@@ -38,7 +38,10 @@ public sealed class EvidenceScoringStrategy : IScoringStrategy
 
         double total = 0;
         var breakdown = new List<ScoreContribution>(signals.Count);
+        var best = new Dictionary<string, double>(StringComparer.Ordinal);   // alias group -> winning contribution
 
+        // Pass 1: price every signal and find each alias group's strongest member.
+        var priced = new List<(SimilaritySignal Signal, ProfileField Field, FieldEvidence Evidence, double Contribution)>();
         foreach (var signal in signals)
         {
             // A signal naming no profile field cannot be priced. Scoring it at some default would
@@ -48,14 +51,28 @@ public sealed class EvidenceScoringStrategy : IScoringStrategy
                 continue;
 
             var evidence = EvidenceFor(field, profile);
-
             var contribution = signal.Outcome == ComparisonOutcome.Compared
                 ? evidence.EvidenceFor(signal.Value)
                 : 0;
 
-            total += contribution;
+            priced.Add((signal, field, evidence, contribution));
+
+            if (field.AliasGroup is { } group)
+                best[group] = best.TryGetValue(group, out var current) ? Math.Max(current, contribution) : contribution;
+        }
+
+        // Pass 2: total, counting each alias group once. The losing members stay in the breakdown
+        // at zero — a field that disappears from the explanation reads as one never evaluated.
+        var groupCounted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (signal, field, evidence, contribution) in priced)
+        {
+            var counted = contribution;
+            if (field.AliasGroup is { } group)
+                counted = groupCounted.Add(group) ? best[group] : 0;
+
+            total += counted;
             breakdown.Add(new ScoreContribution(
-                signal.Name, signal.Value, evidence.AgreementBits, contribution, signal.Outcome));
+                signal.Name, signal.Value, evidence.AgreementBits, counted, signal.Outcome));
         }
 
         return new ScoreResult(total, breakdown);

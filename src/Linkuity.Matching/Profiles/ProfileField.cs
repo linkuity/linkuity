@@ -33,4 +33,12 @@ public sealed record ProfileField
     /// Ignored by the older weighted scorers.
     /// </summary>
     public FieldEvidence? Evidence { get; init; }
+
+    /// <summary>
+    /// Fields sharing a non-null group are two spellings of the same fact and contribute ONCE,
+    /// taking the strongest comparison among them. Averaging tolerated duplication; addition does
+    /// not — the shipped person profile declares full_name and name at identical weight, which an
+    /// additive model would count twice.
+    /// </summary>
+    public string? AliasGroup { get; init; }
 }

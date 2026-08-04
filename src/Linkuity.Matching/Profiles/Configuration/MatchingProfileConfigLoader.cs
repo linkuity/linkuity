@@ -95,6 +95,18 @@ public sealed class MatchingProfileConfigLoader
         if (duplicate is not null)
             throw new MatchingProfileConfigException($"Matching profile '{source}' declares field '{duplicate.Key}' more than once.");
 
+        // Members of one alias group must be priced identically: they are the same fact, so
+        // differing parameters mean the score depends on which spelling a source happened to use.
+        foreach (var group in fields.Where(f => f.AliasGroup is not null).GroupBy(f => f.AliasGroup!, StringComparer.Ordinal))
+        {
+            var distinct = group.Select(f => f.Evidence).Distinct().Count();
+            if (distinct > 1)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' alias group '{group.Key}' has fields with different " +
+                    $"evidence parameters ({string.Join(", ", group.Select(f => f.Name))}). Members of an " +
+                    "alias group are the same fact and must be priced the same.");
+        }
+
         var normalization = Require(document.NormalizationStrategy, "normalizationStrategy", source);
         RequireRegistered(registry.Normalization, normalization, "normalization strategy", source);
 
@@ -273,7 +285,8 @@ public sealed class MatchingProfileConfigLoader
             SimilarityEvaluator = field.SimilarityEvaluator,
             Weight = weight,
             EvaluatorOptions = field.EvaluatorOptions,
-            Evidence = evidence
+            Evidence = evidence,
+            AliasGroup = field.AliasGroup
         };
     }
 
