@@ -326,53 +326,57 @@ public sealed class PostgresMetadataStore : IMetadataStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. Threshold validation — before opening the txn. Shared with FileMetadataStore rather
-        //    than copied into it, which is how the two previously stayed in step by hand.
-        _ = IncrementalResolver.ThresholdsFor(request);
-
-        // 2. One READ COMMITTED transaction for the whole bounded ingest.
+        // 1. One READ COMMITTED transaction for the whole bounded ingest.
         await using var conn = await OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        // 3. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
+        // 2. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
         await ValidateIncrementalRequestAsync(conn, tx, request, ct);
 
-        // 4. Load the project + its matching profile.
+        // 3. Load the project + its matching profile.
         var projects = await LoadProjectsAsync(conn, tx, [request.ProjectId], ct);
         var project = projects.Count > 0
             ? projects[0]
             : throw new InvalidOperationException($"Project not found: {request.ProjectId}");
         var profile = _profileProvider.GetProfile(project.ContentType);
 
-        // 5. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
+        // 3b. Threshold validation — as early as possible now that the profile (and therefore its
+        //     resolved scorer's scale) is known. Shared with FileMetadataStore rather than copied
+        //     into it, which is how the two previously stayed in step by hand. This used to run
+        //     before step 1, validating unconditionally against ScoreScale.UnitInterval; that
+        //     rejected every valid evidence-scored profile's log-odds thresholds, so it now waits
+        //     for the profile it needs to ask the right question.
+        _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(profile));
+
+        // 4. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
         //    counts match (records are indexed as they are inserted) and nothing happens — no scan.
         //    A mismatch is the explicit recovery path (full rebuild); it must not fire in the tests.
         await EnsureIndexCurrentAsync(conn, tx, ct);
 
-        // 6. Build incoming records with blocking keys (generated only when absent). No full backfill —
+        // 5. Build incoming records with blocking keys (generated only when absent). No full backfill —
         //    blocking keys are stored at insert time on Postgres, so there is no scan over existing rows.
         var incomingRecords = request.Records
             .Select(record => _engine.PrepareForStorage(record, profile))
             .ToList();
 
-        // 7. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
+        // 6. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
         var (result, mutations) = _resolver.Resolve(
             request, project, profile, incomingRecords, new PostgresResolutionContext(conn, tx), DateTimeOffset.UtcNow);
 
-        // 8. Apply the targeted mutation set within the same transaction.
+        // 7. Apply the targeted mutation set within the same transaction.
         await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        // 8b. Reconcile the batch's stored record_count with the rows ingested in this call.
+        // 7b. Reconcile the batch's stored record_count with the rows ingested in this call.
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE ingest_batches SET record_count = @n WHERE id = @batchId",
             new { n = request.Records.Count, batchId = request.IngestBatchId },
             transaction: tx, cancellationToken: ct));
 
-        // 9. Index the incoming records (Lucene commit is separate from the SQL txn).
+        // 8. Index the incoming records (Lucene commit is separate from the SQL txn).
         if (_index is not null)
             IndexRecords(incomingRecords);
 
-        // 10. Commit and return.
+        // 9. Commit and return.
         await tx.CommitAsync(ct);
         return result;
     }

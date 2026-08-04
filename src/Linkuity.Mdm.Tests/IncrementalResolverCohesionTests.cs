@@ -301,4 +301,52 @@ public class IncrementalResolverCohesionTests
             Assert.Equal(5, evt.MemberEntityRecordIds.Count);
         }
     }
+
+    // A tombstone PRESERVES the dissolved cluster's own MemberEntityRecordIds rather than
+    // clearing them (see DissolveComponent), so every dissolved record's id names TWO rows in
+    // ClustersToUpsert: its fresh singleton and the tombstone of the cluster it used to belong
+    // to. A store that applies ClustersToUpsert last-write-wins per record id — mapping a record
+    // to whichever row naming it comes LAST — would resolve a dissolved record back onto a dead
+    // tombstone if singletons were written before tombstones. mutations.ClustersToUpsert is built
+    // directly from the working set in the order DissolveComponent appends to it, so pinning the
+    // order here pins what any last-write-wins store would resolve.
+    [Fact]
+    public void DissolutionOrdersTombstonesBeforeSingletons_SoLastWriteWinsResolvesToTheSingleton()
+    {
+        const string PName = "Alpha Beta Gamma Pone";
+        const string QName = "Alpha Beta Gamma Qone";
+        const string RName = "Mu Nu Xi Rone";
+        const string SName = "Mu Nu Xi Sone";
+        const string DName = "Alpha Beta Pone Mu Nu Rone";
+
+        var context = new InMemoryResolutionContext();
+        var batch1 = Guid.NewGuid();
+        var p = Record("p", PName, batch1);
+        var q = Record("q", QName, batch1);
+        var (_, m1) = Resolve([p, q], context, batch1, minClusterCohesion: 0.70);
+        Assert.Single(m1.ClustersToUpsert, cl => cl.MemberEntityRecordIds.Count == 2);
+
+        var batch2 = Guid.NewGuid();
+        var r = Record("r", RName, batch2);
+        var s = Record("s", SName, batch2);
+        var (_, m2) = Resolve([r, s], context, batch2, minClusterCohesion: 0.70);
+        Assert.Single(m2.ClustersToUpsert, cl => cl.MemberEntityRecordIds.Count == 2);
+
+        var batch3 = Guid.NewGuid();
+        var d = Record("d", DName, batch3);
+        var (_, m3) = Resolve([d], context, batch3, minClusterCohesion: 0.70);
+
+        var clusters = m3.ClustersToUpsert;
+        Assert.Equal(2, clusters.Count(c => c.Status == "merged"));
+        Assert.Equal(5, clusters.Count(c => c.Status != "merged"));
+
+        var lastTombstoneIndex = Enumerable.Range(0, clusters.Count).Last(i => clusters[i].Status == "merged");
+        var firstSingletonIndex = Enumerable.Range(0, clusters.Count).First(i => clusters[i].Status != "merged");
+        Assert.True(
+            lastTombstoneIndex < firstSingletonIndex,
+            $"expected every tombstone to precede every singleton in ClustersToUpsert (a store " +
+            $"applying it last-write-wins must resolve every dissolved record to its fresh " +
+            $"singleton, not the dead tombstone); last tombstone at index {lastTombstoneIndex}, " +
+            $"first singleton at index {firstSingletonIndex}.");
+    }
 }

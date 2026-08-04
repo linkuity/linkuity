@@ -21,6 +21,17 @@ public interface IMatchingEngine
     IReadOnlyList<string> GenerateBlockingKeys(EntityRecord record, MatchingProfile profile);
 
     /// <summary>
+    /// The scale <paramref name="profile"/>'s resolved scoring strategy produces. <c>Resolve</c>
+    /// already looks this up internally (it needs it to pass the right scale to the decision
+    /// strategy); this exposes the same lookup to callers that build their own
+    /// <see cref="MatchThresholds"/> outside <c>Resolve</c> — durable incremental ingest and batch
+    /// matching both classify bands themselves rather than reading <c>MatchResult.Decision</c>, so
+    /// each needs to ask this question independently rather than assuming
+    /// <see cref="ScoreScale.UnitInterval"/> the way every one of them did before "evidence" shipped.
+    /// </summary>
+    ScoreScale ScaleOf(MatchingProfile profile);
+
+    /// <summary>
     /// Prepares an incoming record for durable storage: normalizes its field values, then derives
     /// blocking keys from the normalized values.
     ///

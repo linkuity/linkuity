@@ -34,7 +34,7 @@ public class DecisionBandCharacterizationTests
     [InlineData(0.7499, MatchDecision.NoMatch)]
     [InlineData(0.00, MatchDecision.NoMatch)]
     public void ThresholdDecisionStrategy_BandsInclusivelyOnBothThresholds(double score, MatchDecision expected)
-        => Assert.Equal(expected, new ThresholdDecisionStrategy().Decide(score, Profile));
+        => Assert.Equal(expected, new ThresholdDecisionStrategy().Decide(score, Profile, ScoreScale.UnitInterval));
 
     /// <summary>
     /// It has no notion of "nothing to compare" — a pair that produced no signals scores 0 and
@@ -44,7 +44,7 @@ public class DecisionBandCharacterizationTests
     /// </summary>
     [Fact]
     public void ThresholdDecisionStrategy_CannotExpressNonComparable()
-        => Assert.Equal(MatchDecision.NoMatch, new ThresholdDecisionStrategy().Decide(0.0, Profile));
+        => Assert.Equal(MatchDecision.NoMatch, new ThresholdDecisionStrategy().Decide(0.0, Profile, ScoreScale.UnitInterval));
 
     // ── MatchingEngine: a silent discard, not a band ─────────────────────────────
 

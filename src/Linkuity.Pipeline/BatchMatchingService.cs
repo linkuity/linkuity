@@ -56,8 +56,11 @@ public sealed class BatchMatchingService
         // Batch has nowhere to put a review task, so it keeps only the auto band. Expressed
         // through the shared classifier rather than as a bare inequality: the two-band behaviour
         // is then visible as a deliberate narrowing of the four, not a separate implementation
-        // that happens to agree at one boundary.
-        var thresholds = profile.ThresholdsOn();
+        // that happens to agree at one boundary. Scale comes from the profile's own resolved
+        // scorer (engine.ScaleOf), not an assumed UnitInterval — an evidence-scored profile's
+        // thresholds are absolute bits of log-odds evidence and would be rejected as out of range
+        // against [0,1].
+        var thresholds = profile.ThresholdsOn(engine.ScaleOf(profile));
         var best = new Dictionary<(string, string), double>();
         foreach (var record in records)
         {

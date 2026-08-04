@@ -209,8 +209,6 @@ public sealed class FileMetadataStore : IMetadataStore
     public async Task<IncrementalIngestResult> SaveIncrementalIngestAsync(IncrementalIngestRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        // Validated by construction, before any work is done. See IncrementalResolver.ThresholdsFor.
-        _ = IncrementalResolver.ThresholdsFor(request);
 
         await _gate.WaitAsync(ct);
         try
@@ -221,6 +219,13 @@ public sealed class FileMetadataStore : IMetadataStore
             BackfillBlockingKeys(db, request.ProjectId);
 
             var profile = ProfileFor(project.ContentType);
+            // Validated by construction, as early as possible now that the profile (and therefore
+            // its resolved scorer's scale) is known. See IncrementalResolver.ThresholdsFor. This
+            // used to run before the profile was loaded, validating unconditionally against
+            // ScoreScale.UnitInterval; that rejected every valid evidence-scored profile's
+            // log-odds thresholds, so it now waits for the profile it needs to ask the right
+            // question.
+            _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(profile));
             if (_index is not null)
                 EnsureIndexCurrent(db);
 

@@ -38,7 +38,7 @@ public class StrategyRegistryTests
     private sealed class FakeDecide : IDecisionStrategy
     {
         public string Name => "d";
-        public MatchDecision Decide(double topScore, MatchingProfile profile) => MatchDecision.NoMatch;
+        public MatchDecision Decide(double topScore, MatchingProfile profile, ScoreScale scale) => MatchDecision.NoMatch;
     }
     private sealed class FakeCluster : IClusteringStrategy
     {

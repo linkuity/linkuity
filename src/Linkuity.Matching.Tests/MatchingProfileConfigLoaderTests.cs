@@ -338,52 +338,6 @@ public class MatchingProfileConfigLoaderTests
         Assert.Contains("org_name", ex.Message, StringComparison.Ordinal);
     }
 
-    // [I2] RequireLiveMatchingScale is deliberately NOT called from LoadFromJson/LoadFromFile/
-    // LoadFromDirectory (see its own doc comment) — CorpusAuditService needs to keep loading
-    // "evidence" profiles to measure them. These exercise the guard directly, the way its two
-    // production call sites (MatchingServiceCollectionExtensions, LocalBatchRunner) use it.
-    private const string EvidenceScoringOrganizationJson = """
-    {
-      "contentType": "organization",
-      "fields": [
-        { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable", "Identifier"], "weight": 1.0, "evidence": { "sameEntityAgreement": 0.9, "chanceAgreement": 0.1 } }
-      ],
-      "normalizationStrategy": "identity",
-      "blockingStrategies": ["exact-value"],
-      "candidateRetrievalStrategy": "linear",
-      "similarityStrategy": "field-weighted",
-      "scoringStrategy": "evidence",
-      "decisionStrategy": "threshold",
-      "clusteringStrategy": "union-find",
-      "autoMatchThreshold": 8.0,
-      "reviewThreshold": 4.0
-    }
-    """;
-
-    [Fact]
-    public void RequireLiveMatchingScale_RejectsAProfileOnANonUnitIntervalScale()
-    {
-        var registry = Registry();
-        var profile = new MatchingProfileConfigLoader().LoadFromJson(EvidenceScoringOrganizationJson, registry);
-
-        var ex = Assert.Throws<MatchingProfileConfigException>(
-            () => MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, "evidence.profile.json"));
-
-        Assert.Contains("evidence.profile.json", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("LogOdds", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RequireLiveMatchingScale_AcceptsAProfileOnTheUnitIntervalScale()
-    {
-        var registry = Registry();
-        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, registry);
-
-        // Must not throw: "identifier-weighted" produces ScoreScale.UnitInterval, which every
-        // live matching call site already assumes.
-        MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, "organization.profile.json");
-    }
-
     [Fact]
     public void LoadFromDirectory_LoadsEveryProfileFile()
     {
