@@ -216,16 +216,19 @@ public sealed class FileMetadataStore : IMetadataStore
             var db = await LoadAsync(ct);
             ValidateIncrementalRequest(db, request);
             var project = db.Projects.First(p => p.Id == request.ProjectId);
-            BackfillBlockingKeys(db, request.ProjectId);
-
             var profile = ProfileFor(project.ContentType);
+
             // Validated by construction, as early as possible now that the profile (and therefore
             // its resolved scorer's scale) is known. See IncrementalResolver.ThresholdsFor. This
             // used to run before the profile was loaded, validating unconditionally against
             // ScoreScale.UnitInterval; that rejected every valid evidence-scored profile's
             // log-odds thresholds, so it now waits for the profile it needs to ask the right
-            // question.
+            // question — but still runs BEFORE BackfillBlockingKeys below, which mutates the
+            // in-memory db: a request that fails purely on bad thresholds should not pay for that
+            // mutation first (discarded on throw since SaveAsync never runs, but still wasted work).
             _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(profile));
+
+            BackfillBlockingKeys(db, request.ProjectId);
             if (_index is not null)
                 EnsureIndexCurrent(db);
 
