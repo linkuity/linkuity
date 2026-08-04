@@ -9,6 +9,11 @@ namespace Linkuity.Matching.Clustering;
 /// clusters covering 124,034 records at a cost of ZERO correct clusters out of 11,786. The
 /// 29,477-record cluster agrees on 54.2% of the pairs compared inside it and is caught.
 /// </para>
+/// <para>
+/// <see cref="MatchingProfile.MinClusterCohesion"/> is off (null) by default in this stage.
+/// "Disabled" is handled here, not as a special case at either call site — every caller of this
+/// policy gets it for free, and there is exactly one place that has to know cohesion can be off.
+/// </para>
 /// </summary>
 public sealed class CohesionClusterMergePolicy : IClusterMergePolicy
 {
@@ -19,8 +24,9 @@ public sealed class CohesionClusterMergePolicy : IClusterMergePolicy
         ArgumentNullException.ThrowIfNull(profile);
 
         // Cohesion first, so a cluster that is both incoherent AND oversized reports the reason
-        // that actually describes what is wrong with it.
-        if (counts.AgreementRate < profile.MinClusterCohesion)
+        // that actually describes what is wrong with it. Null means the check is off; the size
+        // guard below still applies regardless.
+        if (profile.MinClusterCohesion is { } minCohesion && counts.AgreementRate < minCohesion)
             return ClusterMergeVerdict.RejectedForCohesion;
 
         if (profile.MaxAutoClusterSize is { } max && counts.Members > max)

@@ -5,7 +5,7 @@ namespace Linkuity.Matching.Tests;
 
 public class ClusterCohesionTests
 {
-    private static MatchingProfile Profile(double cohesion = 0.60, int? maxSize = null) => new()
+    private static MatchingProfile Profile(double? cohesion = 0.60, int? maxSize = null) => new()
     {
         ContentType = "organization",
         Fields = [],
@@ -106,5 +106,25 @@ public class ClusterCohesionTests
         var verdict = Policy.Evaluate(new ClusterEvidenceCounts(100, 100, 10), Profile(maxSize: 20));
 
         Assert.Equal(ClusterMergeVerdict.RejectedForCohesion, verdict);
+    }
+
+    [Fact]
+    public void CohesionOff_AClusterThatWouldFailIsAcceptedAnyway()
+    {
+        // Stage 1a default: MinClusterCohesion is null. The same numbers that reject at 0.60
+        // above (AClusterContradictedByItsOwnComparisons_IsRejected) are accepted when the check
+        // is off — "disabled" lives in the policy, not as a special case at either call site.
+        var verdict = Policy.Evaluate(new ClusterEvidenceCounts(29_477, 299_323, 162_258), Profile(cohesion: null));
+
+        Assert.Equal(ClusterMergeVerdict.Accepted, verdict);
+    }
+
+    [Fact]
+    public void CohesionOff_TheSizeGuardStillApplies()
+    {
+        // Cohesion being off must not turn off the independent size backstop.
+        var verdict = Policy.Evaluate(new ClusterEvidenceCounts(21, 100, 10), Profile(cohesion: null, maxSize: 20));
+
+        Assert.Equal(ClusterMergeVerdict.RejectedForSize, verdict);
     }
 }

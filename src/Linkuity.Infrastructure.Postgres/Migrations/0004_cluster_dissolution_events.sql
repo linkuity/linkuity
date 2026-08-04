@@ -20,3 +20,7 @@ create table cluster_dissolution_events (
 );
 
 create index ix_cluster_dissolution_events_project_id on cluster_dissolution_events (project_id);
+
+-- "Why did cluster X disappear" is the query this table exists to answer (see the module comment
+-- above); without this index it is a sequential scan at any real scale.
+create index ix_cluster_dissolution_events_previous_cluster_id on cluster_dissolution_events (previous_cluster_id);

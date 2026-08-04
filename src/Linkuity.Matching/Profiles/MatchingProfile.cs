@@ -92,15 +92,24 @@ public sealed record MatchingProfile
 
     /// <summary>
     /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the
-    /// cluster does not form. Default 0.50 — a simple majority, chosen by argument rather than by
-    /// measurement: a cluster whose own comparisons disagree more often than they agree is
+    /// cluster does not form. Null (off) by default in this stage — stage 1a ships with nothing
+    /// moving. <c>persist-batch</c> imports clusters the engine never pairwise-compared (counters
+    /// read 0/0, which <c>AgreementRate</c> treats as fully agreeing), so enforcing here first
+    /// would pass every imported cluster trivially while changing the durable path's behaviour
+    /// invisibly — the frozen baseline models the batch audit path and never exercises
+    /// <c>IncrementalResolver</c>. Cohesion enforcement ships in stage 1b, once the batch path has
+    /// its own comparison-counting story.
+    /// <para>
+    /// When enabled, the recommended value is 0.50 — a simple majority, chosen by argument rather
+    /// than by measurement: a cluster whose own comparisons disagree more often than they agree is
     /// self-contradictory on its face, and that holds without reference to any corpus. A customer
-    /// with no ground truth cannot re-derive a threshold from their own data, so the default has to
-    /// be defensible on its own terms. (On 1,052,432 labelled SEC records this also costs nothing —
-    /// 11,786 correct clusters survive — but that measurement corroborates the default, it is not
+    /// with no ground truth cannot re-derive a threshold from their own data, so 0.50 has to be
+    /// defensible on its own terms. (On 1,052,432 labelled SEC records this also costs nothing —
+    /// 11,786 correct clusters survive — but that measurement corroborates the value, it is not
     /// the reason for it.)
+    /// </para>
     /// </summary>
-    public double MinClusterCohesion { get; init; } = 0.50;
+    public double? MinClusterCohesion { get; init; }
 
     /// <summary>
     /// Optional backstop: a cluster larger than this does not form automatically. Null (off) by

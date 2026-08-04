@@ -10,8 +10,11 @@ namespace Linkuity.Mdm.Tests;
 /// Task 10: the merge policy is consulted BEFORE a cluster is created or replaced. A component
 /// whose own comparisons contradict it more often than the profile's MinClusterCohesion tolerates
 /// does not form — every member reverts to a singleton and a ClusterDissolutionEvent records the
-/// numbers that refused it. MinClusterCohesion is set explicitly per test (never inherited from
-/// MatchingProfile's own default) so the threshold under test is visible in the test itself.
+/// numbers that refused it. MinClusterCohesion defaults to null (off) in this stage — every test
+/// that relies on the check firing sets it explicitly, so the threshold under test is visible in
+/// the test itself rather than inherited from a default. See
+/// <see cref="MinClusterCohesionIsNull_TheMechanismIsInert_AClusterThatWouldFailAtFiftyPercentFormsAnyway"/>
+/// for the null/off case.
 /// </summary>
 public class IncrementalResolverCohesionTests
 {
@@ -28,7 +31,16 @@ public class IncrementalResolverCohesionTests
     private const string BName = "Alpha Beta Gamma Zeta";
     private const string CName = "Delta Epsilon Theta Zeta";
 
-    private static MatchingProfile Profile(double minClusterCohesion) => new()
+    // Extends the A/B/C fixture for the "stage 1a ships off" test below. D shares B's non-Zeta
+    // core (jaccard 0.6, auto — bridges D into the cluster via B) but only a diluted 3/8 with A
+    // (review, non-auto) and nothing with C (no-match). E is the mirror image through C: shares
+    // C's non-Zeta core (0.6, auto — bridges via C), 3/8 with A (review), nothing with B or D.
+    // Growing {A,B,C} to {A,B,C,D,E} this way adds 7 more comparisons but only 2 more agreements,
+    // taking the combined rate from 0.667 to 4/10 = 0.40 — comfortably below even 0.50.
+    private const string DName = "Alpha Beta Gamma Dunique";
+    private const string EName = "Delta Epsilon Theta Eunique";
+
+    private static MatchingProfile Profile(double? minClusterCohesion) => new()
     {
         ContentType = "organization",
         Fields =
@@ -71,7 +83,7 @@ public class IncrementalResolverCohesionTests
     };
 
     private static (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
-        IReadOnlyList<EntityRecord> incoming, InMemoryResolutionContext context, Guid batchId, double minClusterCohesion)
+        IReadOnlyList<EntityRecord> incoming, InMemoryResolutionContext context, Guid batchId, double? minClusterCohesion)
     {
         var profile = Profile(minClusterCohesion);
         var request = new IncrementalIngestRequest(
@@ -209,6 +221,37 @@ public class IncrementalResolverCohesionTests
         Assert.Equal(3, cluster.ComparisonsInside);
         Assert.Equal(2, cluster.AgreementsInside);
         Assert.Empty(mutations.DissolutionEventsToInsert);
+    }
+
+    [Fact]
+    public void MinClusterCohesionIsNull_TheMechanismIsInert_AClusterThatWouldFailAtFiftyPercentFormsAnyway()
+    {
+        // Stage 1a's actual default: MinClusterCohesion left unset (null), not merely a lenient
+        // number. Growing {A,B,C} (0.667) to {A,B,C,D,E} (0.40 -- see the DName/EName comment)
+        // proves the policy is genuinely off, not just generous: 0.40 fails every threshold this
+        // file's other tests use to reject (0.50 and 0.70 both), yet the cluster forms unchanged.
+        var context = new InMemoryResolutionContext();
+        var batch1 = Guid.NewGuid();
+        var a = Record("a", AName, batch1);
+        var b = Record("b", BName, batch1);
+        var c = Record("c", CName, batch1);
+        var (_, m1) = Resolve([a, b, c], context, batch1, minClusterCohesion: null);
+        Assert.Empty(m1.DissolutionEventsToInsert);
+
+        var batch2 = Guid.NewGuid();
+        var d = Record("d", DName, batch2);
+        var (_, m2) = Resolve([d], context, batch2, minClusterCohesion: null);
+        Assert.Empty(m2.DissolutionEventsToInsert);
+
+        var batch3 = Guid.NewGuid();
+        var e = Record("e", EName, batch3);
+        var (_, m3) = Resolve([e], context, batch3, minClusterCohesion: null);
+
+        var cluster = Assert.Single(m3.ClustersToUpsert, cl => cl.MemberEntityRecordIds.Count == 5);
+        Assert.Equal(10, cluster.ComparisonsInside);
+        Assert.Equal(4, cluster.AgreementsInside);
+        Assert.True(cluster.AgreementsInside / (double)cluster.ComparisonsInside < 0.50, "fixture sanity: rate must be below 0.50");
+        Assert.Empty(m3.DissolutionEventsToInsert);
     }
 
     [Fact]

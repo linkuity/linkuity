@@ -220,11 +220,14 @@ public sealed class MatchingProfileConfigLoader
                 $"Matching profile '{source}' value 'defaultPhoneRegion' ('{phoneRegion}') must be a " +
                 "two-letter uppercase ISO 3166-1 region code, for example 'US' or 'GB'.");
 
-        // Optional cohesion floor (absent -> 0.60, the measured default). It is a rate, so unlike
-        // reviewFloorGate/identifierFloorGate it must additionally reject NaN/Infinity: RequireRange's
-        // < / > comparisons let NaN through silently (every comparison against NaN is false).
-        var minClusterCohesion = document.MinClusterCohesion ?? 0.60;
-        if (double.IsNaN(minClusterCohesion) || double.IsInfinity(minClusterCohesion) || minClusterCohesion is < 0.0 or > 1.0)
+        // Optional cohesion floor. Absent -> null, off (stage 1a ships with nothing moving; see
+        // MatchingProfile.MinClusterCohesion). Validated only when present — no default is
+        // substituted, mirroring maxAutoClusterSize below. It is a rate, so unlike
+        // reviewFloorGate/identifierFloorGate it must additionally reject NaN/Infinity:
+        // RequireRange's < / > comparisons let NaN through silently (every comparison against
+        // NaN is false).
+        if (document.MinClusterCohesion is { } minClusterCohesion &&
+            (double.IsNaN(minClusterCohesion) || double.IsInfinity(minClusterCohesion) || minClusterCohesion is < 0.0 or > 1.0))
             throw new MatchingProfileConfigException(
                 $"Matching profile '{source}' value 'minClusterCohesion' ({minClusterCohesion}) must be a finite number in [0, 1].");
 
@@ -253,7 +256,7 @@ public sealed class MatchingProfileConfigLoader
             DefaultPhoneRegion = phoneRegion,
             DefaultDateOrder = dateOrder,
             PlaceholderValues = document.PlaceholderValues ?? [],
-            MinClusterCohesion = minClusterCohesion,
+            MinClusterCohesion = document.MinClusterCohesion,
             MaxAutoClusterSize = document.MaxAutoClusterSize
         };
     }
