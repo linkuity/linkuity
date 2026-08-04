@@ -37,9 +37,10 @@ public sealed record FieldEvidence
 
     /// <summary>
     /// Ceiling on agreement evidence, in bits. Null means uncapped, which is reserved for verified
-    /// identifiers where "this alone is sufficient" is the field's purpose. Null must be a
-    /// deliberate declaration rather than an omission — profile-load validation enforcing that is
-    /// not yet in place and arrives with the cap rules.
+    /// identifiers where "this alone is sufficient" is the field's purpose. Null is a deliberate
+    /// declaration rather than an omission: <c>MatchingProfileConfigLoader</c> rejects a null cap
+    /// on any field that does not declare <see cref="FieldRole.Identifier"/>, and rejects a
+    /// non-null cap that is not strictly below the profile's auto-match threshold.
     /// </summary>
     public double? MaxAgreementBits
     {

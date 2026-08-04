@@ -162,6 +162,26 @@ public sealed class MatchingProfileConfigLoader
                 $"for scoringStrategy '{scoring}' on the {scale} scale. {ReasonOf(ex)}");
         }
 
+        // The memo's acceptance criterion, enforced by the system rather than remembered by us:
+        // a single rare descriptive agreement must not on its own exceed the merge threshold.
+        // Load-time rather than a test, because a test only protects the profiles we ship.
+        foreach (var evidenceField in fields.Where(f => f.Evidence is not null))
+        {
+            var cap = evidenceField.Evidence!.MaxAgreementBits;
+
+            if (cap is null && !evidenceField.Roles.HasFlag(FieldRole.Identifier))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{evidenceField.Name}' declares evidence with no " +
+                    "maxAgreementBits. An uncapped field can carry a merge on its own, which is only " +
+                    "appropriate for a verified identifier — declare the identifier role, or set a cap.");
+
+            if (cap is { } bits && bits >= auto)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{evidenceField.Name}' has maxAgreementBits {bits}, " +
+                    $"which is not below autoMatchThreshold {auto}. A single agreement on one " +
+                    "descriptive field would reach the auto-merge band unaided.");
+        }
+
         // Optional (absent -> 0.75, preserving Milestone 27's default). Range-validated only; no
         // constraint relative to reviewThreshold (a free tuning knob — below reviewThreshold it
         // promotes strongly-evidenced sub-threshold pairs into review).
