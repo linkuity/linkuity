@@ -6,9 +6,10 @@ namespace Linkuity.Cli;
 
 /// <summary>
 /// Human-readable field-evidence calibration report. Every guard rail the measurement carries —
-/// zero-observation fields, an UNUSABLE m &lt;= u field, a SMOOTHING-DEPENDENT boundary estimate
-/// — gets its own visible line rather than being folded into the table, because those are exactly
-/// the situations someone skimming a wall of numbers is most likely to miss.
+/// zero-observation fields, an UNUSABLE m &lt;= u field, a SMOOTHING-DEPENDENT boundary estimate,
+/// self-blocked pairs excluded from a field's own u — gets its own visible line rather than being
+/// folded into the table, because those are exactly the situations someone skimming a wall of
+/// numbers is most likely to miss.
 /// </summary>
 public static class FieldEvidenceCalibrationTextFormatter
 {
@@ -28,15 +29,19 @@ public static class FieldEvidenceCalibrationTextFormatter
             $"labeled same-entity pairs {result.LabeledSameEntityPairs:N0}   " +
             $"labeled different-entity pairs {result.LabeledDifferentEntityPairs:N0}   " +
             $"unlabeled/skipped {result.UnlabeledCandidatePairs:N0}");
+        sb.AppendLine(CultureInfo.InvariantCulture,
+            $"candidate pairs whose owning blocking key could not be attributed to one field " +
+            $"(excluded from no field's u): {result.UnattributableOwnerCandidatePairs:N0}");
         sb.AppendLine();
 
-        sb.AppendLine("m = P(agree | same entity)   u = P(agree | different entity, candidate pair)");
+        sb.AppendLine("m = P(agree | same entity)   u = P(agree | different entity, candidate pair,");
+        sb.AppendLine("EXCLUDING pairs THIS field's own blocking key brought together — see 'excluded' below).");
         sb.AppendLine("agree := similarity == 1.0 on a Compared signal. m/u below are smoothed");
         sb.AppendLine("((agreements + 0.5) / (comparisons + 1)); raw (unsmoothed) rates are in parentheses.");
         sb.AppendLine("A field marked UNUSABLE emits no bits (see the section below); its m/u are still shown.");
         sb.AppendLine();
 
-        sb.AppendLine("field                     n(same)      m            n(diff)      u            agree-bits  disagree-bits");
+        sb.AppendLine("field                     n(same)      m            n(diff)  excluded      u            agree-bits  disagree-bits");
         foreach (var f in result.Fields)
         {
             var agree = f.Usable ? FormatBits(f.AgreementBits) : "UNUSABLE";
@@ -44,18 +49,42 @@ public static class FieldEvidenceCalibrationTextFormatter
             var flags = (f.Usable ? "" : " [UNUSABLE]") + (f.SmoothingDependent ? " [SMOOTHING-DEPENDENT]" : "");
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"{f.FieldName,-24} {f.SameEntityComparisons,10:N0}  {FormatRate(f.SmoothedM, f.RawM),-12} " +
-                $"{f.DifferentEntityComparisons,10:N0}  {FormatRate(f.SmoothedU, f.RawU),-12} " +
+                $"{f.DifferentEntityComparisons,8:N0} {f.DifferentEntitySelfBlockedExcluded,9:N0}  {FormatRate(f.SmoothedU, f.RawU),-12} " +
                 $"{agree,10}  {disagree,12}{flags}");
         }
         sb.AppendLine();
+
+        var selfBlocked = result.Fields.Where(f => f.DifferentEntitySelfBlockedExcluded > 0).ToList();
+        if (selfBlocked.Count > 0)
+        {
+            sb.AppendLine("SELF-BLOCKED EXCLUSION — these fields are themselves blocking keys, so candidate pairs");
+            sb.AppendLine("they alone brought together were excluded from their OWN u (they agree by construction,");
+            sb.AppendLine("which is not chance agreement). A field with a small remainder after exclusion is exactly");
+            sb.AppendLine("where the u estimate gets shaky — check its n(diff) above, not just that a number exists:");
+            foreach (var f in selfBlocked)
+            {
+                var remaining = f.DifferentEntityComparisons;
+                var total = remaining + f.DifferentEntitySelfBlockedExcluded;
+                var pct = total == 0 ? 0.0 : (double)f.DifferentEntitySelfBlockedExcluded / total;
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  {f.FieldName}: excluded {f.DifferentEntitySelfBlockedExcluded:N0} of {total:N0} " +
+                    $"different-entity candidates ({pct:P1}); {remaining:N0} remain for u.");
+            }
+            sb.AppendLine();
+        }
 
         var noObservations = result.Fields.Where(f => f.SmoothedM is null || f.SmoothedU is null).ToList();
         if (noObservations.Count > 0)
         {
             sb.AppendLine("NO ESTIMATE — zero labeled comparisons in one or both classes (bits cannot be computed):");
             foreach (var f in noObservations)
+            {
+                var excludedNote = f.DifferentEntitySelfBlockedExcluded > 0
+                    ? $"  (excluded as self-blocked: {f.DifferentEntitySelfBlockedExcluded:N0})"
+                    : "";
                 sb.AppendLine(CultureInfo.InvariantCulture,
-                    $"  {f.FieldName}: n(same)={f.SameEntityComparisons:N0}  n(diff)={f.DifferentEntityComparisons:N0}");
+                    $"  {f.FieldName}: n(same)={f.SameEntityComparisons:N0}  n(diff)={f.DifferentEntityComparisons:N0}{excludedNote}");
+            }
             sb.AppendLine();
         }
 
@@ -64,8 +93,7 @@ public static class FieldEvidenceCalibrationTextFormatter
         {
             sb.AppendLine("*** UNUSABLE: m <= u, so evidence from these fields DECREASES AS SIMILARITY INCREASES. ***");
             sb.AppendLine("No AgreementBits/DisagreementBits are emitted for them. Almost always a misconfigured");
-            sb.AppendLine("field or evaluator (or, if the field is also a blocking key, u inflated by construction —");
-            sb.AppendLine("candidates already share it). Deciding what to do about it is a separate judgement:");
+            sb.AppendLine("field or evaluator. Deciding what to do about it is a separate judgement:");
             foreach (var f in unusable)
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"  {f.FieldName}: m={f.SmoothedM:F6}  u={f.SmoothedU:F6}  -- {f.UnusableReason}");

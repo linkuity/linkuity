@@ -149,6 +149,39 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(0, result.UnlabeledCandidatePairs);
     }
 
+    // ---- Field "block": the ONLY blocking field in this fixture, so EVERY different-entity
+    // candidate pair is self-blocked, leaving nothing to estimate u from at all ----
+
+    [Fact]
+    public void Calibrate_FieldOwningEveryCandidatePair_HasNoRemainingDifferentEntityData()
+    {
+        var block = Run().Fields.Single(f => f.FieldName == "block");
+
+        // Same-entity pairs are unaffected by exclusion (m is never filtered): both r5-r6 and
+        // r9-r10 carry "block"="Smith" on both sides, so both agree.
+        Assert.Equal(2, block.SameEntityComparisons);
+        Assert.Equal(2, block.SameEntityAgreements);
+        Assert.Equal(1.0, block.RawM);
+
+        // All 4 different-entity candidates share "name:smith" — the only blocking key in this
+        // profile — and are therefore ALL self-blocked-excluded from "block"'s own u, leaving
+        // zero remaining. This is a real category (a field that is the SOLE blocking key sees
+        // its own u collapse to no-data, not to some now-domesticated number), distinct from
+        // "smoothing-dependent" (there is no u to depend on smoothing at all).
+        Assert.Equal(0, block.DifferentEntityComparisons);
+        Assert.Equal(0, block.DifferentEntityAgreements);
+        Assert.Equal(4, block.DifferentEntitySelfBlockedExcluded);
+        Assert.Null(block.RawU);
+        Assert.Null(block.SmoothedU);
+
+        Assert.Null(block.AgreementBits);
+        Assert.Null(block.DisagreementBits);
+        Assert.True(block.Usable);          // missing data, not "evidence runs backwards"
+        Assert.Null(block.UnusableReason);
+        Assert.False(block.SmoothingDependent);
+        Assert.Empty(block.SmoothingSensitivity);
+    }
+
     // ---- Field "a": raw u == 0 (and raw m == 1) -> SMOOTHING-DEPENDENT, multiple constants shown ----
 
     [Fact]
@@ -312,5 +345,208 @@ public class FieldEvidenceCalibrationServiceTests
         var duped = new List<EntityRecord>(Records) { Rec("r5", "Smith", a: "X") };
         var ex = Assert.Throws<ArgumentException>(() => NewService().Calibrate(duped, Profile(), Truth));
         Assert.Contains("r5", ex.Message);
+    }
+
+    // =====================================================================================
+    // Self-blocked exclusion: a field's own blocking key must not inflate its own u.
+    //
+    // Fixture: TWO blocking fields ("dob", exact-value via DateOfBirth semantic type; "ident",
+    // exact-value via the Identifier role) plus one Matchable-only field ("other", never a
+    // blocking key) that must be completely unaffected. exact-value keys are "{field}:{value}",
+    // so ownership never has to be inferred — each field's key vocabulary is disjoint by
+    // construction here, which is what makes the six candidate pairs below unambiguous:
+    //
+    //   r5/r6/r11 share "dob:19800101"   -> pairs (r5,r6) (r5,r11) (r6,r11), owned by "dob".
+    //   r9/r10/r12 share "ident:z"        -> pairs (r9,r10) (r9,r12) (r10,r12), owned by "ident".
+    //
+    // Truth: r5/r6 = group GA (a true pair), r9/r10 = group GB (a true pair), r11 = group GC,
+    // r12 = group GD (GC and GD each have no partner in this fixture, so they contribute no
+    // same-entity pairs of their own — only cross pairs against GA/GB).
+    //
+    // Field "dob": same-entity pairs are (r5,r6) [dob agrees, both 19800101] and (r9,r10) [dob
+    // disagrees, 19900505 vs 19910606] -> SameCount=2, SameAgree=1 (m=0.5 after smoothing).
+    // Different-entity pairs: (r5,r11) and (r6,r11) both agree on dob (all three share
+    // 19800101) AND are owned by "dob" -> EXCLUDED. (r9,r12) and (r10,r12) both disagree on dob
+    // (owned by "ident", not "dob") -> COUNTED. So post-exclusion DiffCount=2, DiffAgree=0 (raw
+    // u=0.0); the two excluded pairs were exactly the two that agreed, so WITHOUT this exclusion
+    // raw u would have been 2/4=0.5 -- equal to m, i.e. "dob" would have looked UNUSABLE (the
+    // same shape as the real last_name finding) purely from being blocked on itself.
+    //
+    // Field "ident" is the mirror image: same-entity (r5,r6) disagree (A vs B), (r9,r10) agree
+    // (Z vs Z) -> SameCount=2, SameAgree=1. Different-entity (r9,r12) and (r10,r12) both agree
+    // on ident (all three share "Z") AND are owned by "ident" -> EXCLUDED. (r5,r11)/(r6,r11)
+    // disagree on ident (owned by "dob") -> COUNTED. Same numbers as "dob" by the fixture's
+    // deliberate symmetry: post-exclusion DiffCount=2, DiffAgree=0.
+    //
+    // Field "other" (NOT a blocking key): same-entity (r5,r6) disagree (P vs Q), (r9,r10) agree
+    // (P vs P) -> SameCount=2, SameAgree=1 (same as dob/ident). ALL FOUR different-entity pairs
+    // count (nothing to exclude, since "other" never owns a key): (r5,r11) P/Q disagree,
+    // (r6,r11) Q/Q AGREE, (r9,r12) P/X disagree, (r10,r12) P/X disagree -> DiffCount=4,
+    // DiffAgree=1 (raw u=0.25). This must be identical with or without the self-blocked
+    // exclusion feature, because no pair is ever owned by "other"'s key -- it doesn't have one.
+    // =====================================================================================
+
+    private static MatchingProfile ExclusionProfile() => new()
+    {
+        ContentType = "person",
+        Fields =
+        [
+            new ProfileField { Name = "dob", SemanticType = SemanticFieldType.DateOfBirth,
+                Roles = FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "exact", Weight = 1.0 },
+            new ProfileField { Name = "ident", SemanticType = SemanticFieldType.SourceIdentifier,
+                Roles = FieldRole.Matchable | FieldRole.Blocking | FieldRole.Identifier,
+                SimilarityEvaluator = "exact", Weight = 1.0 },
+            new ProfileField { Name = "other", SemanticType = SemanticFieldType.FirstName,
+                Roles = FieldRole.Matchable, SimilarityEvaluator = "exact", Weight = 1.0 }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["exact-value"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.5,
+        ReviewThreshold = 0.3
+    };
+
+    private static EntityRecord ExclusionRec(string id, string dob, string ident, string other)
+        => new()
+        {
+            Id = Guid.NewGuid(), ProjectId = Guid.Empty, SourceId = Guid.Empty, IngestBatchId = Guid.Empty,
+            SourceRecordId = id,
+            Fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                { ["dob"] = dob, ["ident"] = ident, ["other"] = other },
+            CreatedAt = DateTimeOffset.UnixEpoch
+        };
+
+    // All six ids are fit-half at fitFraction 0.5 (hand-verified, same as the fixture above).
+    private static readonly IReadOnlyList<EntityRecord> ExclusionRecords =
+    [
+        ExclusionRec("r5", "19800101", "A", "P"),   // group GA
+        ExclusionRec("r6", "19800101", "B", "Q"),   // group GA (true pair with r5)
+        ExclusionRec("r9", "19900505", "Z", "P"),   // group GB
+        ExclusionRec("r10", "19910606", "Z", "P"),  // group GB (true pair with r9)
+        ExclusionRec("r11", "19800101", "C", "Q"),  // group GC
+        ExclusionRec("r12", "19750303", "Z", "X")   // group GD
+    ];
+
+    private static readonly Dictionary<string, string> ExclusionTruth = new()
+    {
+        ["r5"] = "GA", ["r6"] = "GA", ["r9"] = "GB", ["r10"] = "GB", ["r11"] = "GC", ["r12"] = "GD"
+    };
+
+    private static FieldEvidenceCalibrationResult RunExclusion() =>
+        NewService().Calibrate(ExclusionRecords, ExclusionProfile(), ExclusionTruth);
+
+    [Fact]
+    public void Calibrate_ExclusionFixture_SplitAndCandidateCounts()
+    {
+        var result = RunExclusion();
+
+        Assert.Equal(6, result.TotalRecords);
+        Assert.Equal(6, result.FitRecords);
+        Assert.Equal(0, result.EvalRecords);
+        Assert.Equal(6, result.CandidatePairsEmitted);
+        Assert.Equal(2, result.LabeledSameEntityPairs);
+        Assert.Equal(4, result.LabeledDifferentEntityPairs);
+
+        // Every one of the 6 pairs is owned by exactly one field's key by construction (see the
+        // fixture doc above) -- nothing here should register as ambiguous.
+        Assert.Equal(0, result.UnattributableOwnerCandidatePairs);
+    }
+
+    [Fact]
+    public void Calibrate_FieldOwningItsBlock_ExcludesSelfBlockedPairs_AndUDiffersFromUnexcluded()
+    {
+        var dob = RunExclusion().Fields.Single(f => f.FieldName == "dob");
+
+        Assert.Equal(2, dob.SameEntityComparisons);
+        Assert.Equal(1, dob.SameEntityAgreements);
+        Assert.Equal(0.5, dob.RawM);
+
+        // Post-exclusion: 2 different-entity comparisons remain (both disagree), 2 were excluded
+        // as self-blocked (both of which agreed). Without the exclusion this would have been
+        // DiffCount=4, DiffAgree=2, raw u=0.5 -- equal to m, i.e. UNUSABLE purely from measuring
+        // the field against pairs its own key selected.
+        Assert.Equal(2, dob.DifferentEntityComparisons);
+        Assert.Equal(0, dob.DifferentEntityAgreements);
+        Assert.Equal(2, dob.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(0.0, dob.RawU);
+
+        Assert.NotNull(dob.SmoothedM);
+        Assert.Equal(0.5, dob.SmoothedM!.Value, 9);
+        Assert.NotNull(dob.SmoothedU);
+        Assert.Equal(1.0 / 6.0, dob.SmoothedU!.Value, 9);
+
+        Assert.True(dob.Usable);
+        Assert.NotNull(dob.AgreementBits);
+        Assert.Equal(1.58496250072116, dob.AgreementBits!.Value, 9);
+        Assert.NotNull(dob.DisagreementBits);
+        Assert.Equal(-0.736965594166206, dob.DisagreementBits!.Value, 9);
+
+        // raw u == 0 post-exclusion: also correctly flagged smoothing-dependent.
+        Assert.True(dob.SmoothingDependent);
+        Assert.NotEmpty(dob.SmoothingSensitivity);
+    }
+
+    [Fact]
+    public void Calibrate_SecondFieldOwningADifferentBlock_AlsoExcludesOnlyItsOwnPairs()
+    {
+        // Mirror of the "dob" case: "ident" owns the OTHER block (r9/r10/r12 sharing "ident:z"),
+        // so its own self-blocked pairs are (r9,r12) and (r10,r12), not (r5,r11)/(r6,r11) -- those
+        // are excluded from "dob"'s u, not "ident"'s. Same numbers by the fixture's symmetry, but
+        // computed from a disjoint set of excluded pairs, which is the actual thing under test:
+        // ownership attribution must not confuse the two blocking fields with each other.
+        var ident = RunExclusion().Fields.Single(f => f.FieldName == "ident");
+
+        Assert.Equal(2, ident.SameEntityComparisons);
+        Assert.Equal(1, ident.SameEntityAgreements);
+        Assert.Equal(0.5, ident.RawM);
+
+        Assert.Equal(2, ident.DifferentEntityComparisons);
+        Assert.Equal(0, ident.DifferentEntityAgreements);
+        Assert.Equal(2, ident.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(0.0, ident.RawU);
+
+        Assert.True(ident.Usable);
+        Assert.NotNull(ident.AgreementBits);
+        Assert.Equal(1.58496250072116, ident.AgreementBits!.Value, 9);
+        Assert.NotNull(ident.DisagreementBits);
+        Assert.Equal(-0.736965594166206, ident.DisagreementBits!.Value, 9);
+        Assert.True(ident.SmoothingDependent);
+    }
+
+    [Fact]
+    public void Calibrate_NonBlockingField_IsUnaffectedByExclusion()
+    {
+        var other = RunExclusion().Fields.Single(f => f.FieldName == "other");
+
+        Assert.Equal(2, other.SameEntityComparisons);
+        Assert.Equal(1, other.SameEntityAgreements);
+        Assert.Equal(0.5, other.RawM);
+
+        // "other" is never a blocking key, so no pair can ever be owned by it: ALL FOUR
+        // different-entity candidate pairs count, none excluded. This is the number this
+        // instrument reported before self-blocked exclusion existed, unchanged.
+        Assert.Equal(4, other.DifferentEntityComparisons);
+        Assert.Equal(1, other.DifferentEntityAgreements);
+        Assert.Equal(0, other.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(0.25, other.RawU);
+
+        Assert.NotNull(other.SmoothedM);
+        Assert.Equal(0.5, other.SmoothedM!.Value, 9);
+        Assert.NotNull(other.SmoothedU);
+        Assert.Equal(0.3, other.SmoothedU!.Value, 9);
+
+        Assert.True(other.Usable);
+        Assert.NotNull(other.AgreementBits);
+        Assert.Equal(0.736965594166206, other.AgreementBits!.Value, 9);
+        Assert.NotNull(other.DisagreementBits);
+        Assert.Equal(-0.485426827170242, other.DisagreementBits!.Value, 9);
+
+        // Neither raw m (0.5) nor raw u (0.25) hits a 0/1 boundary.
+        Assert.False(other.SmoothingDependent);
+        Assert.Empty(other.SmoothingSensitivity);
     }
 }

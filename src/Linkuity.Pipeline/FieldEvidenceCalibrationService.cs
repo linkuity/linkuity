@@ -54,10 +54,23 @@ public sealed record FieldCalibrationRow(
     long SameEntityAgreements,
     double? RawM,
     double? SmoothedM,
+    /// <summary>Different-entity Compared observations actually used to estimate u — i.e. AFTER
+    /// excluding pairs this field's own blocking key produced (see
+    /// <see cref="DifferentEntitySelfBlockedExcluded"/>).</summary>
     long DifferentEntityComparisons,
     long DifferentEntityAgreements,
     double? RawU,
     double? SmoothedU,
+    /// <summary>
+    /// Different-entity candidate pairs whose OWNING blocking key (the lowest shared active key —
+    /// see <see cref="CorpusAuditService.ForEachCandidatePair"/>) was produced by THIS field, and
+    /// which were therefore excluded from <see cref="DifferentEntityComparisons"/> /ChanceAgreement
+    /// entirely: for such a pair, "these two records agree on this field" is true by construction
+    /// (it is why they were compared at all), so counting it toward u would measure the selection
+    /// rule, not chance agreement. Zero for a field that is not itself a blocking key, or for one
+    /// whose key never won ownership of any candidate pair — see the class doc.
+    /// </summary>
+    long DifferentEntitySelfBlockedExcluded,
     /// <summary>Null whenever <see cref="Usable"/> is false or there is insufficient data on
     /// either side — this instrument NEVER emits a bits pair a caller could mistake for a usable
     /// parameter in either of those cases.</summary>
@@ -95,7 +108,9 @@ public sealed record FieldCalibrationRow(
     /// which is closed on both ends ([0.9, 1.0]). Same-entity (true-pair) observations only.</summary>
     IReadOnlyList<long> SameEntitySimilarityHistogram,
     /// <summary>Same bucketing as <see cref="SameEntitySimilarityHistogram"/>, over
-    /// different-entity (non-match) observations.</summary>
+    /// different-entity (non-match) observations that were NOT self-blocked-excluded — i.e. the
+    /// same population <see cref="DifferentEntityComparisons"/> counts, so the bucket counts sum
+    /// to it exactly.</summary>
     IReadOnlyList<long> DifferentEntitySimilarityHistogram);
 
 /// <summary>Corpus-level counts around a calibration run, so the per-field table can be read in
@@ -110,6 +125,16 @@ public sealed record FieldEvidenceCalibrationResult(
     long LabeledSameEntityPairs,
     long LabeledDifferentEntityPairs,
     long UnlabeledCandidatePairs,
+    /// <summary>
+    /// Labeled candidate pairs whose owning blocking key could NOT be attributed to exactly one
+    /// blocking-role field — either no field's isolated key generation reproduces it, or more than
+    /// one field's does (a genuine ambiguity, e.g. a composite key built from several fields' values
+    /// together). Such a pair is excluded from NO field's self-blocked exclusion, because guessing
+    /// which field to charge it to would be worse than leaving it in every field's u estimate, as
+    /// it always was before this exclusion existed. Reported so this limitation is visible rather
+    /// than silently assumed away; see <see cref="FieldEvidenceCalibrationService"/> class doc.
+    /// </summary>
+    long UnattributableOwnerCandidatePairs,
     IReadOnlyList<FieldCalibrationRow> Fields);
 
 /// <summary>
@@ -139,12 +164,37 @@ public sealed record FieldEvidenceCalibrationResult(
 /// </para>
 /// <para>
 /// A field can come back UNUSABLE (<see cref="FieldCalibrationRow.Usable"/> false): m &lt;= u
-/// means agreeing on the field is evidence AGAINST a match, which is almost always a sign the
-/// field (or its interaction with blocking — a field also used as a blocking key will see its u
-/// inflated by construction, since most candidates already share it) is misconfigured, not a real
-/// finding to encode. This service refuses to emit AgreementBits/DisagreementBits for such a
-/// field rather than pick a policy (exclude it, clamp it, floor it) — that decision depends on
-/// blocking and belongs to whoever applies these numbers, not to this measurement.
+/// means agreeing on the field is evidence AGAINST a match. This service refuses to emit
+/// AgreementBits/DisagreementBits for such a field rather than pick a policy (exclude it, clamp
+/// it, floor it) — that decision belongs to whoever applies these numbers, not to this measurement.
+/// </para>
+/// <para>
+/// SELF-BLOCKED EXCLUSION (u only): when a candidate pair's OWNING blocking key — the lowest
+/// shared active key <see cref="CorpusAuditService.ForEachCandidatePair"/> already computes to
+/// decide which single invocation gets the pair — was produced by field F, that pair is excluded
+/// from F's u estimate. Reusing that field's own blocking key to select the pair and then
+/// measuring "how often do candidates agree on it" answers a question about the selection rule,
+/// not about chance agreement: a pair blocked together BECAUSE it shares a surname agrees on
+/// surname by construction, and folding those pairs into surname's u drives it toward however
+/// dominant surname-blocked pairs are in the candidate mix, regardless of the field's real
+/// informativeness. Excluding them leaves "among pairs compared for some OTHER reason, how often
+/// do they nonetheless agree on this field" — still conditioned on being a candidate (requirement
+/// 2), just no longer self-referential. A field that is not itself a blocking key is unaffected:
+/// no pair can be owned by a key it never produces, so nothing is excluded and its numbers are
+/// identical with or without this feature. m (same-entity agreement) is NOT filtered this way —
+/// only u.
+/// </para>
+/// <para>
+/// Key-to-field attribution (<see cref="BuildKeyFieldAttribution"/>) is derived generically, not
+/// by inspecting any specific <see cref="IBlockingStrategy"/>'s internals: for each blocking-role
+/// field F, every OTHER blocking-role field has its Blocking role stripped from a profile copy,
+/// and the resulting "solo" key generation is run over the fit corpus to see which key strings F
+/// alone can produce. A key observed in the real (all-fields-active) index is attributed to F only
+/// when F's solo set is the ONLY one containing it. A key belonging to zero or more than one
+/// field's solo set is left unattributed — that covers both a coincidental cross-field string
+/// collision and a genuine multi-field composite key (e.g. <c>CompositeBlockingStrategy</c>, which
+/// this technique correctly reports as unattributable: disabling either part field makes the
+/// composite strategy return no keys at all, so the composite key appears in neither solo set).
 /// </para>
 /// </summary>
 public sealed class FieldEvidenceCalibrationService
@@ -224,6 +274,12 @@ public sealed class FieldEvidenceCalibrationService
         var index = CorpusAuditService.BuildIndex(fit, profile, _registry, ct);
         var effectiveMax = maxBlockSize ?? profile.MaxBlockSize;
 
+        // Same suppressed-key array ForEachCandidatePair computes internally: recomputing a pair's
+        // owning key below (to attribute it to a blocking field) must use the identical array, or
+        // the two could disagree about which key "won" a pair that shares more than one active key.
+        var suppressed = CorpusAuditService.SuppressedKeys(index, effectiveMax);
+        var keyFieldAttribution = BuildKeyFieldAttribution(normalized, profile, _registry, index.KeyNames, ct);
+
         var matchableFields = profile.Fields
             .Where(f => f.Roles.HasFlag(FieldRole.Matchable))
             .Select(f => f.Name)
@@ -231,7 +287,7 @@ public sealed class FieldEvidenceCalibrationService
         var accumulators = matchableFields.ToDictionary(
             n => n, _ => new FieldAccumulator(HistogramBuckets), StringComparer.Ordinal);
 
-        long emitted = 0, labeledSame = 0, labeledDifferent = 0, unlabeled = 0;
+        long emitted = 0, labeledSame = 0, labeledDifferent = 0, unlabeled = 0, unattributableOwner = 0;
 
         var occurrences = CorpusAuditService.ForEachCandidatePair(index, effectiveMax, (l, r) =>
         {
@@ -247,6 +303,19 @@ public sealed class FieldEvidenceCalibrationService
             var sameEntity = string.Equals(leftLabel, rightLabel, StringComparison.Ordinal);
             if (sameEntity) labeledSame++; else labeledDifferent++;
 
+            // The SAME scan ForEachCandidatePair used internally to decide this pair belongs to
+            // its current key — recomputed here (not threaded through, since the shared walk's
+            // signature has no room for it) via the internal helper it already exposes, so this is
+            // the identical answer, not a second independent judgement.
+            var ownerKeyId = CorpusAuditService.LowestSharedActiveKey(
+                index.RecordKeys[l], index.RecordKeys[r], suppressed);
+            string? ownerField = null;
+            if (ownerKeyId >= 0)
+            {
+                keyFieldAttribution.TryGetValue(index.KeyNames[ownerKeyId], out ownerField);
+                if (ownerField is null) unattributableOwner++;
+            }
+
             var signals = similarity.Evaluate(normalized[l], normalized[r], profile);
             foreach (var signal in signals)
             {
@@ -255,8 +324,23 @@ public sealed class FieldEvidenceCalibrationService
                 // (EvidenceScoringStrategy.Score), so calibrating on them would estimate a
                 // probability for an event the scorer never prices.
                 if (signal.Outcome != ComparisonOutcome.Compared) continue;
-                if (accumulators.TryGetValue(signal.Name, out var accumulator))
-                    accumulator.Record(sameEntity, signal.Value);
+                if (!accumulators.TryGetValue(signal.Name, out var accumulator)) continue;
+
+                if (sameEntity)
+                {
+                    accumulator.RecordSame(signal.Value);
+                }
+                else if (string.Equals(ownerField, signal.Name, StringComparison.Ordinal))
+                {
+                    // This pair exists as a candidate BECAUSE it shares this field's blocking key,
+                    // so "they agree on it" is guaranteed by construction, not evidence of chance
+                    // agreement — see the SELF-BLOCKED EXCLUSION section of the class doc.
+                    accumulator.RecordExcludedDiff();
+                }
+                else
+                {
+                    accumulator.RecordDiff(signal.Value);
+                }
             }
         }, ct);
 
@@ -264,7 +348,7 @@ public sealed class FieldEvidenceCalibrationService
 
         return new FieldEvidenceCalibrationResult(
             records.Count, fit.Count, evalCount, fitFraction,
-            occurrences, emitted, labeledSame, labeledDifferent, unlabeled, rows);
+            occurrences, emitted, labeledSame, labeledDifferent, unlabeled, unattributableOwner, rows);
     }
 
     /// <summary>
@@ -282,6 +366,73 @@ public sealed class FieldEvidenceCalibrationService
         for (var i = 0; i < 8; i++) v = (v << 8) | hash[i];
         var fraction = v / (double)ulong.MaxValue;
         return fraction < fitFraction;
+    }
+
+    /// <summary>
+    /// For every key string the real (all-fields-active) index actually contains, which single
+    /// blocking-role field — if any, unambiguously — produced it. See the class doc's
+    /// "Key-to-field attribution" section for the method and why it correctly reports a genuine
+    /// composite (multi-field) key as unattributable rather than guessing.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string?> BuildKeyFieldAttribution(
+        EntityRecord[] normalizedFit, MatchingProfile profile, IStrategyRegistry registry,
+        IReadOnlyList<string> observedKeyNames, CancellationToken ct)
+    {
+        var blockingFieldNames = profile.Fields
+            .Where(f => f.Roles.HasFlag(FieldRole.Blocking))
+            .Select(f => f.Name)
+            .ToList();
+
+        var attribution = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (blockingFieldNames.Count == 0)
+        {
+            foreach (var key in observedKeyNames) attribution[key] = null;
+            return attribution;
+        }
+
+        // One pass over the fit corpus per blocking field, with every OTHER blocking field's
+        // Blocking role stripped: "what would THIS field alone contribute to the key vocabulary".
+        var soloKeySets = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var fieldName in blockingFieldNames)
+        {
+            var soloProfile = profile with
+            {
+                Fields = profile.Fields.Select(f => f with
+                {
+                    Roles = string.Equals(f.Name, fieldName, StringComparison.Ordinal)
+                        ? f.Roles
+                        : f.Roles & ~FieldRole.Blocking
+                }).ToList()
+            };
+
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < normalizedFit.Length; i++)
+            {
+                if ((i & 0xFFFF) == 0) ct.ThrowIfCancellationRequested();
+                foreach (var strategyName in profile.BlockingStrategies)
+                    foreach (var key in registry.Blocking[strategyName].GenerateKeys(normalizedFit[i], soloProfile))
+                        keys.Add(key);
+            }
+            soloKeySets[fieldName] = keys;
+        }
+
+        foreach (var key in observedKeyNames)
+        {
+            string? owner = null;
+            var matchCount = 0;
+            foreach (var (fieldName, set) in soloKeySets)
+            {
+                if (!set.Contains(key)) continue;
+                matchCount++;
+                owner = fieldName;
+            }
+            // Exactly one field's solo generation reproduces this key: unambiguous. Zero (no
+            // single field can produce it alone — a genuine composite/joint key) or more than one
+            // (a coincidental cross-field string collision) are both left unattributed rather than
+            // guessed at.
+            attribution[key] = matchCount == 1 ? owner : null;
+        }
+        return attribution;
     }
 
     /// <summary>Additive ("continuity correction") smoothing: symmetric in the sense that both
@@ -329,8 +480,13 @@ public sealed class FieldEvidenceCalibrationService
         }
 
         // Degenerate in the direction that would send a bit to +/-infinity without the
-        // continuity correction — see the SmoothingDependent doc on FieldCalibrationRow.
-        var smoothingDependent = rawM is 1.0 || rawU is 0.0;
+        // continuity correction — see the SmoothingDependent doc on FieldCalibrationRow. Requires
+        // BOTH sides to actually have data: self-blocked exclusion can leave a field with
+        // acc.DiffCount == 0 (every different-entity candidate happened to be self-blocked — a
+        // small fixture can trigger this, and it is a real possibility on a real corpus too), and
+        // a field with no u at all has no bits resting on ANY smoothing constant to flag — it
+        // belongs in "NO ESTIMATE", not "SMOOTHING-DEPENDENT".
+        var smoothingDependent = smoothedM is not null && smoothedU is not null && (rawM is 1.0 || rawU is 0.0);
 
         IReadOnlyList<SmoothingVariant> sensitivity = [];
         if (smoothingDependent && usable)
@@ -344,6 +500,7 @@ public sealed class FieldEvidenceCalibrationService
             name,
             acc.SameCount, acc.SameAgree, rawM, smoothedM,
             acc.DiffCount, acc.DiffAgree, rawU, smoothedU,
+            acc.ExcludedSelfBlockedDifferentEntityPairs,
             agreementBits, disagreementBits, usable, unusableReason,
             smoothingDependent, sensitivity,
             acc.SameHistogram, acc.DiffHistogram);
@@ -377,27 +534,38 @@ public sealed class FieldEvidenceCalibrationService
         public long SameAgree { get; private set; }
         public long DiffCount { get; private set; }
         public long DiffAgree { get; private set; }
+        public long ExcludedSelfBlockedDifferentEntityPairs { get; private set; }
         public IReadOnlyList<long> SameHistogram => _sameHistogram;
         public IReadOnlyList<long> DiffHistogram => _diffHistogram;
 
-        public void Record(bool sameEntity, double value)
+        /// <summary>Same-entity observations are never self-blocked-excluded (see class doc) —
+        /// only u is.</summary>
+        public void RecordSame(double value)
+        {
+            var (bucket, agree) = Bucket(value);
+            SameCount++;
+            _sameHistogram[bucket]++;
+            if (agree) SameAgree++;
+        }
+
+        public void RecordDiff(double value)
+        {
+            var (bucket, agree) = Bucket(value);
+            DiffCount++;
+            _diffHistogram[bucket]++;
+            if (agree) DiffAgree++;
+        }
+
+        /// <summary>Counted, not recorded: an excluded pair contributes to neither the
+        /// comparison/agreement counts nor the histogram, so both stay exactly the population
+        /// u was actually estimated from.</summary>
+        public void RecordExcludedDiff() => ExcludedSelfBlockedDifferentEntityPairs++;
+
+        private (int Bucket, bool Agree) Bucket(double value)
         {
             var clamped = Math.Clamp(value, 0.0, 1.0);
             var bucket = Math.Min(buckets - 1, (int)(clamped * buckets));
-            var agree = clamped >= 1.0 - AgreementEpsilon;
-
-            if (sameEntity)
-            {
-                SameCount++;
-                _sameHistogram[bucket]++;
-                if (agree) SameAgree++;
-            }
-            else
-            {
-                DiffCount++;
-                _diffHistogram[bucket]++;
-                if (agree) DiffAgree++;
-            }
+            return (bucket, clamped >= 1.0 - AgreementEpsilon);
         }
     }
 }
