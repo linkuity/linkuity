@@ -20,30 +20,39 @@ namespace Linkuity.Pipeline.Tests;
 /// <para>
 /// Ground truth: r5/r6 = group G1 (a true pair), r9/r10 = group G2 (a true pair), e1/e2 = group
 /// G3 (eval-only, never candidates). Of the 6 fit-half candidate pairs, r5-r6 and r9-r10 are
-/// same-entity (2 total); the other four (r5-r9, r5-r10, r6-r9, r6-r10) are different-entity.
+/// same-entity (2 total); the other four (r5-r9, r5-r10, r6-r9, r6-r10) are different-entity, ALL
+/// owned by the single "name:smith" key ("block"'s own key — the only blocking field here).
 /// </para>
 /// <para>
 /// Field "a" (exact): r5.a=r6.a="X", r9.a=r10.a="Y" — every same-entity pair agrees (raw m = 2/2
-/// = 1.0, the boundary FieldEvidence refuses), every different-entity pair disagrees (raw u =
-/// 0/4 = 0.0, the other boundary). Both raw boundaries are hit, so this field is SMOOTHING-
-/// DEPENDENT: primary smoothing (alpha=0.5) gives m=(2+0.5)/3=0.8333..., u=(0+0.5)/5=0.1, agreement
-/// bits log2(0.8333/0.1)=3.05889..., disagreement bits log2(0.1667/0.9)=-2.43296...; the secondary
-/// constant (alpha=1.0, classic Laplace) gives m=(2+1)/4=0.75, u=(0+1)/6=0.16667, agreement bits
-/// log2(0.75/0.16667)=2.16993..., disagreement bits log2(0.25/0.83333)=-1.73697... (all
-/// hand-computed, not asserted against the code's own output).
+/// = 1.0, the boundary FieldEvidence refuses). The "block" origin's determination on "a": among
+/// its 4 different-entity observations, 0 agree (rate 0.0) — far below threshold, so NOTHING is
+/// excluded and raw u = 0/4 = 0.0 (the other boundary). Both raw boundaries are hit, so this field
+/// is SMOOTHING-DEPENDENT: primary smoothing (alpha=0.5) gives m=(2+0.5)/3=0.8333...,
+/// u=(0+0.5)/5=0.1, agreement bits log2(0.8333/0.1)=3.05889..., disagreement bits
+/// log2(0.1667/0.9)=-2.43296...; the secondary constant (alpha=1.0, classic Laplace) gives
+/// m=(2+1)/4=0.75, u=(0+1)/6=0.16667, agreement bits log2(0.75/0.16667)=2.16993..., disagreement
+/// bits log2(0.25/0.83333)=-1.73697... (all hand-computed, not asserted against the code's own
+/// output).
 /// </para>
 /// <para>
 /// Field "b" (exact): r5.b="P", r6.b="Q" (same-entity pair DISAGREES), r9.b=r10.b="P" (same-entity
-/// pair agrees) — raw m = 1/2 = 0.5. Cross pairs: r5-r9 and r5-r10 agree (both "P"), r6-r9 and
-/// r6-r10 disagree ("Q" vs "P") — raw u = 2/4 = 0.5. m equals u exactly, even after smoothing
-/// ((1+0.5)/3 = (2+0.5)/5 = 0.5): this is the UNUSABLE case (evidence would decrease as similarity
-/// increases), so no AgreementBits/DisagreementBits are emitted for it at all.
+/// pair agrees) — raw m = 1/2 = 0.5. The "block" origin's determination on "b": 2 of 4 different-
+/// entity observations agree (rate 0.5) — below threshold, nothing excluded, raw u = 2/4 = 0.5.
+/// m equals u exactly, even after smoothing ((1+0.5)/3 = (2+0.5)/5 = 0.5): this is the UNUSABLE
+/// case (evidence would decrease as similarity increases), so no AgreementBits/DisagreementBits
+/// are emitted for it at all.
 /// </para>
 /// <para>
-/// Field "c" (exact): populated only on r5 and r10 ("V1" both), which is a DIFFERENT-entity pair
-/// — neither same-entity pair (r5-r6, r9-r10) has both sides populated, so field "c" has zero
-/// same-entity observations. Its raw/smoothed m must be null (not zero, not fabricated), and its
-/// bits must be null since one side of the ratio is undefined.
+/// Field "c" (exact): populated only on r5 and r10 ("V1" both) — a DIFFERENT-entity pair, and the
+/// ONLY different-entity pair with "c" populated on both sides (r6 and r9 never carry "c"), so the
+/// "block" origin has exactly ONE observation for field "c", and it happens to agree (rate =
+/// 1/1 = 1.0). That single-observation rate is >= the determination threshold, so it IS excluded —
+/// precisely the small-N instability the task calls out ("an origin with very few non-matched
+/// candidates gives an unstable determination rate"): one coincidental agreement is enough to
+/// exclude a field down to zero remaining observations. This is reported, not silently prevented.
+/// Same-entity observations are also zero (neither r5-r6 nor r9-r10 has "c" on both sides), so "c"
+/// ends up with NO ESTIMATE for both m and u.
 /// </para>
 /// </summary>
 public class FieldEvidenceCalibrationServiceTests
@@ -149,11 +158,12 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(0, result.UnlabeledCandidatePairs);
     }
 
-    // ---- Field "block": the ONLY blocking field in this fixture, so EVERY different-entity
-    // candidate pair is self-blocked, leaving nothing to estimate u from at all ----
+    // ---- Field "block": its own origin agrees on ITSELF 100% of the time (all 4 different-
+    // entity candidates share "block"="Smith" by construction) -> ABOVE threshold -> EXCLUDED,
+    // leaving nothing to estimate u from at all ----
 
     [Fact]
-    public void Calibrate_FieldOwningEveryCandidatePair_HasNoRemainingDifferentEntityData()
+    public void Calibrate_FieldWhoseOwnOriginDeterminesIt_ExcludesAllItsDifferentEntityPairs()
     {
         var block = Run().Fields.Single(f => f.FieldName == "block");
 
@@ -164,15 +174,23 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(1.0, block.RawM);
 
         // All 4 different-entity candidates share "name:smith" — the only blocking key in this
-        // profile — and are therefore ALL self-blocked-excluded from "block"'s own u, leaving
-        // zero remaining. This is a real category (a field that is the SOLE blocking key sees
-        // its own u collapse to no-data, not to some now-domesticated number), distinct from
-        // "smoothing-dependent" (there is no u to depend on smoothing at all).
+        // profile — and ALL agree on "block" (it's the value that put them in the same block in
+        // the first place). Measured determination rate for origin "block" on field "block" is
+        // therefore 4/4 = 1.0, at/above the 0.95 threshold, so this origin's pairs are excluded,
+        // leaving nothing to estimate u from. Distinct from SMOOTHING-DEPENDENT: there is no u to
+        // depend on smoothing at all.
         Assert.Equal(0, block.DifferentEntityComparisons);
         Assert.Equal(0, block.DifferentEntityAgreements);
-        Assert.Equal(4, block.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(4, block.DifferentEntityExcludedByDetermination);
         Assert.Null(block.RawU);
         Assert.Null(block.SmoothedU);
+
+        var origin = Assert.Single(block.OriginDeterminations);
+        Assert.Equal("block", origin.OriginLabel);
+        Assert.Equal(4, origin.Observations);
+        Assert.Equal(4, origin.Agreements);
+        Assert.Equal(1.0, origin.DeterminationRate, 9);
+        Assert.True(origin.Excluded);
 
         Assert.Null(block.AgreementBits);
         Assert.Null(block.DisagreementBits);
@@ -182,10 +200,10 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Empty(block.SmoothingSensitivity);
     }
 
-    // ---- Field "a": raw u == 0 (and raw m == 1) -> SMOOTHING-DEPENDENT, multiple constants shown ----
+    // ---- Field "a": the "block" origin's determination on "a" is 0.0 (far below threshold) ----
 
     [Fact]
-    public void Calibrate_FieldWithRawUZero_IsSmoothingDependent_WithMultipleConstantsShown()
+    public void Calibrate_OriginBelowThreshold_ForACrossField_DoesNotExclude()
     {
         var field = Run().Fields.Single(f => f.FieldName == "a");
 
@@ -194,7 +212,15 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(1.0, field.RawM);
         Assert.Equal(4, field.DifferentEntityComparisons);
         Assert.Equal(0, field.DifferentEntityAgreements);
+        Assert.Equal(0, field.DifferentEntityExcludedByDetermination);
         Assert.Equal(0.0, field.RawU);
+
+        var origin = Assert.Single(field.OriginDeterminations);
+        Assert.Equal("block", origin.OriginLabel);
+        Assert.Equal(4, origin.Observations);
+        Assert.Equal(0, origin.Agreements);
+        Assert.Equal(0.0, origin.DeterminationRate, 9);
+        Assert.False(origin.Excluded);   // 0.0 << 0.95
 
         // Eval-half records e1/e2 disagree on "a"; if they leaked into this walk raw m would be
         // 2/3, not 1.0. This is the isolation guarantee, pinned as a number.
@@ -245,6 +271,11 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(2, field.DifferentEntityAgreements);
         Assert.Equal(0.5, field.RawU);
 
+        var origin = Assert.Single(field.OriginDeterminations);
+        Assert.Equal("block", origin.OriginLabel);
+        Assert.Equal(0.5, origin.DeterminationRate, 9);
+        Assert.False(origin.Excluded);   // 0.5 << 0.95
+
         Assert.Equal(0.5, field.SmoothedM);
         Assert.Equal(0.5, field.SmoothedU);
 
@@ -262,10 +293,11 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Empty(field.SmoothingSensitivity);
     }
 
-    // ---- Field "c": zero same-entity observations ----
+    // ---- Field "c": zero same-entity observations, AND a small-N (n=1) origin whose rate
+    // happens to hit 1.0 -> excluded, illustrating the instability the task warns about ----
 
     [Fact]
-    public void Calibrate_FieldWithNoSameEntityObservations_ReportsNullRatherThanFabricated()
+    public void Calibrate_SmallNOrigin_CanExcludeAllData_ButIsReportedRatherThanHidden()
     {
         var field = Run().Fields.Single(f => f.FieldName == "c");
 
@@ -274,13 +306,25 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Null(field.RawM);
         Assert.Null(field.SmoothedM);
 
-        Assert.Equal(1, field.DifferentEntityComparisons);
-        Assert.Equal(1, field.DifferentEntityAgreements);
-        Assert.Equal(1.0, field.RawU);
-        Assert.Equal(0.75, field.SmoothedU); // (1+0.5)/(1+1)
+        // Exactly one different-entity pair (r5,r10) has "c" populated on both sides, and it
+        // agrees — a determination rate of 1.0 computed from a SINGLE observation. Excluded
+        // anyway, per the 0.95 rule as specified; the observation count is what a reader needs to
+        // judge whether that exclusion should be trusted, and it is right here, not hidden.
+        var origin = Assert.Single(field.OriginDeterminations);
+        Assert.Equal("block", origin.OriginLabel);
+        Assert.Equal(1, origin.Observations);
+        Assert.Equal(1, origin.Agreements);
+        Assert.Equal(1.0, origin.DeterminationRate, 9);
+        Assert.True(origin.Excluded);
 
-        // Bits need BOTH m and u; with m undefined, both must be null, not computed against a
-        // fabricated stand-in for the missing side.
+        Assert.Equal(0, field.DifferentEntityComparisons);
+        Assert.Equal(0, field.DifferentEntityAgreements);
+        Assert.Equal(1, field.DifferentEntityExcludedByDetermination);
+        Assert.Null(field.RawU);
+        Assert.Null(field.SmoothedU);
+
+        // Bits need BOTH m and u; with both undefined, both must be null, not computed against a
+        // fabricated stand-in.
         Assert.Null(field.AgreementBits);
         Assert.Null(field.DisagreementBits);
 
@@ -348,7 +392,8 @@ public class FieldEvidenceCalibrationServiceTests
     }
 
     // =====================================================================================
-    // Self-blocked exclusion: a field's own blocking key must not inflate its own u.
+    // Determination-based exclusion, above threshold: two DIFFERENT blocking fields, each
+    // excluding only ITS OWN self-determining pairs, never the other's.
     //
     // Fixture: TWO blocking fields ("dob", exact-value via DateOfBirth semantic type; "ident",
     // exact-value via the Identifier role) plus one Matchable-only field ("other", never a
@@ -365,25 +410,26 @@ public class FieldEvidenceCalibrationServiceTests
     //
     // Field "dob": same-entity pairs are (r5,r6) [dob agrees, both 19800101] and (r9,r10) [dob
     // disagrees, 19900505 vs 19910606] -> SameCount=2, SameAgree=1 (m=0.5 after smoothing).
-    // Different-entity pairs: (r5,r11) and (r6,r11) both agree on dob (all three share
-    // 19800101) AND are owned by "dob" -> EXCLUDED. (r9,r12) and (r10,r12) both disagree on dob
-    // (owned by "ident", not "dob") -> COUNTED. So post-exclusion DiffCount=2, DiffAgree=0 (raw
-    // u=0.0); the two excluded pairs were exactly the two that agreed, so WITHOUT this exclusion
-    // raw u would have been 2/4=0.5 -- equal to m, i.e. "dob" would have looked UNUSABLE (the
-    // same shape as the real last_name finding) purely from being blocked on itself.
+    // Different-entity pairs, by ORIGIN: origin "dob" owns (r5,r11) and (r6,r11), BOTH of which
+    // agree on dob (all three share 19800101) -> determination 2/2=1.0 -> EXCLUDED. Origin "ident"
+    // owns (r9,r12) and (r10,r12), BOTH of which disagree on dob -> determination 0/2=0.0 ->
+    // KEPT. So post-exclusion DiffCount=2, DiffAgree=0 (raw u=0.0); the excluded origin's pairs
+    // were exactly the two that agreed, so WITHOUT this exclusion raw u would have been
+    // 2/4=0.5 -- equal to m, i.e. "dob" would have looked UNUSABLE purely from measuring the
+    // field against pairs its own key selected (the shape of the real last_name finding).
     //
     // Field "ident" is the mirror image: same-entity (r5,r6) disagree (A vs B), (r9,r10) agree
-    // (Z vs Z) -> SameCount=2, SameAgree=1. Different-entity (r9,r12) and (r10,r12) both agree
-    // on ident (all three share "Z") AND are owned by "ident" -> EXCLUDED. (r5,r11)/(r6,r11)
-    // disagree on ident (owned by "dob") -> COUNTED. Same numbers as "dob" by the fixture's
-    // deliberate symmetry: post-exclusion DiffCount=2, DiffAgree=0.
+    // (Z vs Z) -> SameCount=2, SameAgree=1. Origin "ident" owns (r9,r12)/(r10,r12), BOTH agree on
+    // ident (all three share "Z") -> determination 2/2=1.0 -> EXCLUDED. Origin "dob" owns
+    // (r5,r11)/(r6,r11), BOTH disagree on ident -> determination 0/2=0.0 -> KEPT. Same numbers as
+    // "dob" by the fixture's deliberate symmetry: post-exclusion DiffCount=2, DiffAgree=0.
     //
-    // Field "other" (NOT a blocking key): same-entity (r5,r6) disagree (P vs Q), (r9,r10) agree
-    // (P vs P) -> SameCount=2, SameAgree=1 (same as dob/ident). ALL FOUR different-entity pairs
-    // count (nothing to exclude, since "other" never owns a key): (r5,r11) P/Q disagree,
-    // (r6,r11) Q/Q AGREE, (r9,r12) P/X disagree, (r10,r12) P/X disagree -> DiffCount=4,
-    // DiffAgree=1 (raw u=0.25). This must be identical with or without the self-blocked
-    // exclusion feature, because no pair is ever owned by "other"'s key -- it doesn't have one.
+    // Field "other" (NOT a blocking key, so never itself an origin): origin "dob" owns
+    // (r5,r11)/(r6,r11) — determination on "other": (r5,r11) P/Q disagree, (r6,r11) Q/Q agree ->
+    // 1/2=0.5 -> KEPT. Origin "ident" owns (r9,r12)/(r10,r12) — determination on "other": both
+    // disagree (P/X, P/X) -> 0/2=0.0 -> KEPT. Neither origin crosses 0.95 for "other", so ALL FOUR
+    // different-entity pairs count: DiffCount=4, DiffAgree=1 (raw u=0.25) -- unaffected by
+    // determination-based exclusion regardless of which field owns which pair.
     // =====================================================================================
 
     private static MatchingProfile ExclusionProfile() => new()
@@ -457,7 +503,7 @@ public class FieldEvidenceCalibrationServiceTests
     }
 
     [Fact]
-    public void Calibrate_FieldOwningItsBlock_ExcludesSelfBlockedPairs_AndUDiffersFromUnexcluded()
+    public void Calibrate_OriginAboveThreshold_Excludes_AndUDiffersFromUnexcluded()
     {
         var dob = RunExclusion().Fields.Single(f => f.FieldName == "dob");
 
@@ -465,13 +511,27 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(1, dob.SameEntityAgreements);
         Assert.Equal(0.5, dob.RawM);
 
+        // Two origins own dob's different-entity observations: "dob" itself (2 obs, both agree,
+        // rate 1.0 -> excluded) and "ident" (2 obs, both disagree, rate 0.0 -> kept).
+        Assert.Equal(2, dob.OriginDeterminations.Count);
+        var dobOrigin = dob.OriginDeterminations.Single(o => o.OriginLabel == "dob");
+        Assert.Equal(2, dobOrigin.Observations);
+        Assert.Equal(2, dobOrigin.Agreements);
+        Assert.Equal(1.0, dobOrigin.DeterminationRate, 9);
+        Assert.True(dobOrigin.Excluded);
+        var identOrigin = dob.OriginDeterminations.Single(o => o.OriginLabel == "ident");
+        Assert.Equal(2, identOrigin.Observations);
+        Assert.Equal(0, identOrigin.Agreements);
+        Assert.Equal(0.0, identOrigin.DeterminationRate, 9);
+        Assert.False(identOrigin.Excluded);
+
         // Post-exclusion: 2 different-entity comparisons remain (both disagree), 2 were excluded
-        // as self-blocked (both of which agreed). Without the exclusion this would have been
-        // DiffCount=4, DiffAgree=2, raw u=0.5 -- equal to m, i.e. UNUSABLE purely from measuring
-        // the field against pairs its own key selected.
+        // (both of which agreed). Without the exclusion this would have been DiffCount=4,
+        // DiffAgree=2, raw u=0.5 -- equal to m, i.e. UNUSABLE purely from measuring the field
+        // against pairs its own key selected.
         Assert.Equal(2, dob.DifferentEntityComparisons);
         Assert.Equal(0, dob.DifferentEntityAgreements);
-        Assert.Equal(2, dob.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(2, dob.DifferentEntityExcludedByDetermination);
         Assert.Equal(0.0, dob.RawU);
 
         Assert.NotNull(dob.SmoothedM);
@@ -494,19 +554,26 @@ public class FieldEvidenceCalibrationServiceTests
     public void Calibrate_SecondFieldOwningADifferentBlock_AlsoExcludesOnlyItsOwnPairs()
     {
         // Mirror of the "dob" case: "ident" owns the OTHER block (r9/r10/r12 sharing "ident:z"),
-        // so its own self-blocked pairs are (r9,r12) and (r10,r12), not (r5,r11)/(r6,r11) -- those
+        // so its own excluded pairs are (r9,r12) and (r10,r12), not (r5,r11)/(r6,r11) -- those
         // are excluded from "dob"'s u, not "ident"'s. Same numbers by the fixture's symmetry, but
         // computed from a disjoint set of excluded pairs, which is the actual thing under test:
-        // ownership attribution must not confuse the two blocking fields with each other.
+        // origin attribution must not confuse the two blocking fields with each other.
         var ident = RunExclusion().Fields.Single(f => f.FieldName == "ident");
 
         Assert.Equal(2, ident.SameEntityComparisons);
         Assert.Equal(1, ident.SameEntityAgreements);
         Assert.Equal(0.5, ident.RawM);
 
+        var identOrigin = ident.OriginDeterminations.Single(o => o.OriginLabel == "ident");
+        Assert.Equal(1.0, identOrigin.DeterminationRate, 9);
+        Assert.True(identOrigin.Excluded);
+        var dobOrigin = ident.OriginDeterminations.Single(o => o.OriginLabel == "dob");
+        Assert.Equal(0.0, dobOrigin.DeterminationRate, 9);
+        Assert.False(dobOrigin.Excluded);
+
         Assert.Equal(2, ident.DifferentEntityComparisons);
         Assert.Equal(0, ident.DifferentEntityAgreements);
-        Assert.Equal(2, ident.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(2, ident.DifferentEntityExcludedByDetermination);
         Assert.Equal(0.0, ident.RawU);
 
         Assert.True(ident.Usable);
@@ -526,12 +593,20 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(1, other.SameEntityAgreements);
         Assert.Equal(0.5, other.RawM);
 
-        // "other" is never a blocking key, so no pair can ever be owned by it: ALL FOUR
-        // different-entity candidate pairs count, none excluded. This is the number this
-        // instrument reported before self-blocked exclusion existed, unchanged.
+        // Neither origin ("dob" at rate 0.5, "ident" at rate 0.0) crosses the determination
+        // threshold for "other", so ALL FOUR different-entity candidate pairs count, none
+        // excluded. This is the number this instrument reported before determination-based
+        // exclusion existed, unchanged — "other" is never itself an origin.
+        Assert.Equal(2, other.OriginDeterminations.Count);
+        Assert.All(other.OriginDeterminations, o => Assert.False(o.Excluded));
+        var dobOrigin = other.OriginDeterminations.Single(o => o.OriginLabel == "dob");
+        Assert.Equal(0.5, dobOrigin.DeterminationRate, 9);
+        var identOrigin = other.OriginDeterminations.Single(o => o.OriginLabel == "ident");
+        Assert.Equal(0.0, identOrigin.DeterminationRate, 9);
+
         Assert.Equal(4, other.DifferentEntityComparisons);
         Assert.Equal(1, other.DifferentEntityAgreements);
-        Assert.Equal(0, other.DifferentEntitySelfBlockedExcluded);
+        Assert.Equal(0, other.DifferentEntityExcludedByDetermination);
         Assert.Equal(0.25, other.RawU);
 
         Assert.NotNull(other.SmoothedM);
@@ -548,5 +623,115 @@ public class FieldEvidenceCalibrationServiceTests
         // Neither raw m (0.5) nor raw u (0.25) hits a 0/1 boundary.
         Assert.False(other.SmoothingDependent);
         Assert.Empty(other.SmoothingSensitivity);
+    }
+
+    // =====================================================================================
+    // Determination-based exclusion, BELOW threshold on a field's OWN origin: the SEC
+    // organization_name case in miniature. A field can be the sole source of its own blocking
+    // key and STILL have that origin measure well below the threshold, when the key captures
+    // only PARTIAL signal (here: last name-blocking's LAST TOKEN of a multi-token value) rather
+    // than the full value. Provenance says the key "derives from" company; the empirical rate
+    // says it does not "determine" company — and the rate wins.
+    //
+    // Fixture: one blocking field, "company" (OrganizationName semantic type, so "token-name"
+    // blocking keys off its LAST TOKEN), six records that all end in " Corp" and therefore all
+    // share the single key "name:corp" -> one block of size 6 -> C(6,2) = 15 candidate pairs, ALL
+    // owned by "company" (the sole blocking field, mirroring SEC's profile shape).
+    //
+    // Truth: r5/r6 = group GA (true pair, both "Acme Corp"), r9/r10 = group GB (true pair, both
+    // "Beta Corp"), r11 = group GC ("Gamma Corp", singleton), r12 = group GD ("Delta Corp",
+    // singleton). Same-entity pairs: (r5,r6) and (r9,r10), both with IDENTICAL company strings ->
+    // SameCount=2, SameAgree=2 (raw m=1.0). The other 13 pairs are different-entity, and every
+    // one of the six records has a DISTINCT full company string except within its own group — so
+    // NONE of the 13 different-entity pairs share an identical exact value: determination on
+    // "company" for the (sole) "company" origin = 0/13 = 0.0, far below threshold -> KEPT, in
+    // full: DiffCount=13, DiffAgree=0 (raw u=0.0). This is the falsifiable prediction the fix is
+    // for: a field can own 100% of its candidates and still have its full un-excluded population
+    // survive, when sharing its key does not actually force the field to agree.
+    // =====================================================================================
+
+    private static MatchingProfile PartialSignalProfile() => new()
+    {
+        ContentType = "organization",
+        Fields =
+        [
+            new ProfileField { Name = "company", SemanticType = SemanticFieldType.OrganizationName,
+                Roles = FieldRole.Matchable | FieldRole.Blocking, SimilarityEvaluator = "exact", Weight = 1.0 }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["token-name"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.5,
+        ReviewThreshold = 0.3
+    };
+
+    private static EntityRecord PartialSignalRec(string id, string company)
+        => new()
+        {
+            Id = Guid.NewGuid(), ProjectId = Guid.Empty, SourceId = Guid.Empty, IngestBatchId = Guid.Empty,
+            SourceRecordId = id,
+            Fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["company"] = company },
+            CreatedAt = DateTimeOffset.UnixEpoch
+        };
+
+    // All six ids are fit-half at fitFraction 0.5 (same ids as the exclusion fixture above).
+    private static readonly IReadOnlyList<EntityRecord> PartialSignalRecords =
+    [
+        PartialSignalRec("r5", "Acme Corp"),    // group GA
+        PartialSignalRec("r6", "Acme Corp"),    // group GA (true pair with r5)
+        PartialSignalRec("r9", "Beta Corp"),    // group GB
+        PartialSignalRec("r10", "Beta Corp"),   // group GB (true pair with r9)
+        PartialSignalRec("r11", "Gamma Corp"),  // group GC
+        PartialSignalRec("r12", "Delta Corp")   // group GD
+    ];
+
+    private static readonly Dictionary<string, string> PartialSignalTruth = new()
+    {
+        ["r5"] = "GA", ["r6"] = "GA", ["r9"] = "GB", ["r10"] = "GB", ["r11"] = "GC", ["r12"] = "GD"
+    };
+
+    [Fact]
+    public void Calibrate_OriginBelowThreshold_OnItsOwnField_DoesNotExclude()
+    {
+        var result = NewService().Calibrate(PartialSignalRecords, PartialSignalProfile(), PartialSignalTruth);
+
+        // One key ("name:corp") over all 6 records: C(6,2) = 15 candidate pairs.
+        Assert.Equal(15, result.CandidatePairsEmitted);
+        Assert.Equal(2, result.LabeledSameEntityPairs);
+        Assert.Equal(13, result.LabeledDifferentEntityPairs);
+        Assert.Equal(0, result.UnattributableOwnerCandidatePairs);
+
+        var company = Assert.Single(result.Fields);
+        Assert.Equal(2, company.SameEntityComparisons);
+        Assert.Equal(2, company.SameEntityAgreements);
+        Assert.Equal(1.0, company.RawM);
+
+        // "company" is the sole blocking field, so ALL 13 different-entity pairs are owned by its
+        // own origin -- but not one of them shares an identical full company string (every group
+        // has a distinct name), so the MEASURED determination rate is 0/13 = 0.0. Nowhere near
+        // the 0.95 threshold: nothing is excluded, unlike a provenance-only rule that would have
+        // excluded all 13 purely because "company" derived its own blocking key.
+        var origin = Assert.Single(company.OriginDeterminations);
+        Assert.Equal("company", origin.OriginLabel);
+        Assert.Equal(13, origin.Observations);
+        Assert.Equal(0, origin.Agreements);
+        Assert.Equal(0.0, origin.DeterminationRate, 9);
+        Assert.False(origin.Excluded);
+
+        Assert.Equal(13, company.DifferentEntityComparisons);
+        Assert.Equal(0, company.DifferentEntityAgreements);
+        Assert.Equal(0, company.DifferentEntityExcludedByDetermination);
+        Assert.Equal(0.0, company.RawU);
+
+        // Both raw m == 1 and raw u == 0 here too (a coincidence of this small fixture, not a
+        // requirement of the below-threshold behavior under test) -- still usable, still reports
+        // smoothing sensitivity, exactly like field "a" above.
+        Assert.True(company.Usable);
+        Assert.True(company.SmoothingDependent);
+        Assert.NotEmpty(company.SmoothingSensitivity);
     }
 }
