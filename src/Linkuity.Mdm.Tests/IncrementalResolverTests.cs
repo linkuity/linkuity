@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Mdm.Resolution;
 
@@ -16,7 +17,7 @@ public class IncrementalResolverTests
         new DefaultMatchingProfileProvider(DefaultMatchingProfileProvider.BuiltInProfiles()).GetProfile("person");
 
     private static IncrementalResolver NewResolver()
-        => new(MatchingDefaults.CreateEngine(), hasIndex: false);
+        => new(MatchingDefaults.CreateEngine(), hasIndex: false, new CohesionClusterMergePolicy());
 
     private static EntityRecord Record(
         Guid projectId, Guid sourceId, Guid batchId, string srid,

@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
@@ -21,13 +22,19 @@ public sealed class IncrementalResolver
 
     private readonly IMatchingEngine _engine;
     private readonly bool _hasIndex;
+    private readonly IClusterMergePolicy _mergePolicy;
     private readonly int _degreeOfParallelism;
 
-    public IncrementalResolver(IMatchingEngine engine, bool hasIndex, int degreeOfParallelism = 1)
+    // clusterMergePolicy is required, not defaulted: a resolver built with no policy would silently
+    // accept every cluster regardless of its own comparisons, which is the exact defect Task 10
+    // exists to close. Making the caller supply one keeps that impossible to do by accident.
+    public IncrementalResolver(IMatchingEngine engine, bool hasIndex, IClusterMergePolicy clusterMergePolicy, int degreeOfParallelism = 1)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(clusterMergePolicy);
         _engine = engine;
         _hasIndex = hasIndex;
+        _mergePolicy = clusterMergePolicy;
         _degreeOfParallelism = Math.Max(1, degreeOfParallelism);
     }
 
@@ -131,18 +138,19 @@ public sealed class IncrementalResolver
             foreach (var id in cluster.MemberEntityRecordIds)
                 clusterByRecord[id] = cluster.Id;
 
-        // Materialize components (builds clusterByRecord needed for edge accounting).
+        // Materialize components (builds clusterByRecord needed for edge accounting). Each
+        // component is consulted with the merge policy BEFORE anything is created or replaced —
+        // see MaterializeComponent — so a component whose own comparisons contradict it never
+        // reaches this point as a multi-member cluster: it dissolves into singletons instead, and
+        // clusterByRecord / affectedClusterIds are populated per-member rather than once per
+        // component, because a dissolved component no longer has one cluster id to share.
         var affectedClusterIds = new HashSet<Guid>();
         var singletonClusters = 0;
         foreach (var component in components)
         {
-            var clusterId = MaterializeComponent(ws, request, component, touchedClusters, edges, now, out var isSingleton);
-            // Only mark a cluster as affected when it received at least one new (incoming) record.
-            if (component.Any(incomingIds.Contains))
-                affectedClusterIds.Add(clusterId);
-            if (isSingleton) singletonClusters++;
-            foreach (var recordId in component)
-                clusterByRecord[recordId] = clusterId;
+            singletonClusters += MaterializeComponent(
+                ws, request, profile, component, touchedClusters, edges, allComparisons, incomingIds, now,
+                clusterByRecord, affectedClusterIds);
         }
 
         // Attribute every comparison the engine made this run — including sub-review ones the
@@ -228,6 +236,7 @@ public sealed class IncrementalResolver
         mutations.EdgesToInsert.AddRange(ws.MatchEdges);
         mutations.ReviewTasksToInsert.AddRange(ws.ReviewTasks);
         mutations.MergeEventsToInsert.AddRange(ws.ClusterMergeEvents);
+        mutations.DissolutionEventsToInsert.AddRange(ws.ClusterDissolutionEvents);
 
         var result = new IncrementalIngestResult(incomingRecords.Count, autoMatches, reviewTasks, singletonClusters, versionsCreated);
         return (result, mutations);
@@ -456,20 +465,60 @@ public sealed class IncrementalResolver
             .ToList();
     }
 
-    private Guid MaterializeComponent(
+    // Returns the number of 1-member (singleton) clusters this component contributed this run —
+    // either the classic "brand-new component of size 1" case, or every member of a dissolved
+    // component (see DissolveComponent).
+    private int MaterializeComponent(
         ResolutionWorkingSet ws,
         IncrementalIngestRequest request,
+        MatchingProfile profile,
         IReadOnlyList<Guid> component,
         List<Cluster> touchedClusters,
         IReadOnlyList<ResolutionEdge> edges,
+        IReadOnlyList<ResolutionEdge> allComparisons,
+        IReadOnlySet<Guid> incomingIds,
         DateTimeOffset now,
-        out bool isSingleton)
+        Dictionary<Guid, Guid> clusterByRecord,
+        HashSet<Guid> affectedClusterIds)
     {
         var componentSet = component.ToHashSet();
         var existingClusters = touchedClusters
             .Where(c => c.MemberEntityRecordIds.Any(componentSet.Contains))
             .OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)
             .ToList();
+
+        // Consulted BEFORE anything is created or replaced. The counts here are exactly what the
+        // cluster WOULD carry if materialized: prior stored counts carried forward the same way
+        // ReplaceCluster/MergeClusters carry them below, plus this run's own within-component
+        // comparisons (computed directly from componentSet rather than clusterByRecord, which does
+        // not yet reflect this component's final cluster id). Members comes from the component's
+        // own record count — never from a Cluster object, which for a brand-new component does not
+        // exist yet and for default(ClusterEvidenceCounts) would silently read as a fully-agreeing
+        // zero-member cluster.
+        long thisRunComparisons = 0, thisRunAgreements = 0;
+        foreach (var comparison in allComparisons)
+        {
+            if (!componentSet.Contains(comparison.LeftId) || !componentSet.Contains(comparison.RightId))
+                continue;
+            thisRunComparisons++;
+            if (comparison.Band == MatchDecision.AutoMatch) thisRunAgreements++;
+        }
+        var (priorComparisons, priorAgreements) = existingClusters.Count switch
+        {
+            0 => (0L, 0L),
+            1 => (existingClusters[0].ComparisonsInside, existingClusters[0].AgreementsInside),
+            _ => (existingClusters.Sum(c => c.ComparisonsInside), existingClusters.Sum(c => c.AgreementsInside))
+        };
+        var counts = new ClusterEvidenceCounts(
+            component.Count, priorComparisons + thisRunComparisons, priorAgreements + thisRunAgreements);
+
+        var verdict = _mergePolicy.Evaluate(counts, profile);
+        if (verdict != ClusterMergeVerdict.Accepted)
+        {
+            return DissolveComponent(
+                ws, request, verdict, component, existingClusters, counts, incomingIds, now,
+                clusterByRecord, affectedClusterIds);
+        }
 
         if (existingClusters.Count == 0)
         {
@@ -481,8 +530,8 @@ public sealed class IncrementalResolver
                 CreatedAt = now
             };
             ws.Clusters.Add(cluster);
-            isSingleton = component.Count == 1;
-            return cluster.Id;
+            AssignComponentToCluster(cluster.Id, component, incomingIds, clusterByRecord, affectedClusterIds);
+            return component.Count == 1 ? 1 : 0;
         }
 
         if (existingClusters.Count == 1)
@@ -490,13 +539,117 @@ public sealed class IncrementalResolver
             var target = existingClusters[0];
             var members = target.MemberEntityRecordIds.Concat(component).Distinct().ToList();
             ReplaceCluster(ws, target, members, target.ComparisonsInside, target.AgreementsInside);
-            isSingleton = false;
-            return target.Id;
+            AssignComponentToCluster(target.Id, component, incomingIds, clusterByRecord, affectedClusterIds);
+            return 0;
         }
 
         var survivorId = MergeClusters(ws, request, existingClusters, component, edges, now);
-        isSingleton = false;
-        return survivorId;
+        AssignComponentToCluster(survivorId, component, incomingIds, clusterByRecord, affectedClusterIds);
+        return 0;
+    }
+
+    private static void AssignComponentToCluster(
+        Guid clusterId,
+        IReadOnlyList<Guid> component,
+        IReadOnlySet<Guid> incomingIds,
+        Dictionary<Guid, Guid> clusterByRecord,
+        HashSet<Guid> affectedClusterIds)
+    {
+        foreach (var recordId in component)
+            clusterByRecord[recordId] = clusterId;
+        // Only mark a cluster as affected when it received at least one new (incoming) record.
+        if (component.Any(incomingIds.Contains))
+            affectedClusterIds.Add(clusterId);
+    }
+
+    // The component does NOT form: no subset selection, no peel-back — every obvious peel-back
+    // algorithm is order-dependent, which is what disqualified the mechanism this replaces. Every
+    // member reverts to its own singleton (this codebase's existing representation of
+    // "unclustered" — see the brand-new, existingClusters.Count == 0 branch above), every
+    // pre-existing cluster the component absorbed is tombstoned, and a ClusterDissolutionEvent
+    // records the numbers that refused it — dissolution must never be silent.
+    private static int DissolveComponent(
+        ResolutionWorkingSet ws,
+        IncrementalIngestRequest request,
+        ClusterMergeVerdict verdict,
+        IReadOnlyList<Guid> component,
+        IReadOnlyList<Cluster> existingClusters,
+        ClusterEvidenceCounts counts,
+        IReadOnlySet<Guid> incomingIds,
+        DateTimeOffset now,
+        Dictionary<Guid, Guid> clusterByRecord,
+        HashSet<Guid> affectedClusterIds)
+    {
+        foreach (var recordId in component)
+        {
+            var singleton = new Cluster
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = request.ProjectId,
+                MemberEntityRecordIds = [recordId],
+                CreatedAt = now
+            };
+            ws.Clusters.Add(singleton);
+            clusterByRecord[recordId] = singleton.Id;
+            if (incomingIds.Contains(recordId))
+                affectedClusterIds.Add(singleton.Id);
+        }
+
+        foreach (var existing in existingClusters)
+        {
+            // Tombstoned the same way MergeClusters tombstones a loser: Status == "merged" is this
+            // schema's only "not active" marker (every ListClusters/GetActiveClusters query on both
+            // backends already filters on it), reused here rather than inventing a second status
+            // string every one of those filters would need to learn about. MergedIntoClusterId
+            // staying null IS the signal that distinguishes a dissolution tombstone from an
+            // absorption tombstone at this row; the ClusterDissolutionEvent below carries the why.
+            // MemberEntityRecordIds/ComparisonsInside/AgreementsInside are preserved, not reset, for
+            // the same reason a merge loser's are: a post-mortem audit needs the cluster's own
+            // pre-dissolution history, not a fresh 0/0 that reads as "never compared."
+            ws.Clusters.RemoveAll(c => c.Id == existing.Id);
+            ws.Clusters.Add(new Cluster
+            {
+                Id = existing.Id,
+                ProjectId = existing.ProjectId,
+                MemberEntityRecordIds = existing.MemberEntityRecordIds,
+                CreatedAt = existing.CreatedAt,
+                Status = "merged",
+                MergedIntoClusterId = null,
+                ComparisonsInside = existing.ComparisonsInside,
+                AgreementsInside = existing.AgreementsInside
+            });
+            // Its golden record is stale evidence for a cluster that no longer exists. Removing it
+            // from the working set here lets Resolve's end-of-call seeded/end diff carry it into
+            // GoldenRecordClusterIdsToClear automatically — the same mechanism a merge loser's
+            // golden already relies on, not a second one.
+            ws.GoldenRecords.RemoveAll(g => g.ClusterId == existing.Id);
+        }
+
+        // One event per previously-published cluster this component absorbed — each individually
+        // queryable ("why did cluster X disappear") even when a single bridging record dissolved
+        // more than one at once — sharing the same evidence, because they failed together as one
+        // component. Exactly one event with PreviousClusterId == null when the component never had
+        // a previously-published cluster at all (it was never formed, not re-checked).
+        IEnumerable<Guid?> previousClusterIds = existingClusters.Count > 0
+            ? existingClusters.Select(c => (Guid?)c.Id)
+            : new Guid?[] { null };
+        foreach (var previousClusterId in previousClusterIds)
+        {
+            ws.ClusterDissolutionEvents.Add(new ClusterDissolutionEvent
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = request.ProjectId,
+                MemberEntityRecordIds = component.Distinct().ToList(),
+                PreviousClusterId = previousClusterId,
+                Reason = verdict.ToString(),
+                ComparisonsInside = counts.ComparisonsInside,
+                AgreementsInside = counts.AgreementsInside,
+                IngestBatchId = request.IngestBatchId,
+                CreatedAt = now
+            });
+        }
+
+        return component.Count;
     }
 
     private static Guid MergeClusters(

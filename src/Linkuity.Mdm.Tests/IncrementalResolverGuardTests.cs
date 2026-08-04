@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Mdm.Resolution;
 
@@ -34,7 +35,7 @@ public class IncrementalResolverGuardTests
     [Fact]
     public void Resolve_Throws_WhenHasIndex_AndProfileUsesDefaultSimilarity()
     {
-        var resolver = new IncrementalResolver(MatchingDefaults.CreateEngine(), hasIndex: true);
+        var resolver = new IncrementalResolver(MatchingDefaults.CreateEngine(), hasIndex: true, new CohesionClusterMergePolicy());
         var projectId = Guid.NewGuid();
         var sourceId = Guid.NewGuid();
         var batchId = Guid.NewGuid();

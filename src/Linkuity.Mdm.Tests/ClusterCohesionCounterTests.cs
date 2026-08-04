@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Mdm.Resolution;
 
@@ -67,26 +68,6 @@ public class ClusterCohesionCounterTests
         CreatedAt = Now
     };
 
-    // Mirrors FileMetadataStore's own ApplyMutations (source :264). A multi-ingest test that
-    // skips this sees an empty corpus on the second call — indistinguishable from "never
-    // ingested" — which is exactly the mistake the reverted attempt made.
-    private static void ApplyMutations(InMemoryResolutionContext context, MutationSet mutations)
-    {
-        context.Records.AddRange(mutations.RecordsToInsert);
-        foreach (var cluster in mutations.ClustersToUpsert)
-        {
-            context.Clusters.RemoveAll(c => c.Id == cluster.Id);
-            context.Clusters.Add(cluster);
-        }
-        context.GoldenRecords.RemoveAll(g => mutations.GoldenRecordClusterIdsToClear.Contains(g.ClusterId));
-        foreach (var golden in mutations.GoldenRecordsToUpsert)
-        {
-            context.GoldenRecords.RemoveAll(g => g.Id == golden.Id);
-            context.GoldenRecords.Add(golden);
-        }
-        context.GoldenRecordVersions.AddRange(mutations.VersionsToInsert);
-    }
-
     private static (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
         IReadOnlyList<EntityRecord> incoming, InMemoryResolutionContext context, Guid batchId)
     {
@@ -95,9 +76,10 @@ public class ClusterCohesionCounterTests
             ProjectId, SourceId, batchId, incoming,
             AutoMatchThreshold: profile.AutoMatchThreshold, ReviewThreshold: profile.ReviewThreshold);
         var project = new Project { Id = ProjectId, Name = "MDM", ContentType = "organization", CreatedAt = Now };
-        var (result, mutations) = new IncrementalResolver(MatchingDefaults.CreateEngine(), hasIndex: false)
+        var (result, mutations) = new IncrementalResolver(
+                MatchingDefaults.CreateEngine(), hasIndex: false, new CohesionClusterMergePolicy())
             .Resolve(request, project, profile, incoming, context, Now);
-        ApplyMutations(context, mutations);
+        context.ApplyMutations(mutations);
         return (result, mutations);
     }
 

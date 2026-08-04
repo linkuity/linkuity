@@ -4,6 +4,7 @@ using Dapper;
 using Linkuity.Core.Interfaces;
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
@@ -40,7 +41,11 @@ public sealed class PostgresMetadataStore : IMetadataStore
             : (engine ?? MatchingDefaults.CreateEngine());
         _profileProvider = profileProvider
             ?? new DefaultMatchingProfileProvider(DefaultMatchingProfileProvider.BuiltInProfiles());
-        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null, options.IngestParallelism);
+        // CohesionClusterMergePolicy is stateless (the threshold it reads lives on the profile
+        // passed at Resolve time, not on the policy instance), so constructing one here rather than
+        // taking it through DI costs nothing behaviorally while keeping this constructor's public
+        // shape unchanged for every existing caller.
+        _resolver = new IncrementalResolver(_engine, indexedRetrieval is not null, new CohesionClusterMergePolicy(), options.IngestParallelism);
     }
 
     // ──────────────────────────────── connection ────────────────────────────────

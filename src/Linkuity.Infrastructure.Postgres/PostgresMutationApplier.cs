@@ -37,6 +37,9 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
 
         foreach (var evt in m.MergeEventsToInsert)
             await InsertClusterMergeEventAsync(evt, ct);
+
+        foreach (var evt in m.DissolutionEventsToInsert)
+            await InsertClusterDissolutionEventAsync(evt, ct);
     }
 
     /// <summary>Max VALUES tuples per multi-row INSERT. Keeps total bound parameters well under
@@ -365,6 +368,31 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
             { Value = evt.TriggerRecordIds.ToArray() });
         cmd.Parameters.AddWithValue("score", evt.Score);
         cmd.Parameters.AddWithValue("breakdown", JsonSerializer.Serialize(evt.Breakdown, JsonOpts));
+        cmd.Parameters.AddWithValue("ingestBatchId", evt.IngestBatchId);
+        cmd.Parameters.AddWithValue("createdAt", evt.CreatedAt.UtcDateTime);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task InsertClusterDissolutionEventAsync(ClusterDissolutionEvent evt, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO cluster_dissolution_events
+                (id, project_id, member_entity_record_ids, previous_cluster_id,
+                 reason, comparisons_inside, agreements_inside, ingest_batch_id, created_at)
+            VALUES
+                (@id, @projectId, @memberIds, @previousClusterId,
+                 @reason, @comparisonsInside, @agreementsInside, @ingestBatchId, @createdAt)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("id", evt.Id);
+        cmd.Parameters.AddWithValue("projectId", evt.ProjectId);
+        cmd.Parameters.Add(new NpgsqlParameter("memberIds", NpgsqlDbType.Array | NpgsqlDbType.Uuid)
+            { Value = evt.MemberEntityRecordIds.ToArray() });
+        cmd.Parameters.Add(new NpgsqlParameter("previousClusterId", NpgsqlDbType.Uuid)
+            { Value = evt.PreviousClusterId.HasValue ? (object)evt.PreviousClusterId.Value : DBNull.Value });
+        cmd.Parameters.AddWithValue("reason", evt.Reason);
+        cmd.Parameters.AddWithValue("comparisonsInside", evt.ComparisonsInside);
+        cmd.Parameters.AddWithValue("agreementsInside", evt.AgreementsInside);
         cmd.Parameters.AddWithValue("ingestBatchId", evt.IngestBatchId);
         cmd.Parameters.AddWithValue("createdAt", evt.CreatedAt.UtcDateTime);
         await cmd.ExecuteNonQueryAsync(ct);

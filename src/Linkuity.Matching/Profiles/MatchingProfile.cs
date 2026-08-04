@@ -92,10 +92,15 @@ public sealed record MatchingProfile
 
     /// <summary>
     /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the
-    /// cluster does not form. Default 0.60, measured to cost nothing on 11,786 correct SEC
-    /// clusters while rejecting 6,606 over-merged ones.
+    /// cluster does not form. Default 0.50 — a simple majority, chosen by argument rather than by
+    /// measurement: a cluster whose own comparisons disagree more often than they agree is
+    /// self-contradictory on its face, and that holds without reference to any corpus. A customer
+    /// with no ground truth cannot re-derive a threshold from their own data, so the default has to
+    /// be defensible on its own terms. (On 1,052,432 labelled SEC records this also costs nothing —
+    /// 11,786 correct clusters survive — but that measurement corroborates the default, it is not
+    /// the reason for it.)
     /// </summary>
-    public double MinClusterCohesion { get; init; } = 0.60;
+    public double MinClusterCohesion { get; init; } = 0.50;
 
     /// <summary>
     /// Optional backstop: a cluster larger than this does not form automatically. Null (off) by

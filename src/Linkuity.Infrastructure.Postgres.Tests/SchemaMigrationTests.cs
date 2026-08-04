@@ -18,10 +18,11 @@ public sealed class SchemaMigrationTests(SharedPostgresContainer shared)
         "golden_record_versions",
         "review_tasks",
         "cluster_merge_events",
+        "cluster_dissolution_events",
     ];
 
     [SkippableFact]
-    public async Task EnsureSchema_CreatesAllTenTables()
+    public async Task EnsureSchema_CreatesAllElevenTables()
     {
         Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
@@ -32,7 +33,7 @@ public sealed class SchemaMigrationTests(SharedPostgresContainer shared)
         // Run migration
         DbUpMigrator.EnsureSchema(connectionString);
 
-        // Verify all 10 tables exist
+        // Verify all 11 tables exist
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
 
