@@ -54,6 +54,28 @@ public static class ProfileFingerprint
             .Append(profile.MaxBlockSize?.ToString(inv) ?? "none").Append('\n');
         canonical.Append("phoneRegion=").Append(profile.DefaultPhoneRegion).Append('\n');
 
+        // Every key below is appended ONLY when the value is non-null/non-empty. A profile that
+        // declares none of these five stage-1a settings must produce the EXACT byte sequence it
+        // produced before they existed — see ProfileFingerprintTests — because the fingerprint is
+        // stored provenance on the frozen baseline's existing edges, and an appended "none"/"off"
+        // sentinel would change every one of those fingerprints for a setting that never applied
+        // to them.
+        if (profile.MinClusterCohesion is { } minClusterCohesion)
+            canonical.Append("minClusterCohesion=").Append(minClusterCohesion.ToString("R", inv)).Append('\n');
+
+        if (profile.MaxAutoClusterSize is { } maxAutoClusterSize)
+            canonical.Append("maxAutoClusterSize=").Append(maxAutoClusterSize.ToString(inv)).Append('\n');
+
+        if (profile.PlaceholderValues.Count > 0)
+        {
+            // Sorted for the same reason BlockingStrategies is above: nothing today reads this
+            // list order-sensitively (stage 2 reserves it for rarity weighting), so two profiles
+            // differing only in declaration order must fingerprint alike.
+            canonical.Append("placeholderValues=")
+                .Append(string.Join(",", profile.PlaceholderValues.OrderBy(v => v, StringComparer.Ordinal)))
+                .Append('\n');
+        }
+
         // Fields are sorted by name: declaration order does not affect scoring, so two profiles
         // that differ only in field order are the same rules and must fingerprint alike.
         foreach (var field in profile.Fields.OrderBy(f => f.Name, StringComparer.Ordinal))
@@ -68,6 +90,19 @@ public static class ProfileFingerprint
             {
                 foreach (var (key, value) in field.EvaluatorOptions.OrderBy(o => o.Key, StringComparer.Ordinal))
                     canonical.Append('|').Append(key).Append('=').Append(value);
+            }
+
+            // AliasGroup/Evidence, same non-null-only rule as the profile-level settings above:
+            // a field with neither must fingerprint identically to one from before this branch.
+            if (field.AliasGroup is not null)
+                canonical.Append('|').Append("alias=").Append(field.AliasGroup);
+
+            if (field.Evidence is { } evidence)
+            {
+                canonical.Append('|').Append("evidence=")
+                    .Append(evidence.SameEntityAgreement.ToString("R", inv)).Append(',')
+                    .Append(evidence.ChanceAgreement.ToString("R", inv)).Append(',')
+                    .Append(evidence.MaxAgreementBits?.ToString("R", inv) ?? "none");
             }
 
             canonical.Append('\n');
