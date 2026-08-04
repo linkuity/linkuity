@@ -85,6 +85,12 @@ public sealed record MatchingProfile
     public DateFieldOrder DefaultDateOrder { get; init; } = DateFieldOrder.MonthFirst;
 
     /// <summary>
+    /// Values that carry no information despite being rare — "N/A", "UNKNOWN", "TEST". They keep
+    /// their ordinary agreement evidence and lose only rarity weighting (stage 2).
+    /// </summary>
+    public IReadOnlyList<string> PlaceholderValues { get; init; } = [];
+
+    /// <summary>
     /// Returns a copy of this profile with <see cref="CandidateRetrievalStrategy"/>
     /// replaced. Used by the batch run path to force blocking-gated retrieval, which
     /// the identifier-weighted scorer's review floor assumes.

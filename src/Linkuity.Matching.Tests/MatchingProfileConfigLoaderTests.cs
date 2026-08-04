@@ -262,6 +262,25 @@ public class MatchingProfileConfigLoaderTests
     }
 
     [Fact]
+    public void LoadFromJson_PlaceholderValuesAbsent_DefaultsToEmpty()
+    {
+        // A frozen measurement baseline depends on shipped profiles that omit this key loading
+        // exactly as they did before it existed.
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, Registry());
+        Assert.Empty(profile.PlaceholderValues);
+    }
+
+    [Fact]
+    public void LoadFromJson_ReadsExplicitPlaceholderValues()
+    {
+        var json = OrganizationJson.Replace(
+            "\"reviewThreshold\": 0.75",
+            "\"reviewThreshold\": 0.75,\n      \"placeholderValues\": [\"N/A\", \"UNKNOWN\"]");
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
+        Assert.Equal(["N/A", "UNKNOWN"], profile.PlaceholderValues);
+    }
+
+    [Fact]
     public void LoadFromDirectory_LoadsEveryProfileFile()
     {
         var dir = Path.Combine(Path.GetTempPath(), "linkuity-profiles-" + Guid.NewGuid().ToString("N"));

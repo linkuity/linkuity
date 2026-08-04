@@ -237,7 +237,8 @@ public sealed class MatchingProfileConfigLoader
             IdentifierFloorGate = identifierFloorGate,
             MaxBlockSize = document.MaxBlockSize,
             DefaultPhoneRegion = phoneRegion,
-            DefaultDateOrder = dateOrder
+            DefaultDateOrder = dateOrder,
+            PlaceholderValues = document.PlaceholderValues ?? []
         };
     }
 
