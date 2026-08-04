@@ -43,13 +43,21 @@ public sealed class IncrementalResolver
     /// identical copied code, which is the shape every drifted duplicate in this codebase has
     /// started as. Rules live in <see cref="MatchThresholds"/>; this only restates the failure
     /// against the parameter the caller actually passed.
+    /// <para>
+    /// <paramref name="scale"/> defaults to <see cref="ScoreScale.UnitInterval"/> because that is
+    /// the scale every scorer shipped before "evidence" produces — a caller that has not yet
+    /// resolved the profile's own scorer (or does not need to) gets the same behaviour this method
+    /// always had. A caller that HAS resolved the profile (both metadata stores, once they have
+    /// loaded it) must pass the resolved scale explicitly: validating an evidence profile's
+    /// unbounded thresholds against the default would reject every valid one.
+    /// </para>
     /// </summary>
-    public static MatchThresholds ThresholdsFor(IncrementalIngestRequest request)
+    public static MatchThresholds ThresholdsFor(IncrementalIngestRequest request, ScoreScale scale = ScoreScale.UnitInterval)
     {
         ArgumentNullException.ThrowIfNull(request);
         try
         {
-            return new MatchThresholds(request.AutoMatchThreshold, request.ReviewThreshold);
+            return new MatchThresholds(request.AutoMatchThreshold, request.ReviewThreshold, scale);
         }
         catch (ArgumentException ex)
         {
@@ -431,8 +439,13 @@ public sealed class IncrementalResolver
 
         // Built once per resolve rather than per edge: constructing it validates the request's
         // thresholds, and an invalid pair should fail the whole call rather than the first edge
-        // that happens to be scored.
-        var thresholds = new MatchThresholds(request.AutoMatchThreshold, request.ReviewThreshold);
+        // that happens to be scored. Scale comes from the profile's OWN resolved scorer (both
+        // call profiles share the same ScoringStrategy — WithCallOverrides only ever touches
+        // retrieval + the two threshold values), not an assumed ScoreScale.UnitInterval: an
+        // evidence-scored profile's thresholds are absolute bits of log-odds evidence, and
+        // validating them against [0,1] rejects every one that is actually valid.
+        var thresholds = new MatchThresholds(
+            request.AutoMatchThreshold, request.ReviewThreshold, _engine.ScaleOf(existingCallProfile));
 
         void AddComparison(Guid a, Guid b, double score, IReadOnlyList<MatchScoreFactor> breakdown)
         {
@@ -632,21 +645,15 @@ public sealed class IncrementalResolver
         Dictionary<Guid, Guid> clusterByRecord,
         HashSet<Guid> affectedClusterIds)
     {
-        foreach (var recordId in component)
-        {
-            var singleton = new Cluster
-            {
-                Id = Guid.NewGuid(),
-                ProjectId = request.ProjectId,
-                MemberEntityRecordIds = [recordId],
-                CreatedAt = now
-            };
-            ws.Clusters.Add(singleton);
-            clusterByRecord[recordId] = singleton.Id;
-            if (incomingIds.Contains(recordId))
-                affectedClusterIds.Add(singleton.Id);
-        }
-
+        // Tombstones BEFORE singletons, deliberately. Both loops touch ws.Clusters (which becomes
+        // mutations.ClustersToUpsert in the order it is built — see Resolve), and a tombstone
+        // PRESERVES the dissolved cluster's own MemberEntityRecordIds rather than clearing them
+        // (see the comment below), so every dissolved record's id appears in TWO rows: its fresh
+        // singleton and the tombstone of the cluster it used to belong to. A store that applies
+        // ClustersToUpsert last-write-wins (mapping a record to whichever row mentioning it comes
+        // LAST) would resolve that record onto the dead tombstone if singletons were written
+        // first — the opposite of what dissolution means. Writing tombstones first makes the
+        // singleton the last, and therefore winning, row for every record it names.
         foreach (var existing in existingClusters)
         {
             // Tombstoned the same way MergeClusters tombstones a loser: Status == "merged" is this
@@ -675,6 +682,21 @@ public sealed class IncrementalResolver
             // GoldenRecordClusterIdsToClear automatically — the same mechanism a merge loser's
             // golden already relies on, not a second one.
             ws.GoldenRecords.RemoveAll(g => g.ClusterId == existing.Id);
+        }
+
+        foreach (var recordId in component)
+        {
+            var singleton = new Cluster
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = request.ProjectId,
+                MemberEntityRecordIds = [recordId],
+                CreatedAt = now
+            };
+            ws.Clusters.Add(singleton);
+            clusterByRecord[recordId] = singleton.Id;
+            if (incomingIds.Contains(recordId))
+                affectedClusterIds.Add(singleton.Id);
         }
 
         // One event per previously-published cluster this component absorbed — each individually

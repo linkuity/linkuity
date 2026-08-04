@@ -67,9 +67,6 @@ public sealed class LocalBatchRunner
         try
         {
             profile = ProfileResolver.ResolveNameOrFile(options.ProfilePath);
-            // "run" drives BatchMatchingService below, which builds thresholds on
-            // ScoreScale.UnitInterval unconditionally — see RequireLiveMatchingScale.
-            MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, MatchingDefaults.CreateRegistry(), options.ProfilePath);
         }
         catch (MatchingProfileConfigException ex)
         {
@@ -976,10 +973,6 @@ public sealed class LocalBatchRunner
             loaded.AddRange(Directory.Exists(profilesPath)
                 ? loader.LoadFromDirectory(profilesPath, registry)
                 : [loader.LoadFromFile(profilesPath, registry)]);
-            // This provider feeds SaveIncrementalIngestAsync -> IncrementalResolver, which always
-            // builds thresholds on ScoreScale.UnitInterval — see RequireLiveMatchingScale.
-            foreach (var profile in loaded)
-                MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, profile.ContentType);
         }
 
         return new DefaultMatchingProfileProvider(

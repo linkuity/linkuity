@@ -326,56 +326,83 @@ public sealed class PostgresMetadataStore : IMetadataStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. Threshold validation — before opening the txn. Shared with FileMetadataStore rather
-        //    than copied into it, which is how the two previously stayed in step by hand.
-        _ = IncrementalResolver.ThresholdsFor(request);
-
-        // 2. One READ COMMITTED transaction for the whole bounded ingest.
+        // 1. Open the connection threshold validation (step 2) and the transaction (step 3)
+        //    both use — one connection either way, so opening it here costs nothing extra.
         await using var conn = await OpenConnectionAsync(ct);
+
+        // 2. Threshold validation — before opening the txn, as it always was. Shared with
+        //    FileMetadataStore rather than copied into it, which is how the two previously stayed
+        //    in step by hand. This needs the profile's resolved scorer's scale (an evidence-scored
+        //    profile's thresholds are bits of log-odds evidence, invalid against the default
+        //    UnitInterval scale), which needs only the project's content type — a single
+        //    untransacted read, far cheaper than the ReadCommitted transaction plus step 4's
+        //    provenance round-trips this check must precede. A project that does not exist skips
+        //    this: there is no profile to resolve a scale from, and step 4's
+        //    ValidateIncrementalRequestAsync reports "Project not found", the more specific error
+        //    for that case. (A request invalid on BOTH grounds now surfaces the project error
+        //    instead of the threshold error — an unavoidable consequence of thresholds only being
+        //    meaningful relative to a scale the project's own profile supplies, not a regression
+        //    from before this scale threading existed: that version didn't validate evidence
+        //    profiles' thresholds correctly at all.)
+        var contentType = await LoadProjectContentTypeAsync(conn, request.ProjectId, ct);
+        if (contentType is not null)
+            _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(_profileProvider.GetProfile(contentType)));
+
+        // 3. One READ COMMITTED transaction for the whole bounded ingest.
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        // 3. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
+        // 4. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
         await ValidateIncrementalRequestAsync(conn, tx, request, ct);
 
-        // 4. Load the project + its matching profile.
+        // 5. Load the project + its matching profile.
         var projects = await LoadProjectsAsync(conn, tx, [request.ProjectId], ct);
         var project = projects.Count > 0
             ? projects[0]
             : throw new InvalidOperationException($"Project not found: {request.ProjectId}");
         var profile = _profileProvider.GetProfile(project.ContentType);
 
-        // 5. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
+        // 6. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
         //    counts match (records are indexed as they are inserted) and nothing happens — no scan.
         //    A mismatch is the explicit recovery path (full rebuild); it must not fire in the tests.
         await EnsureIndexCurrentAsync(conn, tx, ct);
 
-        // 6. Build incoming records with blocking keys (generated only when absent). No full backfill —
+        // 7. Build incoming records with blocking keys (generated only when absent). No full backfill —
         //    blocking keys are stored at insert time on Postgres, so there is no scan over existing rows.
         var incomingRecords = request.Records
             .Select(record => _engine.PrepareForStorage(record, profile))
             .ToList();
 
-        // 7. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
+        // 8. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
         var (result, mutations) = _resolver.Resolve(
             request, project, profile, incomingRecords, new PostgresResolutionContext(conn, tx), DateTimeOffset.UtcNow);
 
-        // 8. Apply the targeted mutation set within the same transaction.
+        // 9. Apply the targeted mutation set within the same transaction.
         await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        // 8b. Reconcile the batch's stored record_count with the rows ingested in this call.
+        // 9b. Reconcile the batch's stored record_count with the rows ingested in this call.
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE ingest_batches SET record_count = @n WHERE id = @batchId",
             new { n = request.Records.Count, batchId = request.IngestBatchId },
             transaction: tx, cancellationToken: ct));
 
-        // 9. Index the incoming records (Lucene commit is separate from the SQL txn).
+        // 10. Index the incoming records (Lucene commit is separate from the SQL txn).
         if (_index is not null)
             IndexRecords(incomingRecords);
 
-        // 10. Commit and return.
+        // 11. Commit and return.
         await tx.CommitAsync(ct);
         return result;
     }
+
+    // Untransacted, single-row lookup used only to resolve the project's matching profile (and
+    // therefore its scorer's ScoreScale) before SaveIncrementalIngestAsync opens its own
+    // transaction — see step 2 above. Null when the project does not exist, in which case there
+    // is nothing to resolve a scale from and the caller defers to the transactional provenance
+    // check instead.
+    private async Task<string?> LoadProjectContentTypeAsync(NpgsqlConnection conn, Guid projectId, CancellationToken ct)
+        => await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
+            "SELECT content_type FROM projects WHERE id = @ProjectId",
+            new { ProjectId = projectId }, cancellationToken: ct));
 
     private async Task EnsureIndexCurrentAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
     {

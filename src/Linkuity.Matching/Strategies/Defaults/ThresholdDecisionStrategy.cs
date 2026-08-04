@@ -19,6 +19,6 @@ public sealed class ThresholdDecisionStrategy : IDecisionStrategy
     /// has already been lost. Reporting NonComparable here would be guessing, so the caller that
     /// still holds the signals is the one that reports it.
     /// </summary>
-    public MatchDecision Decide(double topScore, MatchingProfile profile)
-        => MatchBandClassifier.Classify(topScore, comparable: true, profile.ThresholdsOn());
+    public MatchDecision Decide(double topScore, MatchingProfile profile, ScoreScale scale)
+        => MatchBandClassifier.Classify(topScore, comparable: true, profile.ThresholdsOn(scale));
 }

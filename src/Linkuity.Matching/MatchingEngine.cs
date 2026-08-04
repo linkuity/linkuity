@@ -83,7 +83,13 @@ public sealed class MatchingEngine : IMatchingEngine
 
         var top = scored.Count > 0 ? scored[0] : null;
         var topScore = top?.Score ?? 0;
-        return new MatchResult(topScore, decision.Decide(topScore, profile), scored, top?.Breakdown ?? []);
+        return new MatchResult(topScore, decision.Decide(topScore, profile, scoring.Scale), scored, top?.Breakdown ?? []);
+    }
+
+    public ScoreScale ScaleOf(MatchingProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return _registry.Scoring[profile.ScoringStrategy].Scale;
     }
 
     public IReadOnlyList<string> GenerateBlockingKeys(EntityRecord record, MatchingProfile profile)

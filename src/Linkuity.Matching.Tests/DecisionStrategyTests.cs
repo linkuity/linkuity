@@ -16,5 +16,5 @@ public class DecisionStrategyTests
     [InlineData(0.74, MatchDecision.NoMatch)]
     [InlineData(0.0, MatchDecision.NoMatch)]
     public void Decide_ClassifiesByThresholdBands(double score, MatchDecision expected)
-        => Assert.Equal(expected, Strategy.Decide(score, TestProfiles.Person));
+        => Assert.Equal(expected, Strategy.Decide(score, TestProfiles.Person, ScoreScale.UnitInterval));
 }
