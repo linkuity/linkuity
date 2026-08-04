@@ -7,6 +7,18 @@ using Linkuity.Matching.Strategies;
 namespace Linkuity.Pipeline;
 
 /// <summary>
+/// One field's m/u under one smoothing constant (see <see cref="FieldCalibrationRow.SmoothingSensitivity"/>).
+/// Exists so a reader can see, side by side, how much of a SMOOTHING-DEPENDENT field's bits come
+/// from data versus from the continuity-correction constant.
+/// </summary>
+public sealed record SmoothingVariant(
+    double Alpha,
+    double SmoothedM,
+    double SmoothedU,
+    double? AgreementBits,
+    double? DisagreementBits);
+
+/// <summary>
 /// One matchable field's calibration: the two Fellegi-Sunter probabilities the evidence scorer
 /// needs (see <see cref="FieldEvidence"/>), estimated from labelled candidate pairs, plus every
 /// number a reader needs to judge whether the estimate is trustworthy.
@@ -20,18 +32,19 @@ namespace Linkuity.Pipeline;
 /// <para>
 /// <see cref="RawM"/>/<see cref="RawU"/> are the unadjusted agreement rates and are null when
 /// there were zero observations to compute them from — never a fabricated number. When there
-/// were observations, <see cref="SmoothedM"/>/<see cref="SmoothedU"/> apply a Laplace ("add
-/// half") continuity correction — <c>(agreements + 0.5) / (comparisons + 1)</c> — so a raw 0 or 1
-/// (both of which <see cref="FieldEvidence"/> refuses outright) becomes a usable, strictly-open
-/// probability that still converges to the raw rate as the observation count grows. The
-/// correction is applied EXPLICITLY and reported alongside the raw rate specifically so nobody
-/// downstream mistakes the smoothed value for a measurement free of assumptions.
+/// were observations, <see cref="SmoothedM"/>/<see cref="SmoothedU"/> apply a continuity
+/// correction — <c>(agreements + alpha) / (comparisons + 2*alpha)</c> at the primary
+/// <c>alpha = 0.5</c> — so a raw 0 or 1 (both of which <see cref="FieldEvidence"/> refuses
+/// outright) becomes a usable, strictly-open probability that still converges to the raw rate as
+/// the observation count grows. The correction is applied EXPLICITLY and reported alongside the
+/// raw rate specifically so nobody downstream mistakes the smoothed value for a measurement free
+/// of assumptions.
 /// </para>
 /// <para>
-/// <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> are computed from the smoothed
-/// probabilities, not from a constructed <see cref="FieldEvidence"/>: that type throws on
-/// <c>m &lt;= u</c>, which is exactly the case this instrument must be able to REPORT rather
-/// than crash on (see <see cref="EvidenceInverted"/>). Applying the numbers into a profile's
+/// <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> are computed from the PRIMARY
+/// smoothed probabilities, not from a constructed <see cref="FieldEvidence"/>: that type throws
+/// on <c>m &lt;= u</c>, and this instrument must be able to REPORT that case rather than crash on
+/// it (see <see cref="Usable"/>). Applying the numbers into a profile's
 /// <see cref="FieldEvidence"/> is deliberately a separate, later step.
 /// </para>
 /// </summary>
@@ -45,12 +58,39 @@ public sealed record FieldCalibrationRow(
     long DifferentEntityAgreements,
     double? RawU,
     double? SmoothedU,
+    /// <summary>Null whenever <see cref="Usable"/> is false or there is insufficient data on
+    /// either side — this instrument NEVER emits a bits pair a caller could mistake for a usable
+    /// parameter in either of those cases.</summary>
     double? AgreementBits,
     double? DisagreementBits,
-    /// <summary>True when SmoothedM &lt;= SmoothedU: agreeing on this field would be evidence
-    /// AGAINST a match. Almost always a misconfigured field or evaluator, not a real finding —
-    /// callers must surface this prominently rather than let it slide by as one more row.</summary>
-    bool EvidenceInverted,
+    /// <summary>
+    /// False exactly when SmoothedM &lt;= SmoothedU — which is exactly the condition under which
+    /// agreement bits &lt;= 0 &lt;= disagreement bits, i.e. evidence DECREASES as similarity
+    /// increases. When false, <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> are both
+    /// null: this instrument refuses to emit parameters for a field whose evidence runs backwards,
+    /// rather than let a caller apply them and get worse merges the more two records agree.
+    /// Deciding what to DO about an unusable field (drop it, reblock, recalibrate) is a separate,
+    /// later judgement — this only refuses to manufacture a number for it.
+    /// </summary>
+    bool Usable,
+    /// <summary>Human-readable reason, populated iff <c>!Usable</c>.</summary>
+    string? UnusableReason,
+    /// <summary>
+    /// True when the RAW (unsmoothed) estimate is degenerate in a direction that would send bits
+    /// to +/-infinity without the continuity correction: raw m == 1 (disagreement bits would be
+    /// log2(0/x) = -infinity) or raw u == 0 (agreement bits would be log2(m/0) = +infinity). When
+    /// true, the reported <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> rest entirely
+    /// on the smoothing constant rather than on any observed disagreement/coincidence, and
+    /// <see cref="SmoothingSensitivity"/> shows how much they move under a different constant.
+    /// </summary>
+    bool SmoothingDependent,
+    /// <summary>
+    /// Populated iff <see cref="SmoothingDependent"/> and <see cref="Usable"/>: the same field's
+    /// m/u and bits recomputed under two or more smoothing constants (0.5, the primary value used
+    /// above, and 1.0, the classic Laplace add-one rule), so the reader can see at a glance how
+    /// much of the number is measurement versus modelling choice. Empty otherwise.
+    /// </summary>
+    IReadOnlyList<SmoothingVariant> SmoothingSensitivity,
     /// <summary>10 buckets over [0,1]: bucket i is [i/10, (i+1)/10), except the last bucket,
     /// which is closed on both ends ([0.9, 1.0]). Same-entity (true-pair) observations only.</summary>
     IReadOnlyList<long> SameEntitySimilarityHistogram,
@@ -97,11 +137,31 @@ public sealed record FieldEvidenceCalibrationResult(
 /// and every shipped evaluator (exact/jaccard/canonical-jaccard/fuzzy/numeric/date) is a symmetric
 /// function of its two string arguments, so direction does not change the value they return.
 /// </para>
+/// <para>
+/// A field can come back UNUSABLE (<see cref="FieldCalibrationRow.Usable"/> false): m &lt;= u
+/// means agreeing on the field is evidence AGAINST a match, which is almost always a sign the
+/// field (or its interaction with blocking — a field also used as a blocking key will see its u
+/// inflated by construction, since most candidates already share it) is misconfigured, not a real
+/// finding to encode. This service refuses to emit AgreementBits/DisagreementBits for such a
+/// field rather than pick a policy (exclude it, clamp it, floor it) — that decision depends on
+/// blocking and belongs to whoever applies these numbers, not to this measurement.
+/// </para>
 /// </summary>
 public sealed class FieldEvidenceCalibrationService
 {
     private const int HistogramBuckets = 10;
     private const double AgreementEpsilon = 1e-9;
+
+    /// <summary>The constant used for <see cref="FieldCalibrationRow.SmoothedM"/>/<c>SmoothedU</c>
+    /// and every field's AgreementBits/DisagreementBits. 0.5 (a Jeffreys-style "add half" prior)
+    /// rather than 1.0 (classic Laplace): it pulls a degenerate raw rate less aggressively toward
+    /// 0.5, so the reported number tracks the data more closely while still being strictly open.</summary>
+    private const double PrimarySmoothingAlpha = 0.5;
+
+    /// <summary>Second constant shown for SMOOTHING-DEPENDENT fields only, so the reader can see
+    /// how far the primary number would move under a materially different (and equally
+    /// defensible) choice — classic Laplace add-one.</summary>
+    private const double SecondarySmoothingAlpha = 1.0;
 
     private readonly IStrategyRegistry _registry;
 
@@ -224,31 +284,85 @@ public sealed class FieldEvidenceCalibrationService
         return fraction < fitFraction;
     }
 
+    /// <summary>Additive ("continuity correction") smoothing: symmetric in the sense that both
+    /// classes (agree/disagree) get <paramref name="alpha"/> phantom observations, so the
+    /// estimate always sits strictly inside (0,1) yet converges to the raw rate as the real
+    /// observation count grows. Null when there is no data at all — smoothing a zero-observation
+    /// count would report a number for a field nobody measured anything about.</summary>
+    private static double? SmoothedRate(long agree, long count, double alpha)
+        => count > 0 ? (agree + alpha) / (count + 2 * alpha) : null;
+
     private static FieldCalibrationRow BuildRow(string name, FieldAccumulator acc)
     {
         double? rawM = acc.SameCount > 0 ? (double)acc.SameAgree / acc.SameCount : null;
         double? rawU = acc.DiffCount > 0 ? (double)acc.DiffAgree / acc.DiffCount : null;
 
-        // Laplace continuity correction: undefined (null) with zero observations, otherwise
-        // always strictly inside (0,1) no matter what the raw rate was — see the class doc.
-        double? smoothedM = acc.SameCount > 0 ? (acc.SameAgree + 0.5) / (acc.SameCount + 1) : null;
-        double? smoothedU = acc.DiffCount > 0 ? (acc.DiffAgree + 0.5) / (acc.DiffCount + 1) : null;
+        var smoothedM = SmoothedRate(acc.SameAgree, acc.SameCount, PrimarySmoothingAlpha);
+        var smoothedU = SmoothedRate(acc.DiffAgree, acc.DiffCount, PrimarySmoothingAlpha);
 
         double? agreementBits = null, disagreementBits = null;
-        var inverted = false;
+        var usable = true;
+        string? unusableReason = null;
+
         if (smoothedM is { } m && smoothedU is { } u)
         {
-            agreementBits = Math.Log2(m / u);
-            disagreementBits = Math.Log2((1 - m) / (1 - u));
-            inverted = m <= u;
+            if (m <= u)
+            {
+                // m <= u is EXACTLY the condition "agreement bits <= 0 <= disagreement bits" —
+                // Math.Log2(m/u) <= 0 whenever m <= u, and Math.Log2((1-m)/(1-u)) >= 0 whenever
+                // m <= u — i.e. evidence from this field DECREASES as similarity increases. Stated
+                // that way, not as a bare inequality, because the inequality alone reads as a
+                // technicality and the consequence is what makes it dangerous to use.
+                usable = false;
+                unusableReason =
+                    "m <= u: evidence from this field DECREASES as similarity increases (full " +
+                    "agreement is worth fewer bits than full disagreement). Refusing to emit " +
+                    "AgreementBits/DisagreementBits rather than encode a parameter that rewards " +
+                    "records looking LESS alike. Deciding what to do about this field (drop it, " +
+                    "recalibrate under different blocking, accept it) is a separate judgement.";
+            }
+            else
+            {
+                agreementBits = Math.Log2(m / u);
+                disagreementBits = Math.Log2((1 - m) / (1 - u));
+            }
+        }
+
+        // Degenerate in the direction that would send a bit to +/-infinity without the
+        // continuity correction — see the SmoothingDependent doc on FieldCalibrationRow.
+        var smoothingDependent = rawM is 1.0 || rawU is 0.0;
+
+        IReadOnlyList<SmoothingVariant> sensitivity = [];
+        if (smoothingDependent && usable)
+        {
+            sensitivity = new[] { PrimarySmoothingAlpha, SecondarySmoothingAlpha }
+                .Select(alpha => BuildVariant(acc, alpha))
+                .ToList();
         }
 
         return new FieldCalibrationRow(
             name,
             acc.SameCount, acc.SameAgree, rawM, smoothedM,
             acc.DiffCount, acc.DiffAgree, rawU, smoothedU,
-            agreementBits, disagreementBits, inverted,
+            agreementBits, disagreementBits, usable, unusableReason,
+            smoothingDependent, sensitivity,
             acc.SameHistogram, acc.DiffHistogram);
+    }
+
+    private static SmoothingVariant BuildVariant(FieldAccumulator acc, double alpha)
+    {
+        // Guarded by the smoothingDependent+usable check at the call site, which already implies
+        // both sides have at least one observation (SameCount>0 to have a raw m, DiffCount>0 to
+        // have a raw u), so these are never null here.
+        var m = SmoothedRate(acc.SameAgree, acc.SameCount, alpha)!.Value;
+        var u = SmoothedRate(acc.DiffAgree, acc.DiffCount, alpha)!.Value;
+        double? agreementBits = null, disagreementBits = null;
+        if (m > u)
+        {
+            agreementBits = Math.Log2(m / u);
+            disagreementBits = Math.Log2((1 - m) / (1 - u));
+        }
+        return new SmoothingVariant(alpha, m, u, agreementBits, disagreementBits);
     }
 
     /// <summary>Per-field running tallies over one candidate walk. Mutable by design — one

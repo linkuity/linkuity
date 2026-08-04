@@ -6,9 +6,9 @@ namespace Linkuity.Cli;
 
 /// <summary>
 /// Human-readable field-evidence calibration report. Every guard rail the measurement carries —
-/// zero-observation fields, m/u at the raw 0/1 boundary, m &lt;= u — gets its own visible line
-/// rather than being folded into the table, because those are exactly the situations someone
-/// skimming a wall of numbers is most likely to miss.
+/// zero-observation fields, an UNUSABLE m &lt;= u field, a SMOOTHING-DEPENDENT boundary estimate
+/// — gets its own visible line rather than being folded into the table, because those are exactly
+/// the situations someone skimming a wall of numbers is most likely to miss.
 /// </summary>
 public static class FieldEvidenceCalibrationTextFormatter
 {
@@ -31,17 +31,21 @@ public static class FieldEvidenceCalibrationTextFormatter
         sb.AppendLine();
 
         sb.AppendLine("m = P(agree | same entity)   u = P(agree | different entity, candidate pair)");
-        sb.AppendLine("agree := similarity == 1.0 on a Compared signal. m/u below are Laplace-smoothed");
+        sb.AppendLine("agree := similarity == 1.0 on a Compared signal. m/u below are smoothed");
         sb.AppendLine("((agreements + 0.5) / (comparisons + 1)); raw (unsmoothed) rates are in parentheses.");
+        sb.AppendLine("A field marked UNUSABLE emits no bits (see the section below); its m/u are still shown.");
         sb.AppendLine();
 
         sb.AppendLine("field                     n(same)      m            n(diff)      u            agree-bits  disagree-bits");
         foreach (var f in result.Fields)
         {
+            var agree = f.Usable ? FormatBits(f.AgreementBits) : "UNUSABLE";
+            var disagree = f.Usable ? FormatBits(f.DisagreementBits) : "UNUSABLE";
+            var flags = (f.Usable ? "" : " [UNUSABLE]") + (f.SmoothingDependent ? " [SMOOTHING-DEPENDENT]" : "");
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"{f.FieldName,-24} {f.SameEntityComparisons,10:N0}  {FormatRate(f.SmoothedM, f.RawM),-12} " +
                 $"{f.DifferentEntityComparisons,10:N0}  {FormatRate(f.SmoothedU, f.RawU),-12} " +
-                $"{FormatBits(f.AgreementBits),10}  {FormatBits(f.DisagreementBits),12}");
+                $"{agree,10}  {disagree,12}{flags}");
         }
         sb.AppendLine();
 
@@ -55,27 +59,33 @@ public static class FieldEvidenceCalibrationTextFormatter
             sb.AppendLine();
         }
 
-        var boundary = result.Fields.Where(f =>
-            (f.RawM is 0.0 or 1.0) || (f.RawU is 0.0 or 1.0)).ToList();
-        if (boundary.Count > 0)
+        var unusable = result.Fields.Where(f => !f.Usable).ToList();
+        if (unusable.Count > 0)
         {
-            sb.AppendLine("RAW ESTIMATE AT THE 0/1 BOUNDARY — FieldEvidence refuses these outright; the m/u " +
-                          "above are the Laplace-smoothed stand-in, not a measurement free of assumptions:");
-            foreach (var f in boundary)
+            sb.AppendLine("*** UNUSABLE: m <= u, so evidence from these fields DECREASES AS SIMILARITY INCREASES. ***");
+            sb.AppendLine("No AgreementBits/DisagreementBits are emitted for them. Almost always a misconfigured");
+            sb.AppendLine("field or evaluator (or, if the field is also a blocking key, u inflated by construction —");
+            sb.AppendLine("candidates already share it). Deciding what to do about it is a separate judgement:");
+            foreach (var f in unusable)
                 sb.AppendLine(CultureInfo.InvariantCulture,
-                    $"  {f.FieldName}: raw m={FormatRaw(f.RawM)} (n={f.SameEntityComparisons:N0})   " +
-                    $"raw u={FormatRaw(f.RawU)} (n={f.DifferentEntityComparisons:N0})");
+                    $"  {f.FieldName}: m={f.SmoothedM:F6}  u={f.SmoothedU:F6}  -- {f.UnusableReason}");
             sb.AppendLine();
         }
 
-        var inverted = result.Fields.Where(f => f.EvidenceInverted).ToList();
-        if (inverted.Count > 0)
+        var smoothingDependent = result.Fields.Where(f => f.SmoothingDependent && f.Usable).ToList();
+        if (smoothingDependent.Count > 0)
         {
-            sb.AppendLine("*** m <= u: AGREEING ON THIS FIELD IS EVIDENCE AGAINST A MATCH. ***");
-            sb.AppendLine("This is almost always a misconfigured field or evaluator, not a real finding:");
-            foreach (var f in inverted)
-                sb.AppendLine(CultureInfo.InvariantCulture,
-                    $"  {f.FieldName}: m={f.SmoothedM:F6}  u={f.SmoothedU:F6}");
+            sb.AppendLine("SMOOTHING-DEPENDENT — raw m == 1 or raw u == 0, so the bits below rest entirely on the");
+            sb.AppendLine("continuity-correction constant rather than on any observed disagreement/coincidence.");
+            sb.AppendLine("Shown under two constants so the sensitivity is visible, not just the primary number:");
+            foreach (var f in smoothingDependent)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName}:");
+                foreach (var v in f.SmoothingSensitivity)
+                    sb.AppendLine(CultureInfo.InvariantCulture,
+                        $"    alpha={v.Alpha,4:F1}   m={v.SmoothedM:F6}  u={v.SmoothedU:F6}   " +
+                        $"agree-bits={FormatBits(v.AgreementBits),8}  disagree-bits={FormatBits(v.DisagreementBits),8}");
+            }
             sb.AppendLine();
         }
 

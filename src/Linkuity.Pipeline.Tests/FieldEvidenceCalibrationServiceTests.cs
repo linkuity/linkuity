@@ -25,16 +25,19 @@ namespace Linkuity.Pipeline.Tests;
 /// <para>
 /// Field "a" (exact): r5.a=r6.a="X", r9.a=r10.a="Y" — every same-entity pair agrees (raw m = 2/2
 /// = 1.0, the boundary FieldEvidence refuses), every different-entity pair disagrees (raw u =
-/// 0/4 = 0.0, the other boundary). Laplace smoothing: m=(2+0.5)/3=0.8333..., u=(0+0.5)/5=0.1,
-/// giving agreement bits log2(0.8333/0.1)=3.05889... and disagreement bits
-/// log2(0.1667/0.9)=-2.43296... (both hand-computed, not asserted against the code's own output).
+/// 0/4 = 0.0, the other boundary). Both raw boundaries are hit, so this field is SMOOTHING-
+/// DEPENDENT: primary smoothing (alpha=0.5) gives m=(2+0.5)/3=0.8333..., u=(0+0.5)/5=0.1, agreement
+/// bits log2(0.8333/0.1)=3.05889..., disagreement bits log2(0.1667/0.9)=-2.43296...; the secondary
+/// constant (alpha=1.0, classic Laplace) gives m=(2+1)/4=0.75, u=(0+1)/6=0.16667, agreement bits
+/// log2(0.75/0.16667)=2.16993..., disagreement bits log2(0.25/0.83333)=-1.73697... (all
+/// hand-computed, not asserted against the code's own output).
 /// </para>
 /// <para>
 /// Field "b" (exact): r5.b="P", r6.b="Q" (same-entity pair DISAGREES), r9.b=r10.b="P" (same-entity
 /// pair agrees) — raw m = 1/2 = 0.5. Cross pairs: r5-r9 and r5-r10 agree (both "P"), r6-r9 and
 /// r6-r10 disagree ("Q" vs "P") — raw u = 2/4 = 0.5. m equals u exactly, even after smoothing
-/// ((1+0.5)/3 = (2+0.5)/5 = 0.5): this is the "evidence inverted" case, and both bits come out to
-/// log2(1) = 0 exactly.
+/// ((1+0.5)/3 = (2+0.5)/5 = 0.5): this is the UNUSABLE case (evidence would decrease as similarity
+/// increases), so no AgreementBits/DisagreementBits are emitted for it at all.
 /// </para>
 /// <para>
 /// Field "c" (exact): populated only on r5 and r10 ("V1" both), which is a DIFFERENT-entity pair
@@ -146,10 +149,10 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.Equal(0, result.UnlabeledCandidatePairs);
     }
 
-    // ---- Field "a": both raw m and raw u sit exactly at the boundary FieldEvidence refuses ----
+    // ---- Field "a": raw u == 0 (and raw m == 1) -> SMOOTHING-DEPENDENT, multiple constants shown ----
 
     [Fact]
-    public void Calibrate_FieldAtBothBoundaries_IsLaplaceSmoothedRatherThanClamped()
+    public void Calibrate_FieldWithRawUZero_IsSmoothingDependent_WithMultipleConstantsShown()
     {
         var field = Run().Fields.Single(f => f.FieldName == "a");
 
@@ -167,18 +170,38 @@ public class FieldEvidenceCalibrationServiceTests
         Assert.NotNull(field.SmoothedU);
         Assert.Equal(0.5 / 5.0, field.SmoothedU!.Value, 9);
 
+        Assert.True(field.Usable);
+        Assert.Null(field.UnusableReason);
         Assert.NotNull(field.AgreementBits);
         Assert.Equal(3.05889368905357, field.AgreementBits!.Value, 9);
         Assert.NotNull(field.DisagreementBits);
         Assert.Equal(-2.43295940727611, field.DisagreementBits!.Value, 9);
 
-        Assert.False(field.EvidenceInverted);
+        // raw u == 0 (and raw m == 1): without the continuity correction, agreement bits would be
+        // log2(m/0) = +infinity. Flagged, and shown under >= 2 smoothing constants.
+        Assert.True(field.SmoothingDependent);
+        Assert.True(field.SmoothingSensitivity.Count >= 2);
+
+        var primary = field.SmoothingSensitivity.Single(v => v.Alpha == 0.5);
+        Assert.Equal(2.5 / 3.0, primary.SmoothedM, 9);
+        Assert.Equal(0.5 / 5.0, primary.SmoothedU, 9);
+        Assert.Equal(3.05889368905357, primary.AgreementBits!.Value, 9);
+        Assert.Equal(-2.43295940727611, primary.DisagreementBits!.Value, 9);
+
+        // Secondary constant (classic Laplace add-one): m=(2+1)/4=0.75, u=(0+1)/6=0.16667 — a
+        // visibly different number from the primary, proving the sensitivity is real, not a
+        // relabeled copy of the same figure.
+        var secondary = field.SmoothingSensitivity.Single(v => v.Alpha == 1.0);
+        Assert.Equal(0.75, secondary.SmoothedM, 9);
+        Assert.Equal(1.0 / 6.0, secondary.SmoothedU, 9);
+        Assert.Equal(2.16992500144231, secondary.AgreementBits!.Value, 9);
+        Assert.Equal(-1.73696559416621, secondary.DisagreementBits!.Value, 9);
     }
 
-    // ---- Field "b": m == u exactly, even after smoothing ----
+    // ---- Field "b": m <= u, even after smoothing -> UNUSABLE, no parameters emitted ----
 
     [Fact]
-    public void Calibrate_FieldWithEqualSmoothedMAndU_IsFlaggedInverted()
+    public void Calibrate_FieldWithMLessThanOrEqualU_IsUnusable_WithNoParametersEmitted()
     {
         var field = Run().Fields.Single(f => f.FieldName == "b");
 
@@ -191,14 +214,19 @@ public class FieldEvidenceCalibrationServiceTests
 
         Assert.Equal(0.5, field.SmoothedM);
         Assert.Equal(0.5, field.SmoothedU);
-        Assert.NotNull(field.AgreementBits);
-        Assert.Equal(0.0, field.AgreementBits!.Value, 12);
-        Assert.NotNull(field.DisagreementBits);
-        Assert.Equal(0.0, field.DisagreementBits!.Value, 12);
 
-        // Agreeing on "b" is worthless evidence here (m == u): must be surfaced, not hidden in a
-        // table row that looks like every other field.
-        Assert.True(field.EvidenceInverted);
+        // Agreeing on "b" is worthless (indeed backwards) evidence here (m == u): the field must
+        // be refused outright, not have bits computed and merely flagged.
+        Assert.False(field.Usable);
+        Assert.Null(field.AgreementBits);
+        Assert.Null(field.DisagreementBits);
+        Assert.NotNull(field.UnusableReason);
+        Assert.Contains("DECREASES", field.UnusableReason, StringComparison.Ordinal);
+
+        // Neither raw m nor raw u for "b" hits the 1/0 boundary, so this field is not also flagged
+        // smoothing-dependent — the two guard rails are independent.
+        Assert.False(field.SmoothingDependent);
+        Assert.Empty(field.SmoothingSensitivity);
     }
 
     // ---- Field "c": zero same-entity observations ----
@@ -222,7 +250,13 @@ public class FieldEvidenceCalibrationServiceTests
         // fabricated stand-in for the missing side.
         Assert.Null(field.AgreementBits);
         Assert.Null(field.DisagreementBits);
-        Assert.False(field.EvidenceInverted);
+
+        // Missing data is not the same guard rail as "evidence runs backwards": with no
+        // same-entity observations there is nothing to compare m and u against, so this field is
+        // still nominally Usable (just unestimated) rather than refused.
+        Assert.True(field.Usable);
+        Assert.Null(field.UnusableReason);
+        Assert.False(field.SmoothingDependent);
     }
 
     // ---- Similarity distribution ----
