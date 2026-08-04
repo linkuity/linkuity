@@ -11,7 +11,7 @@ namespace Linkuity.Matching;
 /// </summary>
 public readonly record struct MatchThresholds
 {
-    public MatchThresholds(double autoMatch, double review, ScoreScale scale = ScoreScale.UnitInterval)
+    public MatchThresholds(double autoMatch, double review, ScoreScale scale)
     {
         if (double.IsNaN(autoMatch) || double.IsInfinity(autoMatch))
             throw new ArgumentOutOfRangeException(nameof(autoMatch), autoMatch, "autoMatch must be a finite number.");

@@ -129,12 +129,12 @@ public class CorpusAuditScoringTests
     [InlineData(0.31, CorpusBand.Review)]
     [InlineData(0.10, CorpusBand.NoMatch)]
     public void BandOf_UsesInclusiveLowerBounds(double score, CorpusBand expected)
-        => Assert.Equal(expected, CorpusAuditService.BandOf(score, comparable: true, CorpusAuditFixtures.Profile()));
+        => Assert.Equal(expected, CorpusAuditService.BandOf(score, comparable: true, CorpusAuditFixtures.Profile(), ScoreScale.UnitInterval));
 
     [Fact]
     public void BandOf_NonComparableBeatsAnyScore()
         => Assert.Equal(CorpusBand.NonComparable,
-            CorpusAuditService.BandOf(0.99, comparable: false, CorpusAuditFixtures.Profile()));
+            CorpusAuditService.BandOf(0.99, comparable: false, CorpusAuditFixtures.Profile(), ScoreScale.UnitInterval));
 
     [Fact]
     public void TheCorpusAuditAcceptsTheEvidenceScorer()

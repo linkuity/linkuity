@@ -137,10 +137,12 @@ public sealed record MatchingProfile
     /// <summary>
     /// This profile's thresholds as a validated pair. <paramref name="scale"/> is the scale of
     /// the scorer that will produce the scores being classified — the profile names its scoring
-    /// strategy but does not resolve it, so a caller holding the registry supplies it. Defaults
-    /// to the unit interval, which every scorer shipped today produces.
+    /// strategy but does not resolve it, so a caller holding the registry supplies it. Required
+    /// rather than defaulted: a defaulted scale here previously let a call site compile and pass
+    /// its tests while silently assuming the unit interval, a defect found and fixed five times
+    /// across this programme. Callers must state the scale they mean.
     /// </summary>
-    public MatchThresholds ThresholdsOn(ScoreScale scale = ScoreScale.UnitInterval)
+    public MatchThresholds ThresholdsOn(ScoreScale scale)
         => new(AutoMatchThreshold, ReviewThreshold, scale);
 
     /// <summary>

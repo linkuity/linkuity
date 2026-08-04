@@ -7,7 +7,7 @@ namespace Linkuity.Matching.Tests;
 /// </summary>
 public class MatchBandClassifierTests
 {
-    private static readonly MatchThresholds Thresholds = new(autoMatch: 0.90, review: 0.75);
+    private static readonly MatchThresholds Thresholds = new(autoMatch: 0.90, review: 0.75, ScoreScale.UnitInterval);
 
     [Theory]
     [InlineData(1.00, MatchDecision.AutoMatch)]
@@ -34,11 +34,11 @@ public class MatchBandClassifierTests
 
     [Fact]
     public void EqualThresholds_Rejected_BecauseTheReviewBandWouldBeEmpty()
-        => Assert.Throws<ArgumentException>(() => new MatchThresholds(autoMatch: 0.8, review: 0.8));
+        => Assert.Throws<ArgumentException>(() => new MatchThresholds(autoMatch: 0.8, review: 0.8, ScoreScale.UnitInterval));
 
     [Fact]
     public void InvertedThresholds_Rejected()
-        => Assert.Throws<ArgumentException>(() => new MatchThresholds(autoMatch: 0.5, review: 0.9));
+        => Assert.Throws<ArgumentException>(() => new MatchThresholds(autoMatch: 0.5, review: 0.9, ScoreScale.UnitInterval));
 
     [Theory]
     [InlineData(1.5, 0.75)]
@@ -52,7 +52,7 @@ public class MatchBandClassifierTests
     [InlineData(0.9, double.NaN)]
     [InlineData(double.PositiveInfinity, 0.75)]
     public void NonFiniteThresholds_Rejected(double auto, double review)
-        => Assert.Throws<ArgumentOutOfRangeException>(() => new MatchThresholds(auto, review));
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new MatchThresholds(auto, review, ScoreScale.UnitInterval));
 
     /// <summary>
     /// The point of carrying a scale: thresholds outside [0,1] are a configuration error on a
