@@ -9,9 +9,12 @@ namespace Linkuity.Pipeline;
 
 /// <summary>
 /// Corpus-scale recall and precision audit. Unlike ScoringAuditService, which materializes every
-/// candidate pair with a full per-field breakdown, this service is aggregate-only and allocates
-/// no pair set: candidate pairs are owned by their lowest shared active key and emitted exactly
-/// once. See docs/superpowers/specs/2026-07-28-missed-merge-detection-design.md.
+/// candidate pair with a full per-field breakdown, this service is aggregate-only BY DEFAULT:
+/// candidate pairs are owned by their lowest shared active key and emitted exactly once, with no
+/// pair set retained. A pair set is materialized only when the profile configures a cluster merge
+/// policy that could actually act on it (<see cref="MatchingProfile.MinClusterCohesion"/> or
+/// <see cref="MatchingProfile.MaxAutoClusterSize"/>) — see the guard in <see cref="Audit"/>. See
+/// docs/superpowers/specs/2026-07-28-missed-merge-detection-design.md.
 /// </summary>
 public sealed class CorpusAuditService
 {
@@ -27,14 +30,23 @@ public sealed class CorpusAuditService
     /// is safe and keeps the audit on the matcher's own canonicalization.</summary>
     private static readonly OrganizationNameCanonicalizer Canonicalizer = new();
 
-    /// <summary>The same policy production consults (IncrementalResolver). Stateless — it only
-    /// reads the profile and the counts it is handed — so one shared instance is safe here too.</summary>
-    private static readonly IClusterMergePolicy MergePolicy = new CohesionClusterMergePolicy();
-
     private readonly IStrategyRegistry _registry;
+    private readonly IClusterMergePolicy _mergePolicy;
 
-    public CorpusAuditService(IStrategyRegistry registry)
-        => _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    // clusterMergePolicy is OPTIONAL here, unlike IncrementalResolver's required constructor
+    // parameter: that seam exists so a resolver can never be built with no policy by accident,
+    // but this audit already has ~10 call sites (7 of them test fixtures asserting on the
+    // default profile, where MinClusterCohesion/MaxAutoClusterSize are null and any policy
+    // implementation behaves identically). Forcing all of them to thread a policy through would
+    // be churn with no behavioural payoff. What matters is that production's OWN policy — not a
+    // second, independently hardcoded instance — is what the audit consults when a profile could
+    // actually exercise it, and that the CLI (the only caller that reports on real profiles) does
+    // not lean on this default: see CorpusAuditCommands.cs, which passes one explicitly.
+    public CorpusAuditService(IStrategyRegistry registry, IClusterMergePolicy? clusterMergePolicy = null)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _mergePolicy = clusterMergePolicy ?? new CohesionClusterMergePolicy();
+    }
 
     public CorpusAuditResult Audit(
         IReadOnlyList<EntityRecord> records,
@@ -97,12 +109,23 @@ public sealed class CorpusAuditService
 
         var uf = new UnionFind(records.Count);
         long emitted = 0, floorLifted = 0;
+
+        // The merge policy can only ever refuse a cluster when the profile configures a guard it
+        // reads (CohesionClusterMergePolicy.Evaluate treats both null as "accept unconditionally").
+        // Every profile shipped today leaves both null, so for them this is false and the audit
+        // stays aggregate-only — no pair set, matching the class doc above. Only a profile that
+        // opts into cohesion or a size guard pays for collecting one.
+        var mergePolicyCanReject = profile.MinClusterCohesion is not null || profile.MaxAutoClusterSize is not null;
+
         // Every candidate pair the walk scores, kept only long enough to attribute each one to its
         // FINAL cluster below. Union-find keeps growing for the rest of the walk after this pair is
         // visited, so "did both endpoints land in the same cluster" is not decidable yet — the same
         // reason IncrementalResolver.AllComparisons is materialized in full before its own rollup,
-        // rather than tallied against whatever root a record happens to have at visit time.
-        var comparisons = new List<(int Left, int Right, bool IsAuto)>();
+        // rather than tallied against whatever root a record happens to have at visit time. Null,
+        // not an empty list, when the policy cannot reject anything: allocating and filling
+        // 11,000,007 entries (the SEC gate corpus) to feed a rollup with nothing to decide is the
+        // exact cost this class exists to avoid.
+        var comparisons = mergePolicyCanReject ? new List<(int Left, int Right, bool IsAuto)>() : null;
         var occurrences = ForEachCandidatePair(index, effectiveMax, (l, r) =>
         {
             emitted++;
@@ -111,7 +134,7 @@ public sealed class CorpusAuditService
             var band = BandOf(score, comparable, profile, scoring.Scale);
             var isAuto = band == CorpusBand.Auto;
             if (isAuto) uf.Union(l, r);
-            comparisons.Add((l, r, isAuto));
+            comparisons?.Add((l, r, isAuto));
             if (truePairs.TryGetValue(Pack(l, r), out var state)) { state.Band = band; state.Score = score; }
         }, ct);
 
@@ -122,7 +145,7 @@ public sealed class CorpusAuditService
         // comparisons contradict it too often is refused and dissolves into singletons. Must run
         // before SameCluster/ClusterPairCounts below so every number this audit reports — not just
         // the cluster summary — reflects the clustering production would actually have formed.
-        ApplyClusterMergePolicy(roots, comparisons, profile);
+        if (mergePolicyCanReject) ApplyClusterMergePolicy(roots, comparisons!, profile, _mergePolicy);
 
         foreach (var state in truePairs.Values) state.SameCluster = roots[state.Left] == roots[state.Right];
 
@@ -470,17 +493,20 @@ public sealed class CorpusAuditService
     private static long Choose2(long n) => n * (n - 1) / 2;
 
     /// <summary>
-    /// Evaluates every multi-record root the walk produced through the same policy production
-    /// consults, using the SAME agreement definition: an agreement is an auto-band comparison, and
-    /// the denominator is every comparison made between two members of that root's FINAL cluster
-    /// (<paramref name="comparisons"/>, filtered to pairs whose endpoints share a root — never a
-    /// second candidate-pair walk). A root the policy refuses has every member reset to its own
-    /// root, in place, before returning — the audit's existing representation of "unclustered" —
-    /// so the cluster metrics computed after this call see singletons rather than a cluster
-    /// production would never have formed.
+    /// Evaluates every multi-record root the walk produced through <paramref name="mergePolicy"/>
+    /// — the SAME policy instance <see cref="Audit"/> was given, never one hardcoded here, so a
+    /// production policy swap or decoration is guaranteed to be reflected in what this audit
+    /// reports rather than silently left behind — using the SAME agreement definition: an
+    /// agreement is an auto-band comparison, and the denominator is every comparison made between
+    /// two members of that root's FINAL cluster (<paramref name="comparisons"/>, filtered to pairs
+    /// whose endpoints share a root — never a second candidate-pair walk). A root the policy
+    /// refuses has every member reset to its own root, in place, before returning — the audit's
+    /// existing representation of "unclustered" — so the cluster metrics computed after this call
+    /// see singletons rather than a cluster production would never have formed.
     /// </summary>
     private static void ApplyClusterMergePolicy(
-        int[] roots, IReadOnlyList<(int Left, int Right, bool IsAuto)> comparisons, MatchingProfile profile)
+        int[] roots, IReadOnlyList<(int Left, int Right, bool IsAuto)> comparisons, MatchingProfile profile,
+        IClusterMergePolicy mergePolicy)
     {
         var membersByRoot = new Dictionary<int, List<int>>();
         for (var i = 0; i < roots.Length; i++)
@@ -502,7 +528,7 @@ public sealed class CorpusAuditService
             // Members comes from the component's own membership list, never from
             // default(ClusterEvidenceCounts) — that reads as a fully-agreeing zero-member cluster.
             var counts = new ClusterEvidenceCounts(members.Count, cmp, agr);
-            if (MergePolicy.Evaluate(counts, profile) == ClusterMergeVerdict.Accepted) continue;
+            if (mergePolicy.Evaluate(counts, profile) == ClusterMergeVerdict.Accepted) continue;
 
             foreach (var member in members) roots[member] = member;
         }
