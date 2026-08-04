@@ -15,4 +15,11 @@ public interface IClusterMergePolicy
     string Name { get; }
 
     ClusterMergeVerdict Evaluate(ClusterEvidenceCounts counts, MatchingProfile profile);
+
+    /// <summary>
+    /// Whether this policy could reject any cluster under this profile. Lets a caller skip the
+    /// bookkeeping a rejection would need when no rejection is possible — without the caller
+    /// having to know how any particular policy decides.
+    /// </summary>
+    bool CanReject(MatchingProfile profile);
 }

@@ -19,6 +19,15 @@ public sealed class CohesionClusterMergePolicy : IClusterMergePolicy
 {
     public string Name => "cohesion";
 
+    /// <summary>Mirrors the two guards Evaluate below actually reads: with both null, the
+    /// cohesion check and the size check are each skipped, so nothing this policy does can ever
+    /// return a non-Accepted verdict.</summary>
+    public bool CanReject(MatchingProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return profile.MinClusterCohesion is not null || profile.MaxAutoClusterSize is not null;
+    }
+
     public ClusterMergeVerdict Evaluate(ClusterEvidenceCounts counts, MatchingProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);

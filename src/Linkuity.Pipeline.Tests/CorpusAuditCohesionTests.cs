@@ -1,11 +1,26 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Clustering;
 using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
 
 public class CorpusAuditCohesionTests
 {
+    /// <summary>
+    /// Rejects on a basis that has nothing to do with MinClusterCohesion/MaxAutoClusterSize —
+    /// standing in for a future policy so the audit's "can this policy reject anything" decision
+    /// can be proven to ask the INJECTED policy rather than recompute CohesionClusterMergePolicy's
+    /// own null-checks. Test-only: production has exactly one IClusterMergePolicy implementation.
+    /// </summary>
+    private sealed class AlwaysRejectMultiRecordPolicy : IClusterMergePolicy
+    {
+        public string Name => "always-reject-test-stub";
+        public bool CanReject(MatchingProfile profile) => true;
+        public ClusterMergeVerdict Evaluate(ClusterEvidenceCounts counts, MatchingProfile profile)
+            => counts.Members > 1 ? ClusterMergeVerdict.RejectedForCohesion : ClusterMergeVerdict.Accepted;
+    }
+
     /// <summary>
     /// The same three-record contradiction the resolver tests use: A merges with B and with C,
     /// B and C are compared and decline. Agreement 2/3.
@@ -63,5 +78,28 @@ public class CorpusAuditCohesionTests
 
         Assert.Equal(1, result.ClusterSummary.UnifiedClusterCount);
         Assert.Equal(1, result.Counts.DirectAutoTruePairs);
+    }
+
+    [Fact]
+    public void APolicyThatCanRejectOnOtherGrounds_IsConsultedEvenWhenBothProfileGuardsAreNull()
+    {
+        // Regression for the bug the fix itself could have introduced: the skip-collection guard
+        // must ask the injected policy, not recompute CohesionClusterMergePolicy's own null-check
+        // inline. Profile() leaves MinClusterCohesion and MaxAutoClusterSize both null — the
+        // condition that made CohesionClusterMergePolicy.CanReject false — yet this policy still
+        // rejects, proving the audit consulted IT rather than short-circuiting on those two fields.
+        var records = new List<EntityRecord>
+        {
+            CorpusAuditFixtures.Org("a1", "Acme Holdings Corp"),
+            CorpusAuditFixtures.Org("a2", "Acme Holdings LLC")
+        };
+        var truth = new Dictionary<string, string> { ["a1"] = "A", ["a2"] = "A" };
+        var profile = CorpusAuditFixtures.Profile();
+
+        var result = new CorpusAuditService(MatchingDefaults.CreateRegistry(), new AlwaysRejectMultiRecordPolicy())
+            .Audit(records, profile, truth);
+
+        Assert.Equal(0, result.ClusterSummary.UnifiedClusterCount);
+        Assert.Equal(2, result.ClusterSummary.SingletonCount);
     }
 }

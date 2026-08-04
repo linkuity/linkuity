@@ -110,12 +110,14 @@ public sealed class CorpusAuditService
         var uf = new UnionFind(records.Count);
         long emitted = 0, floorLifted = 0;
 
-        // The merge policy can only ever refuse a cluster when the profile configures a guard it
-        // reads (CohesionClusterMergePolicy.Evaluate treats both null as "accept unconditionally").
-        // Every profile shipped today leaves both null, so for them this is false and the audit
-        // stays aggregate-only — no pair set, matching the class doc above. Only a profile that
-        // opts into cohesion or a size guard pays for collecting one.
-        var mergePolicyCanReject = profile.MinClusterCohesion is not null || profile.MaxAutoClusterSize is not null;
+        // Asked of the INJECTED policy, not inlined here: which profile fields make rejection
+        // possible is that policy's own knowledge (CohesionClusterMergePolicy.CanReject mirrors
+        // its own Evaluate). Hardcoding CohesionClusterMergePolicy's specific null-checks in this
+        // caller would silently strand a differently-behaved policy injected through the
+        // constructor — the same hardcoding bug the constructor seam exists to close, one layer
+        // down. Every profile shipped today makes CanReject false for the default cohesion policy,
+        // so the audit stays aggregate-only — no pair set, matching the class doc above.
+        var mergePolicyCanReject = _mergePolicy.CanReject(profile);
 
         // Every candidate pair the walk scores, kept only long enough to attribute each one to its
         // FINAL cluster below. Union-find keeps growing for the rest of the walk after this pair is
