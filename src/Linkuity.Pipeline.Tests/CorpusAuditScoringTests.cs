@@ -135,4 +135,26 @@ public class CorpusAuditScoringTests
     public void BandOf_NonComparableBeatsAnyScore()
         => Assert.Equal(CorpusBand.NonComparable,
             CorpusAuditService.BandOf(0.99, comparable: false, CorpusAuditFixtures.Profile()));
+
+    [Fact]
+    public void TheCorpusAuditAcceptsTheEvidenceScorer()
+    {
+        // Without this the audit refuses to measure the change we just built — loudly, but on the
+        // wrong side of a five-minute corpus run.
+        var profile = CorpusAuditFixtures.Clone(CorpusAuditFixtures.Profile(), scoringStrategy: "evidence");
+
+        var ex = Record.Exception(() => CorpusAuditService.ValidateSupportedStrategies(profile));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void TheCorpusAuditStillRefusesAnUnmodelledScorer()
+    {
+        var profile = CorpusAuditFixtures.Clone(CorpusAuditFixtures.Profile(), scoringStrategy: "default");
+
+        var ex = Assert.Throws<ArgumentException>(() => CorpusAuditService.ValidateSupportedStrategies(profile));
+
+        Assert.Contains("scoringStrategy", ex.Message, StringComparison.Ordinal);
+    }
 }

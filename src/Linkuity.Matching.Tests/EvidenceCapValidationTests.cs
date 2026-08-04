@@ -2,28 +2,15 @@ using System.Globalization;
 using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Profiles.Configuration;
 using Linkuity.Matching.Strategies;
-using Linkuity.Matching.Strategies.Defaults;
 
 namespace Linkuity.Matching.Tests;
 
 public class EvidenceCapValidationTests
 {
-    // The "evidence" scoring strategy is what declares the LogOdds scale these tests' thresholds
-    // and caps are expressed on; it is not yet part of MatchingDefaults.CreateRegistry(), so it is
-    // added here rather than forcing every other loader test onto a scale it doesn't use.
-    private static IStrategyRegistry Registry()
-    {
-        var defaults = MatchingDefaults.CreateRegistry();
-        return new DefaultStrategyRegistry(
-            normalization: defaults.Normalization.Values,
-            blocking: defaults.Blocking.Values,
-            candidateRetrieval: defaults.CandidateRetrieval.Values,
-            similarity: defaults.Similarity.Values,
-            scoring: [.. defaults.Scoring.Values, new EvidenceScoringStrategy()],
-            decision: defaults.Decision.Values,
-            clustering: defaults.Clustering.Values,
-            evaluators: defaults.Evaluators.Values);
-    }
+    // The "evidence" scoring strategy — the source of the LogOdds scale these tests' thresholds
+    // and caps are expressed on — is registered in MatchingDefaults.CreateRegistry() alongside the
+    // others (stage 1a), so no local registry assembly is needed here anymore.
+    private static IStrategyRegistry Registry() => MatchingDefaults.CreateRegistry();
 
     private static MatchingProfile Load(string json) => new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
 

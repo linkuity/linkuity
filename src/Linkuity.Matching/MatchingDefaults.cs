@@ -39,7 +39,7 @@ public static class MatchingDefaults
             ],
             candidateRetrieval: [new LinearCandidateRetrievalStrategy(), new BlockingAwareLinearRetrievalStrategy(), ..additionalRetrieval],
             similarity: [new DefaultSimilarityStrategy(), new WeightedFieldSimilarityStrategy(evaluators)],
-            scoring: [new DefaultScoringStrategy(), new WeightedScoringStrategy(), new IdentifierAwareWeightedScoringStrategy()],
+            scoring: [new DefaultScoringStrategy(), new WeightedScoringStrategy(), new IdentifierAwareWeightedScoringStrategy(), new EvidenceScoringStrategy()],
             decision: [new ThresholdDecisionStrategy()],
             clustering: [new UnionFindClusteringStrategy()],
             evaluators: evaluators);

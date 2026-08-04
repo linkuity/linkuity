@@ -14,7 +14,7 @@ namespace Linkuity.Pipeline;
 /// </summary>
 public sealed class CorpusAuditService
 {
-    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted"];
+    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted", "evidence"];
 
     /// <summary>Interned blocking-key index. RecordKeys rows are ascending — Task 4's
     /// lowest-shared-key ownership rule needs it for a linear intersection scan.</summary>
@@ -488,7 +488,7 @@ public sealed class CorpusAuditService
         Require(profile.SimilarityStrategy == "field-weighted", "similarityStrategy",
             profile.SimilarityStrategy, "field-weighted");
         Require(SupportedScoring.Contains(profile.ScoringStrategy, StringComparer.Ordinal),
-            "scoringStrategy", profile.ScoringStrategy, "weighted or identifier-weighted");
+            "scoringStrategy", profile.ScoringStrategy, "weighted, identifier-weighted or evidence");
         Require(profile.DecisionStrategy == "threshold", "decisionStrategy",
             profile.DecisionStrategy, "threshold");
         Require(profile.ClusteringStrategy == "union-find", "clusteringStrategy",
