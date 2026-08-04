@@ -37,9 +37,9 @@ public sealed record FieldEvidence
 
     /// <summary>
     /// Ceiling on agreement evidence, in bits. Null means uncapped, which is reserved for verified
-    /// identifiers where "this alone is sufficient" is the field's purpose. Null must be set
-    /// deliberately: <see cref="Linkuity.Matching.Profiles.Configuration.MatchingProfileConfigLoader"/>
-    /// rejects a null cap on any field that is not declared an identifier.
+    /// identifiers where "this alone is sufficient" is the field's purpose. Null must be a
+    /// deliberate declaration rather than an omission — profile-load validation enforcing that is
+    /// not yet in place and arrives with the cap rules.
     /// </summary>
     public double? MaxAgreementBits
     {
