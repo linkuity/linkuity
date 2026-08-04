@@ -198,6 +198,62 @@ public class ScoringAuditServiceTests
         Assert.Contains("field-weighted", ex.Message);
     }
 
+    /// <summary>
+    /// The evidence scorer produces unbounded log-odds scores, not the [0,1] range every other
+    /// shipped scorer does — CorpusAuditService already threads scoring.Scale through so its
+    /// thresholds are read correctly for either scale. This pins that ScoringAuditService does
+    /// the same: accepts 'evidence', and reads its thresholds (8.0/4.0 here, not [0,1]) on the
+    /// scorer's own scale rather than rejecting or silently clamping them.
+    /// </summary>
+    [Fact]
+    public void EvidenceScoringStrategy_IsAccepted_WithLogOddsThresholds()
+    {
+        var profile = CorpusAuditFixtures.EvidenceProfile();
+        var records = new[]
+        {
+            CorpusAuditFixtures.Org("e1", "Acme Holdings Corp"),
+            CorpusAuditFixtures.Org("e2", "Acme Holdings Corp")
+        };
+
+        var result = NewService().Audit(records, profile);
+
+        Assert.Equal("evidence", result.ScoringStrategyName);
+        Assert.Equal(8.0, result.EffectiveAutoThreshold);
+        Assert.Equal(4.0, result.EffectiveReviewThreshold);
+
+        var pair = Assert.Single(result.Pairs);
+        Assert.True(pair.Comparable);
+        // log2(0.9/0.1) ~= 3.17 bits for one exactly-matching field: unbounded evidence, not a
+        // fraction of [0,1] the way every unit-interval scorer's score would be.
+        Assert.True(pair.Score > 1.0, $"expected an unbounded log-odds score, got {pair.Score}");
+    }
+
+    /// <summary>Widening the allow-list to admit 'evidence' must not turn it into a no-op: a
+    /// genuinely unsupported scorer is still refused, with 'evidence' now named among the
+    /// accepted values.</summary>
+    [Fact]
+    public void StillUnsupportedScoringStrategy_IsRejectedWithClearError_NamingEvidenceAsAccepted()
+    {
+        var profile = new MatchingProfile
+        {
+            ContentType = "organization",
+            Fields = OrgProfile().Fields,
+            NormalizationStrategy = "identity",
+            BlockingStrategies = ["exact-value", "token"],
+            CandidateRetrievalStrategy = "blocking-linear",
+            SimilarityStrategy = "field-weighted",
+            ScoringStrategy = "bogus-scorer",
+            DecisionStrategy = "threshold",
+            ClusteringStrategy = "union-find",
+            AutoMatchThreshold = 0.41,
+            ReviewThreshold = 0.31
+        };
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NewService().Audit([Rec("x", "ACME")], profile));
+        Assert.Contains("bogus-scorer", ex.Message);
+        Assert.Contains("evidence", ex.Message);
+    }
+
     [Fact]
     public void NonIdentityNormalization_IsRejectedWithClearError()
     {
@@ -223,13 +279,28 @@ public class ScoringAuditServiceTests
     [Theory]
     [InlineData(0.41, 0.41)]  // review == auto -> invalid (loader requires strict)
     [InlineData(0.3, 0.5)]    // review > auto after override
-    [InlineData(1.5, 0.3)]    // auto > 1
-    public void InvalidThresholdOverrides_AreRejected(double auto, double review)
+    public void InvalidThresholdOverrides_ReviewNotBelowAuto_AreRejected(double auto, double review)
     {
         var ex = Assert.Throws<ArgumentException>(() =>
             NewService().Audit([Rec("x", "ACME")], OrgProfile(),
                 autoThresholdOverride: auto, reviewThresholdOverride: review));
         Assert.Contains("review", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Thresholds are now validated by MatchThresholds itself (scale-aware — see
+    /// EvidenceScoringStrategy_IsAccepted_WithLogOddsThresholds above), not by a hand-rolled
+    /// "auto &lt;= 1" check in this method: OrgProfile's scorer is 'identifier-weighted', which
+    /// produces UnitInterval scores, so a threshold of 1.5 is out of range FOR THIS SCORER
+    /// specifically, not out of range in general the way it would be for 'evidence'.
+    /// </summary>
+    [Fact]
+    public void InvalidThresholdOverride_AboveUnitInterval_IsRejected()
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NewService().Audit([Rec("x", "ACME")], OrgProfile(),
+                autoThresholdOverride: 1.5, reviewThresholdOverride: 0.3));
+        Assert.Contains("UnitInterval", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

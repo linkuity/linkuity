@@ -151,6 +151,69 @@ public class LocalBatchRunnerAblationTests
         Assert.Contains("100% precision is NOT reachable at ANY threshold", output, StringComparison.Ordinal);
     }
 
+    // ---- evidence scorer (log-odds scale) ----
+
+    /// <summary>
+    /// Same records/truth as WriteFixture, but scored with 'evidence' instead of 'weighted':
+    /// each of "b"/"d" carries FieldEvidence (sameEntityAgreement 0.9, chanceAgreement 0.1,
+    /// capped at 6 bits — well under the 8.0 auto threshold, as the config loader requires for a
+    /// non-identifier field). Hand-verified: log2(0.9/0.1) ~= 3.169925 bits per agreeing field, so
+    /// r1-r2 (both fields agree) totals ~6.339850 and r1-r3/r2-r3 (b agrees, d disagrees, and
+    /// disagreement is the same magnitude negated) total ~0 -- a clean separation reachable at
+    /// 100% precision, recall 100%, at cut ~6.3399: comfortably outside [0,1], which is exactly
+    /// what an evidence-scored profile is supposed to look like and a UnitInterval-only harness
+    /// could never accept.
+    /// </summary>
+    private static string WriteEvidenceProfile(string dir)
+    {
+        var profile = Path.Combine(dir, "evidence.profile.json");
+        File.WriteAllText(profile, """
+        {
+          "contentType": "person",
+          "fields": [
+            { "name": "b", "semanticType": "LastName", "roles": ["Matchable","Blocking"],
+              "similarityEvaluator": "exact", "weight": 1.0,
+              "evidence": { "sameEntityAgreement": 0.9, "chanceAgreement": 0.1, "maxAgreementBits": 6.0 } },
+            { "name": "d", "semanticType": "FirstName", "roles": ["Matchable"],
+              "similarityEvaluator": "exact", "weight": 1.0,
+              "evidence": { "sameEntityAgreement": 0.9, "chanceAgreement": 0.1, "maxAgreementBits": 6.0 } }
+          ],
+          "normalizationStrategy": "identity",
+          "blockingStrategies": ["token-name"],
+          "candidateRetrievalStrategy": "linear",
+          "similarityStrategy": "field-weighted",
+          "scoringStrategy": "evidence",
+          "decisionStrategy": "threshold",
+          "clusteringStrategy": "union-find",
+          "autoMatchThreshold": 8.0,
+          "reviewThreshold": 4.0
+        }
+        """);
+        return profile;
+    }
+
+    [Fact]
+    public async Task EvidenceScoredProfile_RunsToCompletion_OnLogOddsThresholds_RatherThanBeingRefused()
+    {
+        var f = WriteFixture();
+        var evidenceProfile = WriteEvidenceProfile(f.Dir);
+
+        var (exit, output, err) = await RunAsync(
+        [
+            "match", "corpus", "ablate", "--input", f.Csv, "--ground-truth", f.GroundTruth,
+            "--profile", evidenceProfile, "--widths", "full=b,d"
+        ]);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("", err);
+        Assert.DoesNotContain("requires scoringStrategy", output, StringComparison.Ordinal);
+        Assert.Contains("scoring strategy: evidence", output, StringComparison.Ordinal);
+        // The 100%-precision threshold sits at ~6.34 bits -- far outside [0,1], proof this is
+        // read on the evidence scorer's own LogOdds scale rather than being clamped or refused.
+        Assert.Contains("6.3399", output, StringComparison.Ordinal);
+        Assert.Contains("100.0 %", output, StringComparison.Ordinal); // recall at that cut
+    }
+
     [Fact]
     public async Task Verb_IsDispatchedFromMatchCorpus_BeforeTheGenericAuditHandler()
     {

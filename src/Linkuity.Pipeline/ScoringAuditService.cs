@@ -19,7 +19,7 @@ namespace Linkuity.Pipeline;
 /// </summary>
 public sealed class ScoringAuditService
 {
-    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted"];
+    private static readonly string[] SupportedScoring = ["weighted", "identifier-weighted", "evidence"];
     private const string RequiredSimilarity = "field-weighted";
 
     private readonly IStrategyRegistry _registry;
@@ -48,7 +48,7 @@ public sealed class ScoringAuditService
                 $"'{profile.SimilarityStrategy}'): per-field breakdowns assume field-named signals.");
         if (!SupportedScoring.Contains(profile.ScoringStrategy, StringComparer.Ordinal))
             throw new ArgumentException(
-                "Scoring audit v1 requires scoringStrategy 'weighted' or 'identifier-weighted' " +
+                "Scoring audit v1 requires scoringStrategy weighted, identifier-weighted or evidence " +
                 $"(profile has '{profile.ScoringStrategy}').");
         if (!string.Equals(profile.NormalizationStrategy, "identity", StringComparison.Ordinal))
             throw new ArgumentException(
@@ -63,11 +63,20 @@ public sealed class ScoringAuditService
         if (duplicate is not null)
             throw new ArgumentException($"Duplicate SourceRecordId in input: '{duplicate.Key}'.");
 
+        // Resolved here, before the thresholds, rather than down with `similarity` below: the
+        // scale a threshold pair is valid on depends on the SCORER, not on a hardcoded [0,1]
+        // assumption. Evidence's LogOdds scale is unbounded (auto=8, review=4 is ordinary), so a
+        // bound baked into this method rather than asked of MatchThresholds would silently
+        // re-impose the unit-interval-only assumption CorpusAuditService already dropped for the
+        // same scorer — one more of the "evidence's scale not carried through" instances.
+        var scoring = _registry.Scoring[profile.ScoringStrategy];
+
         var auto = autoThresholdOverride ?? profile.AutoMatchThreshold;
         var review = reviewThresholdOverride ?? profile.ReviewThreshold;
-        if (!(review >= 0 && review < auto && auto <= 1))
-            throw new ArgumentException(
-                $"Thresholds must satisfy 0 <= review < auto <= 1 (auto={auto}, review={review}).");
+        // Thresholds are read on the scale the selected scorer actually produces. Construction
+        // itself validates the pair (auto > review always; [0,1] only on UnitInterval) — no
+        // separate hand-rolled range check here to drift out of sync with that rule.
+        var thresholds = new MatchThresholds(auto, review, scoring.Scale);
         var overridden = autoThresholdOverride is not null || reviewThresholdOverride is not null;
 
         // Normalize all records once for scoring. The batch path normalizes only the
@@ -100,10 +109,6 @@ public sealed class ScoringAuditService
         }
 
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
-        var scoring = _registry.Scoring[profile.ScoringStrategy];
-
-        // Thresholds are read on the scale the selected scorer actually produces.
-        var thresholds = new MatchThresholds(auto, review, scoring.Scale);
 
         ScoredPair Score(string left, string right, bool reachable, bool? isTrue)
         {
