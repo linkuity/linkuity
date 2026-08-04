@@ -100,6 +100,13 @@ public sealed record MatchingProfile
     /// <c>IncrementalResolver</c>. Cohesion enforcement ships in stage 1b, once the batch path has
     /// its own comparison-counting story.
     /// <para>
+    /// While this is null, <c>IncrementalResolver</c> does not accumulate <c>ComparisonsInside</c>/
+    /// <c>AgreementsInside</c> either (<c>IClusterMergePolicy.CanReject</c> gates the bookkeeping,
+    /// not only the rejection it exists to support — see the fix for the quadratic cost of always
+    /// doing it). Turning this on for a project that already has ingested data is therefore a
+    /// re-ingest, not a live toggle onto retroactively-known history: there is none.
+    /// </para>
+    /// <para>
     /// When enabled, the recommended value is 0.50 — a simple majority, chosen by argument rather
     /// than by measurement: a cluster whose own comparisons disagree more often than they agree is
     /// self-contradictory on its face, and that holds without reference to any corpus. A customer

@@ -100,7 +100,18 @@ public sealed class IncrementalResolver
             ? Array.Empty<EntityRecord>()
             : context.GetLinearCorpus(request.ProjectId);
 
-        var (edges, allComparisons) = BuildResolutionEdges(incomingRecords, existingRecords, callProfile, batchCallProfile, request);
+        // [C1] Mirrors CorpusAuditService's identical gate (see its own mergePolicyCanReject):
+        // whether the injected policy could reject ANY cluster under this profile. Every shipped
+        // profile has MinClusterCohesion and MaxAutoClusterSize both null in stage 1a, so this is
+        // false today. When false, BuildResolutionEdges below does not retain sub-review
+        // comparisons at all, and the cohesion tallying downstream is skipped, so counters stay
+        // 0/0 rather than silently reset — cohesion enforcement turning on for an already-ingested
+        // project requires re-ingest, which is the documented migration path (see
+        // MatchingProfile.MinClusterCohesion), not something this method decides on its own later.
+        var mergePolicyCanReject = _mergePolicy.CanReject(profile);
+
+        var (edges, allComparisons) = BuildResolutionEdges(
+            incomingRecords, existingRecords, callProfile, batchCallProfile, request, mergePolicyCanReject);
 
         var incomingIds = incomingRecords.Select(r => r.Id).ToHashSet();
         var touchedExistingIds = edges
@@ -132,6 +143,32 @@ public sealed class IncrementalResolver
 
         var components = ResolveComponents(incomingRecords, touchedClusters, edges);
 
+        // [C1] Single O(allComparisons) pass replacing the per-component rescan MaterializeComponent
+        // used to do (O(components x allComparisons), quadratic on a large single-batch ingest).
+        // recordToComponentIndex is built once so a comparison's endpoints resolve to a component
+        // in O(1); componentTally is then read O(1) per component below instead of rescanned. When
+        // AllComparisons is empty (cohesion off — see mergePolicyCanReject above), both are
+        // trivially empty and every component reads (0, 0), which is byte-identical to what the
+        // old per-component scan would have found scanning nothing.
+        var recordToComponentIndex = new Dictionary<Guid, int>();
+        for (var i = 0; i < components.Count; i++)
+            foreach (var id in components[i])
+                recordToComponentIndex[id] = i;
+
+        var componentTally = new Dictionary<int, (long Comparisons, long Agreements)>();
+        foreach (var comparison in allComparisons)
+        {
+            if (!recordToComponentIndex.TryGetValue(comparison.LeftId, out var leftIndex) ||
+                !recordToComponentIndex.TryGetValue(comparison.RightId, out var rightIndex) ||
+                leftIndex != rightIndex)
+                continue;
+
+            var (comparisons, agreements) = componentTally.GetValueOrDefault(leftIndex);
+            componentTally[leftIndex] = (
+                comparisons + 1,
+                agreements + (comparison.Band == MatchDecision.AutoMatch ? 1 : 0));
+        }
+
         // Pre-seed clusterByRecord from existing cluster memberships for edge accounting.
         var clusterByRecord = new Dictionary<Guid, Guid>();
         foreach (var cluster in touchedClusters)
@@ -146,10 +183,11 @@ public sealed class IncrementalResolver
         // component, because a dissolved component no longer has one cluster id to share.
         var affectedClusterIds = new HashSet<Guid>();
         var singletonClusters = 0;
-        foreach (var component in components)
+        for (var i = 0; i < components.Count; i++)
         {
             singletonClusters += MaterializeComponent(
-                ws, request, profile, component, touchedClusters, edges, allComparisons, incomingIds, now,
+                ws, request, profile, components[i], touchedClusters, edges,
+                componentTally.GetValueOrDefault(i), incomingIds, now,
                 clusterByRecord, affectedClusterIds);
         }
 
@@ -171,18 +209,31 @@ public sealed class IncrementalResolver
                 comparisons + 1,
                 agreements + (comparison.Band == MatchDecision.AutoMatch ? 1 : 0));
         }
-        foreach (var (clusterId, delta) in cohesionDeltas)
+        if (cohesionDeltas.Count > 0)
         {
-            // ReplaceCluster/MergeClusters (above, inside MaterializeComponent) already carried
-            // each cluster's PRIOR stored counts forward onto the object now in ws.Clusters — this
-            // only adds THIS run's tally on top, so a cluster touched across many ingests keeps
-            // accumulating rather than resetting.
-            var cluster = ws.Clusters.First(c => c.Id == clusterId);
-            ws.Clusters.RemoveAll(c => c.Id == clusterId);
-            ws.Clusters.Add(WithCohesionCounts(
-                cluster,
-                cluster.ComparisonsInside + delta.Comparisons,
-                cluster.AgreementsInside + delta.Agreements));
+            // [M2] ws.Clusters.First + RemoveAll per cluster (the original shape here) is
+            // O(clusters) EACH, done once per touched cluster — O(clusters^2) overall. Indexing
+            // once up front and writing back by position makes the whole loop O(clusters +
+            // cohesionDeltas.Count). Safe because nothing between building the index and using it
+            // adds or removes from ws.Clusters — this loop only replaces entries it already knows
+            // the position of.
+            var clusterIndexById = new Dictionary<Guid, int>();
+            for (var i = 0; i < ws.Clusters.Count; i++)
+                clusterIndexById[ws.Clusters[i].Id] = i;
+
+            foreach (var (clusterId, delta) in cohesionDeltas)
+            {
+                // ReplaceCluster/MergeClusters (above, inside MaterializeComponent) already carried
+                // each cluster's PRIOR stored counts forward onto the object now in ws.Clusters —
+                // this only adds THIS run's tally on top, so a cluster touched across many ingests
+                // keeps accumulating rather than resetting.
+                var index = clusterIndexById[clusterId];
+                var cluster = ws.Clusters[index];
+                ws.Clusters[index] = WithCohesionCounts(
+                    cluster,
+                    cluster.ComparisonsInside + delta.Comparisons,
+                    cluster.AgreementsInside + delta.Agreements);
+            }
         }
 
         // Add MatchEdges for auto-band edges whose endpoints resolve into the same cluster (lc == rc).
@@ -367,10 +418,16 @@ public sealed class IncrementalResolver
         IReadOnlyList<EntityRecord> existing,
         MatchingProfile existingCallProfile,
         MatchingProfile batchCallProfile,
-        IncrementalIngestRequest request)
+        IncrementalIngestRequest request,
+        bool captureAllComparisons)
     {
         var edges = new Dictionary<(Guid, Guid), ResolutionEdge>();
-        var allComparisons = new Dictionary<(Guid, Guid), ResolutionEdge>();
+        // [C1] Null, not an empty dictionary, when the merge policy cannot reject anything under
+        // this profile — the same reasoning as CorpusAuditService's own `comparisons` local:
+        // retaining every sub-review pair (each carrying a Breakdown list) here only for a rollup
+        // that MaterializeComponent used to rescan per component was the quadratic blowup; when
+        // cohesion cannot act, there is nothing for AllComparisons to be read for.
+        var allComparisons = captureAllComparisons ? new Dictionary<(Guid, Guid), ResolutionEdge>() : null;
 
         // Built once per resolve rather than per edge: constructing it validates the request's
         // thresholds, and an invalid pair should fail the whole call rather than the first edge
@@ -391,7 +448,8 @@ public sealed class IncrementalResolver
             // keep-max on the canonical (lo, hi) key is the existing edges policy, applied here
             // identically so AllComparisons and Edges never disagree about the score of a pair
             // both contain.
-            if (!allComparisons.TryGetValue((lo, hi), out var currentAll) || score > currentAll.Score)
+            if (allComparisons is not null &&
+                (!allComparisons.TryGetValue((lo, hi), out var currentAll) || score > currentAll.Score))
                 allComparisons[(lo, hi)] = new ResolutionEdge(lo, hi, score, band, breakdown);
 
             if (band == MatchDecision.NoMatch) return;
@@ -435,7 +493,7 @@ public sealed class IncrementalResolver
             foreach (var (from, to, score, breakdown) in local)
                 AddComparison(from, to, score, breakdown);
 
-        return (edges.Values.ToList(), allComparisons.Values.ToList());
+        return (edges.Values.ToList(), allComparisons?.Values.ToList() ?? []);
     }
 
     private static IReadOnlyList<IReadOnlyList<Guid>> ResolveComponents(
@@ -475,7 +533,7 @@ public sealed class IncrementalResolver
         IReadOnlyList<Guid> component,
         List<Cluster> touchedClusters,
         IReadOnlyList<ResolutionEdge> edges,
-        IReadOnlyList<ResolutionEdge> allComparisons,
+        (long Comparisons, long Agreements) thisRunTally,
         IReadOnlySet<Guid> incomingIds,
         DateTimeOffset now,
         Dictionary<Guid, Guid> clusterByRecord,
@@ -490,19 +548,13 @@ public sealed class IncrementalResolver
         // Consulted BEFORE anything is created or replaced. The counts here are exactly what the
         // cluster WOULD carry if materialized: prior stored counts carried forward the same way
         // ReplaceCluster/MergeClusters carry them below, plus this run's own within-component
-        // comparisons (computed directly from componentSet rather than clusterByRecord, which does
-        // not yet reflect this component's final cluster id). Members comes from the component's
-        // own record count — never from a Cluster object, which for a brand-new component does not
-        // exist yet and for default(ClusterEvidenceCounts) would silently read as a fully-agreeing
-        // zero-member cluster.
-        long thisRunComparisons = 0, thisRunAgreements = 0;
-        foreach (var comparison in allComparisons)
-        {
-            if (!componentSet.Contains(comparison.LeftId) || !componentSet.Contains(comparison.RightId))
-                continue;
-            thisRunComparisons++;
-            if (comparison.Band == MatchDecision.AutoMatch) thisRunAgreements++;
-        }
+        // comparisons — [C1] pre-tallied once for every component in a single O(allComparisons)
+        // pass in Resolve (recordToComponentIndex / componentTally), rather than rescanned here per
+        // component, which was O(components x allComparisons) on a large single-batch ingest.
+        // Members comes from the component's own record count — never from a Cluster object, which
+        // for a brand-new component does not exist yet and for default(ClusterEvidenceCounts) would
+        // silently read as a fully-agreeing zero-member cluster.
+        var (thisRunComparisons, thisRunAgreements) = thisRunTally;
         var (priorComparisons, priorAgreements) = existingClusters.Count switch
         {
             0 => (0L, 0L),

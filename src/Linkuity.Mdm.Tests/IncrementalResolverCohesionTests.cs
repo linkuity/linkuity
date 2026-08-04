@@ -228,8 +228,13 @@ public class IncrementalResolverCohesionTests
     {
         // Stage 1a's actual default: MinClusterCohesion left unset (null), not merely a lenient
         // number. Growing {A,B,C} (0.667) to {A,B,C,D,E} (0.40 -- see the DName/EName comment)
-        // proves the policy is genuinely off, not just generous: 0.40 fails every threshold this
-        // file's other tests use to reject (0.50 and 0.70 both), yet the cluster forms unchanged.
+        // would fail every threshold this file's other tests use to reject (0.50 and 0.70 both)
+        // if it were tracked at all — and [C1] gates comparison capture and cohesion tallying on
+        // IClusterMergePolicy.CanReject(profile), which is false whenever MinClusterCohesion and
+        // MaxAutoClusterSize are both null. So the mechanism is inert two ways at once here: the
+        // cluster forms unchanged, AND its counters read 0/0 rather than the unfavorable 10/4 they
+        // would read if tracking ran unconditionally. Turning cohesion on later is a re-ingest, not
+        // a live toggle onto retroactively-known history — see MatchingProfile.MinClusterCohesion.
         var context = new InMemoryResolutionContext();
         var batch1 = Guid.NewGuid();
         var a = Record("a", AName, batch1);
@@ -248,9 +253,8 @@ public class IncrementalResolverCohesionTests
         var (_, m3) = Resolve([e], context, batch3, minClusterCohesion: null);
 
         var cluster = Assert.Single(m3.ClustersToUpsert, cl => cl.MemberEntityRecordIds.Count == 5);
-        Assert.Equal(10, cluster.ComparisonsInside);
-        Assert.Equal(4, cluster.AgreementsInside);
-        Assert.True(cluster.AgreementsInside / (double)cluster.ComparisonsInside < 0.50, "fixture sanity: rate must be below 0.50");
+        Assert.Equal(0, cluster.ComparisonsInside);
+        Assert.Equal(0, cluster.AgreementsInside);
         Assert.Empty(m3.DissolutionEventsToInsert);
     }
 

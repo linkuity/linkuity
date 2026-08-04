@@ -27,6 +27,13 @@ public class ClusterCohesionCounterTests
     // One canonical-jaccard name field, token-only names so the organization canonicalizer (which
     // strips leading articles and legal suffixes) has nothing to strip and the jaccard values
     // above land exactly where the arithmetic says they should.
+    //
+    // MinClusterCohesion = 0.5 (below every agreement rate this fixture produces — 1.0 and 2/3 —
+    // so it never changes which clusters form) is required here, not incidental: [C1] gates
+    // comparison capture and cohesion tallying on IClusterMergePolicy.CanReject(profile), which is
+    // false for MinClusterCohesion/MaxAutoClusterSize both null. Counters read 0/0 while the
+    // policy cannot reject anything under a profile, by design — see
+    // CountersStayZeroWhenThePolicyCannotRejectAnything below for that case on its own.
     private static MatchingProfile Profile() => new()
     {
         ContentType = "organization",
@@ -49,7 +56,8 @@ public class ClusterCohesionCounterTests
         DecisionStrategy = "threshold",
         ClusteringStrategy = "union-find",
         AutoMatchThreshold = 0.41,
-        ReviewThreshold = 0.31
+        ReviewThreshold = 0.31,
+        MinClusterCohesion = 0.5
     };
 
     // BlockingKeys are set explicitly and identically on every fixture record, so candidacy in
@@ -70,8 +78,11 @@ public class ClusterCohesionCounterTests
 
     private static (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
         IReadOnlyList<EntityRecord> incoming, InMemoryResolutionContext context, Guid batchId)
+        => Resolve(incoming, context, batchId, Profile());
+
+    private static (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
+        IReadOnlyList<EntityRecord> incoming, InMemoryResolutionContext context, Guid batchId, MatchingProfile profile)
     {
-        var profile = Profile();
         var request = new IncrementalIngestRequest(
             ProjectId, SourceId, batchId, incoming,
             AutoMatchThreshold: profile.AutoMatchThreshold, ReviewThreshold: profile.ReviewThreshold);
@@ -201,5 +212,29 @@ public class ClusterCohesionCounterTests
         var establishedCluster = context.Clusters.Single(c => c.Id == establishedClusterId);
         Assert.Equal(1, establishedCluster.ComparisonsInside);
         Assert.Equal(1, establishedCluster.AgreementsInside);
+    }
+
+    [Fact]
+    public void CountersStayZeroWhenThePolicyCannotRejectAnything()
+    {
+        // [C1] MinClusterCohesion/MaxAutoClusterSize both null (the stage-1a shipped default) means
+        // IClusterMergePolicy.CanReject(profile) is false, and IncrementalResolver now skips
+        // comparison capture and cohesion tallying entirely rather than doing the bookkeeping for
+        // counters nothing can ever read: same {A,B,C} comparisons as
+        // ARejectionBelowTheReviewThreshold_IsCounted (3 compared, 2 agreed), but the cluster's
+        // stored counters must read 0/0, not 3/2. This is a deliberate consequence, not a gap:
+        // turning cohesion on for an already-ingested project is a re-ingest, not a live toggle.
+        var off = Profile() with { MinClusterCohesion = null };
+        var batch = Guid.NewGuid();
+        var a = Record("a", AName, batch);
+        var b = Record("b", BName, batch);
+        var c = Record("c", CName, batch);
+
+        var (_, mutations) = Resolve([a, b, c], new InMemoryResolutionContext(), batch, off);
+
+        var cluster = Assert.Single(mutations.ClustersToUpsert);
+        Assert.Equal(3, cluster.MemberEntityRecordIds.Count);
+        Assert.Equal(0, cluster.ComparisonsInside);
+        Assert.Equal(0, cluster.AgreementsInside);
     }
 }
