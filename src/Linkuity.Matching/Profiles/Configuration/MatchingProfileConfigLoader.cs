@@ -80,6 +80,47 @@ public sealed class MatchingProfileConfigLoader
             .ToList();
     }
 
+    /// <summary>
+    /// Refuses a profile whose resolved scoring strategy produces scores on a scale live
+    /// matching cannot carry yet. <see cref="Strategies.IDecisionStrategy.Decide"/>, and the
+    /// threshold construction inside <c>IncrementalResolver</c> and <c>BatchMatchingService</c>,
+    /// all build <see cref="MatchThresholds"/> on the default <see cref="ScoreScale.UnitInterval"/>
+    /// with no way for a caller to supply a different one — giving them that way is an interface
+    /// change (<c>IDecisionStrategy.Decide</c> does not receive the registry a scale would come
+    /// from) reserved for a later stage, not this fix. Before "evidence" (<see cref="ScoreScale.LogOdds"/>)
+    /// was registered, naming it in a profile failed at config time with "unknown scoring
+    /// strategy". This restores that same clean, config-time failure for the paths that would
+    /// otherwise crash on the first scored pair with a bare <see cref="ArgumentOutOfRangeException"/>.
+    /// <para>
+    /// Deliberately NOT called from <see cref="LoadFromJson"/>/<see cref="LoadFromFile"/>/
+    /// <see cref="LoadFromDirectory"/> themselves: <c>CorpusAuditService</c> already threads the
+    /// resolved scale through its own scoring (see its <c>BandOf</c>) and explicitly lists
+    /// "evidence" as a scoring strategy it supports, measuring it is the whole point of stage 1a.
+    /// Folding this check into the loader unconditionally would make that measurement path unable
+    /// to load the very profiles it exists to measure. Call this only where a loaded profile is
+    /// about to be handed to live matching (durable ingest, local batch matching) — see its call
+    /// sites in <c>MatchingServiceCollectionExtensions</c> and <c>LocalBatchRunner</c>.
+    /// </para>
+    /// </summary>
+    public static void RequireLiveMatchingScale(MatchingProfile profile, IStrategyRegistry registry, string source)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(registry);
+
+        var scale = registry.Scoring[profile.ScoringStrategy].Scale;
+        if (scale == ScoreScale.UnitInterval)
+            return;
+
+        throw new MatchingProfileConfigException(
+            $"Matching profile '{source}' uses scoringStrategy '{profile.ScoringStrategy}', which produces " +
+            $"scores on the {scale} scale. Live matching (durable incremental ingest, local batch matching, " +
+            $"and threshold decisions) always classifies bands on the {ScoreScale.UnitInterval} scale and has " +
+            $"no way yet to carry a different one, so autoMatchThreshold ({profile.AutoMatchThreshold}) / " +
+            $"reviewThreshold ({profile.ReviewThreshold}) would throw at the first scored pair instead of " +
+            "classifying anything. This profile can still be loaded for corpus-audit measurement, which does " +
+            "carry its own scale; it cannot yet be used for live matching.");
+    }
+
     private static MatchingProfile Build(MatchingProfileDocument document, IStrategyRegistry registry, string source)
     {
         var contentType = Require(document.ContentType, "contentType", source);

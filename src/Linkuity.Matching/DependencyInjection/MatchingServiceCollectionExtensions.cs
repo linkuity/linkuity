@@ -74,6 +74,12 @@ public static class MatchingServiceCollectionExtensions
                     ? loader.LoadFromDirectory(path, registry)
                     : (IEnumerable<MatchingProfile>)[loader.LoadFromFile(path, registry)])
                 .ToList();
+            // This provider feeds the durable ingest path (IncrementalResolver /
+            // ThresholdDecisionStrategy), which always builds thresholds on ScoreScale.UnitInterval
+            // — see MatchingProfileConfigLoader.RequireLiveMatchingScale. A profile loaded here that
+            // resolves to a different scale must fail now, at startup, not on the first ingest.
+            foreach (var profile in loaded)
+                MatchingProfileConfigLoader.RequireLiveMatchingScale(profile, registry, profile.ContentType);
             return new DefaultMatchingProfileProvider(
                 DefaultMatchingProfileProvider.BuiltInProfiles(), loaded);
         });
