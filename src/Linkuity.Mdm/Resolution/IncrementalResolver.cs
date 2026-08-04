@@ -145,17 +145,14 @@ public sealed class IncrementalResolver
                 clusterByRecord[recordId] = clusterId;
         }
 
-        // Every comparison whose endpoints land in the SAME cluster is recorded, not only the
-        // ones that matched. Cohesion is agreements over comparisons, and without the rejections
-        // the denominator is unknowable — a cluster whose records disagree looks identical to one
-        // the engine never compared.
-        //
-        // The same-cluster filter is what keeps this affordable. A rejection between records that
-        // stay apart says nothing about either cluster: on 1,052,432 SEC records, keeping only
-        // same-cluster rejections is 574,690 rows against 11,000,007 for keeping all of them.
+        // Add MatchEdges for auto-band edges whose endpoints resolve into the same cluster (lc == rc).
+        // Auto-band bridge edges end with both endpoints in the survivor (lc == rc after component merge)
+        // and are also recorded here. Only review-band cross-cluster edges become cluster_merge_suggestion
+        // review tasks (see CreateBatchReviewTasks).
         var autoMatches = 0;
         var autoMergedIncomingIds = new HashSet<Guid>();
-        foreach (var edge in edges.Where(e => incomingIds.Contains(e.LeftId) || incomingIds.Contains(e.RightId)))
+        foreach (var edge in edges.Where(e => e.Band == MatchDecision.AutoMatch
+                                              && (incomingIds.Contains(e.LeftId) || incomingIds.Contains(e.RightId))))
         {
             if (!clusterByRecord.TryGetValue(edge.LeftId, out var lc) ||
                 !clusterByRecord.TryGetValue(edge.RightId, out var rc) ||
@@ -171,15 +168,13 @@ public sealed class IncrementalResolver
                 RightEntityRecordId = edge.RightId,
                 Score = edge.Score,
                 Method = "incremental",
-                Decision = DecisionName(edge.Band),
+                Decision = "auto",
                 Breakdown = edge.Breakdown,
                 Scorer = profile.ScoringStrategy,
                 ProfileContentType = profile.ContentType,
                 ProfileFingerprint = ProfileFingerprint.Of(profile),
                 CreatedAt = now
             });
-
-            if (edge.Band != MatchDecision.AutoMatch) continue;
             autoMatches++;
             if (incomingIds.Contains(edge.LeftId)) autoMergedIncomingIds.Add(edge.LeftId);
             if (incomingIds.Contains(edge.RightId)) autoMergedIncomingIds.Add(edge.RightId);
@@ -554,14 +549,4 @@ public sealed class IncrementalResolver
         => breakdown
             .Select(c => new MatchScoreFactor(c.Signal, c.Value, c.Weight, c.Contribution))
             .ToList();
-
-    /// <summary>The stored spelling of a decision band. "auto" is unchanged from Milestone 17, so
-    /// edges written before this change keep their meaning.</summary>
-    private static string DecisionName(MatchDecision band) => band switch
-    {
-        MatchDecision.AutoMatch => "auto",
-        MatchDecision.Review => "review",
-        MatchDecision.NonComparable => "non-comparable",
-        _ => "no-match"
-    };
 }
