@@ -241,6 +241,30 @@ public sealed class MatchingProfileConfigLoader
                 $"Matching profile '{source}' field '{name}' has weight {weight}; it must be a finite number " +
                 "greater than zero. Remove the field rather than giving it zero weight.");
 
+        FieldEvidence? evidence = null;
+        if (field.Evidence is { } e)
+        {
+            if (e.SameEntityAgreement is not { } m || e.ChanceAgreement is not { } u)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{name}' declares evidence but is missing " +
+                    "sameEntityAgreement or chanceAgreement; both are required.");
+            try
+            {
+                evidence = new FieldEvidence
+                {
+                    SameEntityAgreement = m,
+                    ChanceAgreement = u,
+                    MaxAgreementBits = e.MaxAgreementBits
+                };
+                _ = evidence.AgreementBits;   // forces the lazy m > u check at LOAD time
+            }
+            catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
+            {
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{name}' has invalid evidence: {ReasonOf(ex)}");
+            }
+        }
+
         return new ProfileField
         {
             Name = name,
@@ -248,7 +272,8 @@ public sealed class MatchingProfileConfigLoader
             Roles = roles,
             SimilarityEvaluator = field.SimilarityEvaluator,
             Weight = weight,
-            EvaluatorOptions = field.EvaluatorOptions
+            EvaluatorOptions = field.EvaluatorOptions,
+            Evidence = evidence
         };
     }
 

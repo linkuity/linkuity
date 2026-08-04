@@ -25,4 +25,12 @@ public sealed record ProfileField
     /// "numeric.maxPercentDiff", "date.maxDays", "ngram.size". Defaults to null.
     /// </summary>
     public IReadOnlyDictionary<string, string>? EvaluatorOptions { get; init; }
+
+    /// <summary>
+    /// What this field is worth to the evidence scorer. Required by that scorer for every
+    /// Matchable field — it throws rather than inferring values from <see cref="Weight"/>,
+    /// because inventing statistics is exactly what the evidence model exists to stop.
+    /// Ignored by the older weighted scorers.
+    /// </summary>
+    public FieldEvidence? Evidence { get; init; }
 }

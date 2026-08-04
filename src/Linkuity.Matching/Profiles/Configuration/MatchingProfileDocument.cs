@@ -31,4 +31,12 @@ public sealed class MatchingProfileFieldDocument
     public string? SimilarityEvaluator { get; init; }
     public double? Weight { get; init; }
     public Dictionary<string, string>? EvaluatorOptions { get; init; }
+    public FieldEvidenceDocument? Evidence { get; init; }
+}
+
+public sealed class FieldEvidenceDocument
+{
+    public double? SameEntityAgreement { get; init; }
+    public double? ChanceAgreement { get; init; }
+    public double? MaxAgreementBits { get; init; }
 }

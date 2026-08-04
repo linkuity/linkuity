@@ -71,6 +71,32 @@ public class MatchingProfileConfigLoaderTests
     private static string JsonWith(string replaceFrom, string replaceTo)
         => OrganizationJson.Replace(replaceFrom, replaceTo);
 
+    private const string MinimalOrganizationJsonWithEvidenceTemplate = """
+    {
+      "contentType": "organization",
+      "fields": [
+        { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable"], "similarityEvaluator": "fuzzy", "weight": 1.0, "evidence": { %EVIDENCE% } }
+      ],
+      "normalizationStrategy": "identity",
+      "blockingStrategies": ["exact-value"],
+      "candidateRetrievalStrategy": "linear",
+      "similarityStrategy": "field-weighted",
+      "scoringStrategy": "identifier-weighted",
+      "decisionStrategy": "threshold",
+      "clusteringStrategy": "union-find",
+      "autoMatchThreshold": 0.90,
+      "reviewThreshold": 0.75
+    }
+    """;
+
+    private static string ProfileJsonWithFieldEvidence(double sameEntityAgreement, double chanceAgreement)
+        => MinimalOrganizationJsonWithEvidenceTemplate.Replace("%EVIDENCE%",
+            $"\"sameEntityAgreement\": {sameEntityAgreement}, \"chanceAgreement\": {chanceAgreement}");
+
+    private static string ProfileJsonWithPartialFieldEvidence(double sameEntityAgreement)
+        => MinimalOrganizationJsonWithEvidenceTemplate.Replace("%EVIDENCE%",
+            $"\"sameEntityAgreement\": {sameEntityAgreement}");
+
     [Theory]
     [InlineData("\"normalizationStrategy\": \"identity\"", "\"normalizationStrategy\": \"no-such-norm\"", "no-such-norm")]
     [InlineData("\"blockingStrategies\": [\"exact-value\", \"token-name\"]", "\"blockingStrategies\": [\"no-such-block\"]", "no-such-block")]
@@ -209,6 +235,30 @@ public class MatchingProfileConfigLoaderTests
             Assert.Contains("bad.profile.json", ex.Message);
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void EvidenceWithChanceAboveMatchRate_IsRejectedAtLoad_NotAtScoreTime()
+    {
+        // Lazily validated on the type, eagerly validated here: a bad profile must fail when it
+        // is read, not on whichever pair happens to be scored first.
+        var json = ProfileJsonWithFieldEvidence(sameEntityAgreement: 0.2, chanceAgreement: 0.5);
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(json, Registry()));
+
+        Assert.Contains("invalid evidence", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EvidenceMissingOneProbability_IsRejected()
+    {
+        var json = ProfileJsonWithPartialFieldEvidence(sameEntityAgreement: 0.9);
+
+        var ex = Assert.Throws<MatchingProfileConfigException>(
+            () => new MatchingProfileConfigLoader().LoadFromJson(json, Registry()));
+
+        Assert.Contains("chanceAgreement", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
