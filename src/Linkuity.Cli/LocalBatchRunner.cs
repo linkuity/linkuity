@@ -49,6 +49,12 @@ public sealed class LocalBatchRunner
             string.Equals(args[2], "ablate", StringComparison.OrdinalIgnoreCase))
             return await FieldShapeAblationCommands.RunAsync(args, ct);
 
+        if (args.Length >= 3 &&
+            string.Equals(args[0], "match", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "corpus", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[2], "calibrate", StringComparison.OrdinalIgnoreCase))
+            return await FieldEvidenceCalibrationCommands.RunAsync(args, ct);
+
         if (args.Length >= 2 &&
             string.Equals(args[0], "match", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "corpus", StringComparison.OrdinalIgnoreCase))

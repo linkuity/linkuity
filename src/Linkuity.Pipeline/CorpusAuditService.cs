@@ -389,8 +389,12 @@ public sealed class CorpusAuditService
         return occurrences;
     }
 
-    /// <summary>Lowest key id present in both ascending arrays and not suppressed; -1 if none.</summary>
-    private static int LowestSharedActiveKey(int[] left, int[] right, bool[] suppressed)
+    /// <summary>Lowest key id present in both ascending arrays and not suppressed; -1 if none.
+    /// Internal (not private): FieldEvidenceCalibrationService recomputes the SAME pair's owning
+    /// key — via the same suppressed array from <see cref="SuppressedKeys"/> — to attribute a
+    /// candidate pair to the blocking field that produced it, and must call this exact scan rather
+    /// than a second, potentially-divergent one.</summary>
+    internal static int LowestSharedActiveKey(int[] left, int[] right, bool[] suppressed)
     {
         int i = 0, j = 0;
         while (i < left.Length && j < right.Length)
