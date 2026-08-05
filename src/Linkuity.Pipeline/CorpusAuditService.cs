@@ -127,7 +127,9 @@ public sealed class CorpusAuditService
         // not an empty list, when the policy cannot reject anything: allocating and filling
         // 11,000,007 entries (the SEC gate corpus) to feed a rollup with nothing to decide is the
         // exact cost this class exists to avoid.
-        var comparisons = mergePolicyCanReject ? new List<(int Left, int Right, bool IsAuto)>() : null;
+        var comparisons = mergePolicyCanReject
+            ? new List<(int Left, int Right, bool IsAuto)>(CandidatePairUpperBound(index, suppressed))
+            : null;
         var occurrences = ForEachCandidatePair(index, effectiveMax, (l, r) =>
         {
             emitted++;
@@ -364,6 +366,33 @@ public sealed class CorpusAuditService
         for (var k = 0; k < index.KeyCount.Length; k++)
             suppressed[k] = index.KeyCount[k] - 1 > max;
         return suppressed;
+    }
+
+    /// <summary>
+    /// The EXACT block-pair visit count <see cref="ForEachCandidatePair"/> is about to make — the
+    /// same per-key C(n,2) sum that walk performs, computed here up front purely so the merge
+    /// policy's <c>comparisons</c> list (Audit) can be allocated at its final size in one shot.
+    /// Emitted pairs are a subset of visits (dedup by lowest shared key), so this is always >= the
+    /// list's eventual Count — never an under-estimate that would leave List&lt;T&gt; growing
+    /// anyway. Without this, that list grows one doubling at a time up to ~11,000,007 entries on
+    /// the SEC corpus, and because each intermediate array is well past the 85,000-byte Large
+    /// Object Heap threshold, EVERY doubling is an LOH allocation — turning a single scoring walk
+    /// into a repeated-full-GC-pause exercise. Read-only over index/suppressed; costs one pass over
+    /// the key list, orders of magnitude cheaper than the walk it is sizing for.
+    /// </summary>
+    internal static int CandidatePairUpperBound(KeyIndex index, bool[] suppressed)
+    {
+        long total = 0;
+        for (var k = 0; k < index.KeyCount.Length; k++)
+        {
+            if (suppressed[k]) continue;
+            long n = index.KeyCount[k];
+            total += n * (n - 1) / 2;
+        }
+        // Clamped, not overflow-checked: a capacity hint this large would itself be an
+        // out-of-memory condition long before int.MaxValue is a realistic corpus size, and List<T>'s
+        // constructor takes an int regardless.
+        return total > int.MaxValue ? int.MaxValue : (int)total;
     }
 
     /// <summary>

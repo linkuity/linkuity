@@ -81,7 +81,7 @@ public static class CorpusAuditTextFormatter
         if (result.BlastRadius is { } br)
         {
             sb.AppendLine();
-            sb.AppendLine("cohesion blast radius (spec §6.4 — reject-wholesale destroys any correct");
+            sb.AppendLine("cohesion blast radius (spec section 6.4 - reject-wholesale destroys any correct");
             sb.AppendLine("sub-cluster inside a rejected component, not only the contradiction that caused it):");
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"  components rejected for cohesion         {br.RejectedComponents:N0}");
