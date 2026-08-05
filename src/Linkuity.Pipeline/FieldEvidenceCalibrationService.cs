@@ -19,15 +19,22 @@ public sealed record SmoothingVariant(
     double? DisagreementBits);
 
 /// <summary>
-/// One origin's contribution to a field's u estimate, and whether it was excluded — see
-/// "EMPIRICAL DETERMINATION" in the <see cref="FieldEvidenceCalibrationService"/> class doc.
+/// One origin's contribution to a field's DIFFERENT-entity population, and whether it was excluded
+/// — see "EMPIRICAL DETERMINATION" in the <see cref="FieldEvidenceCalibrationService"/> class doc.
 /// <see cref="OriginLabel"/> is the blocking-role field the owning key was attributed to, or
 /// <see cref="FieldEvidenceCalibrationService.UnattributableOriginLabel"/> when it could not be
-/// (see <see cref="FieldEvidenceCalibrationService.BuildKeyFieldAttribution"/>) — that origin is
-/// NEVER excluded, regardless of its rate, because there is no known field to pin the selection
-/// reason to. <see cref="Observations"/> is reported alongside the rate for exactly the reason the
-/// task called out: a rate computed from a handful of pairs is not the same kind of number as one
+/// (see <see cref="FieldEvidenceCalibrationService.BuildKeyFieldAttribution"/>).
+/// <para>
+/// <see cref="Excluded"/> is true ONLY when this row is the field's OWN origin (OriginLabel equals
+/// the field being measured) AND its rate is at/above the determination threshold — a
+/// cross-field origin's rate is reported here as a diagnostic (it tells a reader how correlated
+/// two fields' blocking behaviour is) but NEVER excludes anything, no matter how high it measures.
+/// </para>
+/// <para>
+/// <see cref="Observations"/> is reported alongside the rate for exactly the reason the task
+/// called out: a rate computed from a handful of pairs is not the same kind of number as one
 /// computed from thousands, and a reader must be able to tell them apart at a glance.
+/// </para>
 /// </summary>
 public sealed record OriginDetermination(
     string OriginLabel,
@@ -48,6 +55,18 @@ public sealed record OriginDetermination(
 /// behind an average similarity.
 /// </para>
 /// <para>
+/// CONDITIONED VS UNCONDITIONED m: <see cref="SameEntityComparisons"/>/<see cref="SameEntityAgreements"/>/
+/// <see cref="RawM"/>/<see cref="SmoothedM"/> are CONDITIONED on the same population u is estimated
+/// from — same-entity pairs owned by this field's own excluded origin (see
+/// <see cref="SameEntityExcludedByDetermination"/>) are removed from m for the identical reason
+/// they are removed from u: <c>log2(m/u)</c> must be a likelihood ratio for ONE population, not m
+/// over "all candidates" divided by u over "candidates minus the self-forcing ones". The
+/// <c>Unconditioned*</c> properties report the SAME field's m over every same-entity observation
+/// regardless of origin, so the difference conditioning makes is visible rather than hidden. When
+/// the field is not itself a blocking-role field, or its own origin never crosses the
+/// determination threshold, conditioned and unconditioned are identical — nothing was excluded.
+/// </para>
+/// <para>
 /// <see cref="RawM"/>/<see cref="RawU"/> are the unadjusted agreement rates and are null when
 /// there were zero observations to compute them from — never a fabricated number. When there
 /// were observations, <see cref="SmoothedM"/>/<see cref="SmoothedU"/> apply a continuity
@@ -60,41 +79,58 @@ public sealed record OriginDetermination(
 /// </para>
 /// <para>
 /// <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> are computed from the PRIMARY
-/// smoothed probabilities, not from a constructed <see cref="FieldEvidence"/>: that type throws
-/// on <c>m &lt;= u</c>, and this instrument must be able to REPORT that case rather than crash on
-/// it (see <see cref="Usable"/>). Applying the numbers into a profile's
+/// (conditioned) smoothed probabilities, not from a constructed <see cref="FieldEvidence"/>: that
+/// type throws on <c>m &lt;= u</c>, and this instrument must be able to REPORT that case rather
+/// than crash on it (see <see cref="Usable"/>). Applying the numbers into a profile's
 /// <see cref="FieldEvidence"/> is deliberately a separate, later step.
 /// </para>
 /// </summary>
 public sealed record FieldCalibrationRow(
     string FieldName,
+    /// <summary>CONDITIONED same-entity Compared observation count — see the class doc's
+    /// "CONDITIONED VS UNCONDITIONED m" section.</summary>
     long SameEntityComparisons,
     long SameEntityAgreements,
     double? RawM,
     double? SmoothedM,
+    /// <summary>Same-entity pairs excluded from <see cref="SameEntityComparisons"/> because they
+    /// were owned by this field's own self-determining origin — the exact origin excluded from
+    /// <see cref="DifferentEntityExcludedByDetermination"/>, applied to m for the same reason.
+    /// Zero whenever nothing was excluded from u either.</summary>
+    long SameEntityExcludedByDetermination,
+    /// <summary>UNCONDITIONED same-entity Compared observation count — every same-entity
+    /// observation regardless of which origin owns the pair. Reported for comparison with the
+    /// conditioned <see cref="SameEntityComparisons"/> above; NOT used for AgreementBits/
+    /// DisagreementBits/Usable.</summary>
+    long UnconditionedSameEntityComparisons,
+    long UnconditionedSameEntityAgreements,
+    double? UnconditionedRawM,
+    double? UnconditionedSmoothedM,
     /// <summary>Different-entity Compared observations actually used to estimate u — i.e. AFTER
-    /// excluding pairs owned by an origin whose empirically measured determination rate on THIS
-    /// field is at or above the threshold (see <see cref="DifferentEntityExcludedByDetermination"/>
-    /// and <see cref="OriginDeterminations"/>).</summary>
+    /// excluding pairs owned by THIS FIELD'S OWN origin, when that origin's empirically measured
+    /// determination rate on this field is at or above the threshold (see
+    /// <see cref="DifferentEntityExcludedByDetermination"/> and <see cref="OriginDeterminations"/>).
+    /// A cross-field origin, however high its rate measures, never removes anything here.</summary>
     long DifferentEntityComparisons,
     long DifferentEntityAgreements,
     double? RawU,
     double? SmoothedU,
     /// <summary>
     /// Different-entity candidate pairs excluded from <see cref="DifferentEntityComparisons"/> /
-    /// ChanceAgreement because they were owned by an origin whose measured agreement rate on this
-    /// field was at or above the determination threshold — see <see cref="OriginDeterminations"/>
-    /// for the per-origin breakdown that produced this total, and the class doc's "EMPIRICAL
-    /// DETERMINATION" section for why this is measured per origin rather than assumed from
-    /// provenance alone. Zero for a field with no self-forcing origin.
+    /// ChanceAgreement because they were owned by THIS FIELD'S OWN origin and that origin's
+    /// measured agreement rate on this field was at or above the determination threshold — see
+    /// <see cref="OriginDeterminations"/> for the per-origin breakdown that produced this total.
+    /// Zero for a field with no self-forcing origin, INCLUDING a field whose own origin's rate is
+    /// below threshold and every field that is not itself a blocking-role field at all.
     /// </summary>
     long DifferentEntityExcludedByDetermination,
     /// <summary>
     /// Every origin (blocking-role field, or the unattributable bucket) that owned at least one of
     /// this field's different-entity candidate observations, with its own observation count,
-    /// agreement count, empirical determination rate, and whether it was excluded. This is the
-    /// evidence behind <see cref="DifferentEntityExcludedByDetermination"/> — a reader can see
-    /// exactly which origin(s) crossed the threshold, on how much data, rather than a bare count.
+    /// agreement count, and empirically measured determination rate on THIS field. Only the row
+    /// whose OriginLabel equals this field's own name can ever have <c>Excluded == true</c> — every
+    /// other row is a diagnostic (how much does sharing THAT origin's key correlate with agreeing
+    /// on THIS field?) that never decides anything, no matter how high its rate measures.
     /// </summary>
     IReadOnlyList<OriginDetermination> OriginDeterminations,
     /// <summary>Null whenever <see cref="Usable"/> is false or there is insufficient data on
@@ -115,14 +151,26 @@ public sealed record FieldCalibrationRow(
     /// <summary>Human-readable reason, populated iff <c>!Usable</c>.</summary>
     string? UnusableReason,
     /// <summary>
-    /// True when the RAW (unsmoothed) estimate is degenerate in a direction that would send bits
-    /// to +/-infinity without the continuity correction: raw m == 1 (disagreement bits would be
-    /// log2(0/x) = -infinity) or raw u == 0 (agreement bits would be log2(m/0) = +infinity). When
-    /// true, the reported <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> rest entirely
-    /// on the smoothing constant rather than on any observed disagreement/coincidence, and
+    /// True when the CONDITIONED raw (unsmoothed) estimate is degenerate — raw m or raw u equal to
+    /// EITHER 0 or 1 — a direction that would send a bit to +/-infinity without the continuity
+    /// correction (raw m==1 or raw u==0 send agreement/disagreement bits to -/+infinity; raw m==0
+    /// or raw u==1 do the same in the other direction). When true, the reported
+    /// <see cref="AgreementBits"/>/<see cref="DisagreementBits"/> rest entirely on the smoothing
+    /// constant rather than on any observed disagreement/coincidence, and
     /// <see cref="SmoothingSensitivity"/> shows how much they move under a different constant.
     /// </summary>
     bool SmoothingDependent,
+    /// <summary>
+    /// True when smoothing changes which of m/u is larger — i.e. <c>(rawM &gt; rawU)</c> differs
+    /// from <c>(smoothedM &gt; smoothedU)</c> — which is exactly the relation <see cref="Usable"/>
+    /// is decided from. A field can hit this WITHOUT <see cref="SmoothingDependent"/>: e.g. a raw m
+    /// and raw u both away from 0/1 but computed from very different observation counts, where the
+    /// smaller sample gets pulled further toward 0.5 by the same alpha and crosses the larger one.
+    /// Whenever true, <see cref="Usable"/> was decided by the smoothing constant, not by the data
+    /// alone, and that needs the same scrutiny as SMOOTHING-DEPENDENT even though the raw estimate
+    /// itself is not degenerate.
+    /// </summary>
+    bool SmoothedOrderingDiffersFromRaw,
     /// <summary>
     /// Populated iff <see cref="SmoothingDependent"/> and <see cref="Usable"/>: the same field's
     /// m/u and bits recomputed under two or more smoothing constants (0.5, the primary value used
@@ -131,8 +179,12 @@ public sealed record FieldCalibrationRow(
     /// </summary>
     IReadOnlyList<SmoothingVariant> SmoothingSensitivity,
     /// <summary>10 buckets over [0,1]: bucket i is [i/10, (i+1)/10), except the last bucket,
-    /// which is closed on both ends ([0.9, 1.0]). Same-entity (true-pair) observations only.</summary>
+    /// which is closed on both ends ([0.9, 1.0]). CONDITIONED same-entity (true-pair) observations
+    /// only — sums to <see cref="SameEntityComparisons"/>.</summary>
     IReadOnlyList<long> SameEntitySimilarityHistogram,
+    /// <summary>Same bucketing, over EVERY same-entity observation regardless of origin — sums to
+    /// <see cref="UnconditionedSameEntityComparisons"/>.</summary>
+    IReadOnlyList<long> UnconditionedSameEntitySimilarityHistogram,
     /// <summary>Same bucketing as <see cref="SameEntitySimilarityHistogram"/>, over
     /// different-entity (non-match) observations that were NOT excluded by determination — i.e.
     /// the same population <see cref="DifferentEntityComparisons"/> counts, so the bucket counts
@@ -156,9 +208,9 @@ public sealed record FieldEvidenceCalibrationResult(
     /// blocking-role field — either no field's isolated key generation reproduces it, or more than
     /// one field's does (a genuine ambiguity, e.g. a composite key built from several fields' values
     /// together). Such a pair always lands in the unattributable origin bucket, which this service
-    /// never excludes from any field's u regardless of its measured rate, because guessing which
-    /// field to pin the selection reason to would be worse than leaving it in. Reported so this
-    /// limitation is visible rather than silently assumed away; see
+    /// never excludes from any field's u or m regardless of its measured rate, because guessing
+    /// which field to pin the selection reason to would be worse than leaving it in. Reported so
+    /// this limitation is visible rather than silently assumed away; see
     /// <see cref="FieldEvidenceCalibrationService"/> class doc.
     /// </summary>
     long UnattributableOwnerCandidatePairs,
@@ -196,27 +248,48 @@ public sealed record FieldEvidenceCalibrationResult(
 /// it, floor it) — that decision belongs to whoever applies these numbers, not to this measurement.
 /// </para>
 /// <para>
-/// EMPIRICAL DETERMINATION (u only): a candidate pair's owning blocking key — the lowest shared
-/// active key <see cref="CorpusAuditService.ForEachCandidatePair"/> already computes to decide
-/// which single invocation gets the pair — is attributed to an ORIGIN (a blocking-role field, or
-/// <see cref="UnattributableOriginLabel"/>; see <see cref="BuildKeyFieldAttribution"/>). For each
-/// field F and each origin that owns at least one of F's different-entity candidate observations,
-/// this service measures — empirically, from the data, not from provenance alone — the rate at
-/// which those pairs agree on F. An origin's pairs are excluded from F's u estimate ONLY when that
-/// measured rate is at or above <see cref="DeterminationThreshold"/>: <em>deriving</em> a key from
-/// a field and that key <em>determining</em> agreement on the field are different things. FEBRL's
-/// last_name token key IS the surname, so sharing it forces exact agreement (determination ~0.99)
-/// — a genuine selection artifact, correctly excluded. SEC's organization_name fingerprint/token/
-/// acronym/n-gram keys each capture partial signal — sharing one token of a multi-word company
-/// name says almost nothing about whether the FULL names match — so their determination on
-/// organization_name stays far below threshold and nothing is excluded: the field's original u is
-/// exactly what those pairs' true chance-agreement rate is, not an artifact to correct for. A prior
-/// version of this service excluded whenever a key merely DERIVED from a field, regardless of
-/// whether it actually forced agreement; that discarded SEC's entire different-entity population to
-/// fix a problem specific to FEBRL's last_name, which this measurement — not this field — was
-/// missing. The unattributable origin is never excluded regardless of its rate, since there is no
-/// specific field to pin the selection reason to. m (same-entity agreement) is NOT filtered this
-/// way at all — only u.
+/// EMPIRICAL DETERMINATION, SELF ONLY (u AND, identically, m): a candidate pair's owning blocking
+/// key — the lowest shared active key <see cref="CorpusAuditService.ForEachCandidatePair"/>
+/// already computes to decide which single invocation gets the pair — is attributed to an ORIGIN
+/// (a blocking-role field, or <see cref="UnattributableOriginLabel"/>; see
+/// <see cref="BuildKeyFieldAttribution"/>). For field F, THIS SERVICE MEASURES — empirically, from
+/// the different-entity data, never assumed from provenance alone — the rate at which pairs owned
+/// by F's OWN origin agree on F. Only F's own origin can ever be excluded from F's m/u, and only
+/// when that measured rate is at or above <see cref="DeterminationThreshold"/>: <em>deriving</em>
+/// a key from a field and that key <em>determining</em> agreement on the field are different
+/// things. FEBRL's last_name token key IS the surname, so sharing it forces exact agreement
+/// (determination ~1.00) — a genuine selection artifact, correctly excluded from both last_name's
+/// m and u. SEC's organization_name fingerprint/token/acronym/n-gram keys each capture partial
+/// signal — sharing one token of a multi-word company name says almost nothing about whether the
+/// FULL names match — so organization_name's own-origin determination stays far below threshold
+/// and nothing is excluded: the field's original m and u are exactly what those pairs' true
+/// agreement rates are, not an artifact to correct for.
+/// <para>
+/// A DIFFERENT field's origin is NEVER excluded from F's m/u, no matter how high ITS
+/// determination on F measures — only F's own origin is ever eligible. A profile that blocks on
+/// postal_code with a separately Matchable state field would see a very high determination rate
+/// for postal_code-owned pairs on state (postal codes largely determine state), but state's own m
+/// and u are computed from postal_code-owned pairs exactly as before: cross-field correlation is
+/// reported (every origin's rate appears in <see cref="FieldCalibrationRow.OriginDeterminations"/>,
+/// a genuinely useful diagnostic of how state and postal_code interact under this blocking) but
+/// never decides anything for a field it is not. A field that is not itself a blocking-role field
+/// at all — or one whose own origin's determination stays below threshold — is therefore
+/// STRUCTURALLY unaffected by this whole mechanism: its conditioned and unconditioned m/u are
+/// identical, and its numbers are exactly what they would be with no exclusion logic in this
+/// service at all.
+/// </para>
+/// <para>
+/// m is conditioned the SAME way u is, using the SAME exclusion decision (computed from the
+/// different-entity population, since "determination" is inherently about whether sharing a key
+/// forces agreement among candidates that are NOT already known to match): same-entity pairs owned
+/// by F's own excluded origin are removed from F's m exactly as the corresponding different-entity
+/// pairs are removed from F's u, so <c>log2(conditionedM / u)</c> is a likelihood ratio over ONE
+/// population, not m over "every candidate" divided by u over "candidates minus the self-forcing
+/// ones". <see cref="FieldCalibrationRow.UnconditionedSameEntityComparisons"/> and its siblings
+/// report the unfiltered figure alongside, so the difference conditioning makes is visible.
+/// </para>
+/// The unattributable origin is never excluded regardless of its rate, since there is no specific
+/// field to pin the selection reason to.
 /// </para>
 /// <para>
 /// Key-to-field attribution (<see cref="BuildKeyFieldAttribution"/>) is derived generically, not
@@ -237,21 +310,24 @@ public sealed class FieldEvidenceCalibrationService
     private const double AgreementEpsilon = 1e-9;
 
     /// <summary>The label for candidate pairs whose owning key could not be attributed to exactly
-    /// one blocking-role field. This origin is never excluded from any field's u, regardless of
+    /// one blocking-role field. This origin is never excluded from any field's m/u, regardless of
     /// its measured determination rate — see the class doc's EMPIRICAL DETERMINATION section.</summary>
     internal const string UnattributableOriginLabel = "(unattributable)";
 
     /// <summary>
-    /// How strongly an origin must force agreement on a field, MEASURED from the different-entity
-    /// candidate pairs it actually owns, before those pairs are excluded from that field's OWN u.
-    /// A judgement call, not a measurement — 0.95 means "records sharing this origin's key agree on
-    /// this field at least 95% of the time among the different-entity candidates it brought
-    /// together", which is high enough that counting those pairs toward u would mostly measure the
-    /// selection rule rather than chance agreement, without being so close to 1.0 that ordinary
-    /// sampling noise on a modest observation count could trip it by accident. Named and commented
-    /// rather than inlined so a reader auditing <see cref="OriginDetermination"/> rows — which
-    /// report the exact rate and observation count behind every exclusion decision — can see
-    /// precisely what this number decided and substitute their own.
+    /// How strongly a field's OWN origin must force agreement on that field, MEASURED from the
+    /// different-entity candidate pairs it actually owns, before those pairs (and the matching
+    /// same-entity pairs) are excluded from that field's m/u. A judgement call, not a measurement —
+    /// 0.95 means "records sharing this field's own blocking key agree on this field at least 95%
+    /// of the time among the different-entity candidates it brought together", which is high enough
+    /// that counting those pairs would mostly measure the selection rule rather than chance
+    /// agreement, without being so close to 1.0 that ordinary sampling noise on a modest
+    /// observation count could trip it by accident. Named and commented rather than inlined so a
+    /// reader auditing <see cref="OriginDetermination"/> rows — which report the exact rate and
+    /// observation count behind every exclusion decision — can see precisely what this number
+    /// decided and substitute their own. Applies ONLY to a field's own origin (see class doc); a
+    /// cross-field origin's rate is reported but never compared against this constant to decide
+    /// anything.
     /// </summary>
     private const double DeterminationThreshold = 0.95;
 
@@ -380,13 +456,15 @@ public sealed class FieldEvidenceCalibrationService
                 if (signal.Outcome != ComparisonOutcome.Compared) continue;
                 if (!accumulators.TryGetValue(signal.Name, out var accumulator)) continue;
 
+                // Bucketed by origin on BOTH sides, not yet decided in/out: which origin (if any)
+                // gets excluded from THIS field's m/u depends on the AGGREGATE determination rate
+                // computed after the whole walk finishes (BuildRow), not on a per-pair rule — see
+                // the class doc's EMPIRICAL DETERMINATION section. Same-entity pairs are bucketed
+                // by origin too now (not just different-entity), so m can be conditioned exactly
+                // the way u is.
                 if (sameEntity)
-                    accumulator.RecordSame(signal.Value);
+                    accumulator.RecordSame(originLabel, signal.Value);
                 else
-                    // Bucketed by origin, not yet decided in/out: which origins get excluded from
-                    // THIS field's u depends on the AGGREGATE determination rate computed after the
-                    // whole walk finishes (BuildRow), not on a per-pair rule — see the class doc's
-                    // EMPIRICAL DETERMINATION section.
                     accumulator.RecordDiff(originLabel, signal.Value);
             }
         }, ct);
@@ -495,40 +573,67 @@ public sealed class FieldEvidenceCalibrationService
 
     private static FieldCalibrationRow BuildRow(string name, FieldAccumulator acc)
     {
-        double? rawM = acc.SameCount > 0 ? (double)acc.SameAgree / acc.SameCount : null;
-        var smoothedM = SmoothedRate(acc.SameAgree, acc.SameCount, PrimarySmoothingAlpha);
+        // ---- Unconditioned m: every same-entity observation, regardless of origin. ----
+        long unconditionedSameCount = 0, unconditionedSameAgree = 0;
+        var unconditionedSameHistogram = new long[HistogramBuckets];
+        foreach (var bucket in acc.SameByOrigin.Values)
+        {
+            unconditionedSameCount += bucket.Count;
+            unconditionedSameAgree += bucket.Agree;
+            for (var i = 0; i < HistogramBuckets; i++) unconditionedSameHistogram[i] += bucket.Histogram[i];
+        }
+        double? unconditionedRawM = unconditionedSameCount > 0
+            ? (double)unconditionedSameAgree / unconditionedSameCount : null;
+        var unconditionedSmoothedM = SmoothedRate(unconditionedSameAgree, unconditionedSameCount, PrimarySmoothingAlpha);
 
-        // EMPIRICAL DETERMINATION: decide, per origin, whether it forces agreement on THIS field
-        // ONLY NOW — after the whole walk, once every origin's full observation count is known —
-        // never per pair during the walk itself. See the class doc.
+        // ---- EMPIRICAL DETERMINATION: measured ONLY on THIS FIELD'S OWN origin (see class doc —
+        // this is Critical Fix 1: a cross-field origin's rate is reported but can never exclude
+        // anything, regardless of how high it measures). ----
         var determinations = new List<OriginDetermination>();
-        long diffCount = 0, diffAgree = 0, excludedCount = 0;
-        var diffHistogram = new long[HistogramBuckets];
-
+        var selfExcluded = false;
         foreach (var (originLabel, bucket) in acc.DiffByOrigin
                      .OrderByDescending(kv => kv.Value.Count)
                      .ThenBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var rate = bucket.Count > 0 ? (double)bucket.Agree / bucket.Count : 0.0;
-            // The unattributable origin is NEVER excluded, no matter how high its rate measures:
-            // there is no specific field to pin the selection reason to, so refusing to exclude is
-            // the conservative default — see the class doc's EMPIRICAL DETERMINATION section.
-            var excluded = !string.Equals(originLabel, UnattributableOriginLabel, StringComparison.Ordinal)
-                           && rate >= DeterminationThreshold;
+            var isSelf = string.Equals(originLabel, name, StringComparison.Ordinal);
+            var excluded = isSelf && rate >= DeterminationThreshold;
+            if (excluded) selfExcluded = true;
             determinations.Add(new OriginDetermination(originLabel, bucket.Count, bucket.Agree, rate, excluded));
-
-            if (excluded)
-            {
-                excludedCount += bucket.Count;
-            }
-            else
-            {
-                diffCount += bucket.Count;
-                diffAgree += bucket.Agree;
-                for (var i = 0; i < HistogramBuckets; i++) diffHistogram[i] += bucket.Histogram[i];
-            }
         }
 
+        // ---- Conditioned m and u: identical population — every origin EXCEPT this field's own,
+        // when (and only when) that own-origin's determination crossed the threshold. ----
+        long diffCount = 0, diffAgree = 0, excludedDiffCount = 0;
+        var diffHistogram = new long[HistogramBuckets];
+        foreach (var (originLabel, bucket) in acc.DiffByOrigin)
+        {
+            if (selfExcluded && string.Equals(originLabel, name, StringComparison.Ordinal))
+            {
+                excludedDiffCount += bucket.Count;
+                continue;
+            }
+            diffCount += bucket.Count;
+            diffAgree += bucket.Agree;
+            for (var i = 0; i < HistogramBuckets; i++) diffHistogram[i] += bucket.Histogram[i];
+        }
+
+        long sameCount = 0, sameAgree = 0, excludedSameCount = 0;
+        var sameHistogram = new long[HistogramBuckets];
+        foreach (var (originLabel, bucket) in acc.SameByOrigin)
+        {
+            if (selfExcluded && string.Equals(originLabel, name, StringComparison.Ordinal))
+            {
+                excludedSameCount += bucket.Count;
+                continue;
+            }
+            sameCount += bucket.Count;
+            sameAgree += bucket.Agree;
+            for (var i = 0; i < HistogramBuckets; i++) sameHistogram[i] += bucket.Histogram[i];
+        }
+
+        double? rawM = sameCount > 0 ? (double)sameAgree / sameCount : null;
+        var smoothedM = SmoothedRate(sameAgree, sameCount, PrimarySmoothingAlpha);
         double? rawU = diffCount > 0 ? (double)diffAgree / diffCount : null;
         var smoothedU = SmoothedRate(diffAgree, diffCount, PrimarySmoothingAlpha);
 
@@ -560,31 +665,40 @@ public sealed class FieldEvidenceCalibrationService
             }
         }
 
-        // Degenerate in the direction that would send a bit to +/-infinity without the
-        // continuity correction — see the SmoothingDependent doc on FieldCalibrationRow. Requires
-        // BOTH sides to actually have data: determination-based exclusion can leave a field with
-        // diffCount == 0 (every different-entity candidate happened to be excluded — a small
-        // fixture can trigger this, and it is a real possibility on a real corpus too), and a
-        // field with no u at all has no bits resting on ANY smoothing constant to flag — it
-        // belongs in "NO ESTIMATE", not "SMOOTHING-DEPENDENT".
-        var smoothingDependent = smoothedM is not null && smoothedU is not null && (rawM is 1.0 || rawU is 0.0);
+        // Degenerate in ANY direction that would send a bit to +/-infinity without the continuity
+        // correction: raw m or raw u at EITHER boundary (0 or 1) — see the SmoothingDependent doc
+        // on FieldCalibrationRow. Requires BOTH sides to actually have data: determination-based
+        // exclusion can leave a field with diffCount == 0 (every different-entity candidate
+        // happened to be excluded — a small fixture can trigger this, and it is a real possibility
+        // on a real corpus too), and a field with no u at all has no bits resting on ANY smoothing
+        // constant to flag — it belongs in "NO ESTIMATE", not "SMOOTHING-DEPENDENT".
+        var smoothingDependent = smoothedM is not null && smoothedU is not null
+            && ((rawM is 0.0 or 1.0) || (rawU is 0.0 or 1.0));
+
+        // Independent of smoothingDependent: does smoothing change which of m/u is larger — the
+        // EXACT relation Usable is decided from? Possible even with neither raw value at a 0/1
+        // boundary, when m and u rest on very different observation counts and the same alpha
+        // pulls the thinner side further toward 0.5.
+        var orderingDiffers = rawM is { } rmv && rawU is { } ruv && smoothedM is { } smv2 && smoothedU is { } suv2
+            && (rmv > ruv) != (smv2 > suv2);
 
         IReadOnlyList<SmoothingVariant> sensitivity = [];
         if (smoothingDependent && usable)
         {
             sensitivity = new[] { PrimarySmoothingAlpha, SecondarySmoothingAlpha }
-                .Select(alpha => BuildVariant(acc.SameAgree, acc.SameCount, diffAgree, diffCount, alpha))
+                .Select(alpha => BuildVariant(sameAgree, sameCount, diffAgree, diffCount, alpha))
                 .ToList();
         }
 
         return new FieldCalibrationRow(
             name,
-            acc.SameCount, acc.SameAgree, rawM, smoothedM,
-            diffCount, diffAgree, rawU, smoothedU,
-            excludedCount, determinations,
+            sameCount, sameAgree, rawM, smoothedM, excludedSameCount,
+            unconditionedSameCount, unconditionedSameAgree, unconditionedRawM, unconditionedSmoothedM,
+            diffCount, diffAgree, rawU, smoothedU, excludedDiffCount,
+            determinations,
             agreementBits, disagreementBits, usable, unusableReason,
-            smoothingDependent, sensitivity,
-            acc.SameHistogram, diffHistogram);
+            smoothingDependent, orderingDiffers, sensitivity,
+            sameHistogram, unconditionedSameHistogram, diffHistogram);
     }
 
     private static SmoothingVariant BuildVariant(
@@ -606,49 +720,36 @@ public sealed class FieldEvidenceCalibrationService
 
     /// <summary>Per-field running tallies over one candidate walk. Mutable by design — one
     /// instance accumulates every observation for its field across the whole corpus walk, which
-    /// a record type would make needlessly awkward to update in place. Different-entity
-    /// observations are kept bucketed BY ORIGIN (see <see cref="OriginBucket"/>) rather than
-    /// pre-aggregated, because which origins are excluded from u is not decided until the whole
-    /// walk is complete (empirical determination needs each origin's FULL observation count).</summary>
+    /// a record type would make needlessly awkward to update in place. BOTH same-entity and
+    /// different-entity observations are kept bucketed BY ORIGIN (see <see cref="OriginBucket"/>)
+    /// rather than pre-aggregated, because which origin (if any) is excluded from m/u is not
+    /// decided until the whole walk is complete (empirical determination needs the origin's FULL
+    /// different-entity observation count) — and the same exclusion decision then applies to both
+    /// the same- and different-entity buckets for that origin.</summary>
     private sealed class FieldAccumulator(int buckets)
     {
-        private readonly long[] _sameHistogram = new long[buckets];
+        private readonly Dictionary<string, OriginBucket> _sameByOrigin = new(StringComparer.Ordinal);
         private readonly Dictionary<string, OriginBucket> _diffByOrigin = new(StringComparer.Ordinal);
 
-        public long SameCount { get; private set; }
-        public long SameAgree { get; private set; }
-        public IReadOnlyList<long> SameHistogram => _sameHistogram;
+        public IReadOnlyDictionary<string, OriginBucket> SameByOrigin => _sameByOrigin;
         public IReadOnlyDictionary<string, OriginBucket> DiffByOrigin => _diffByOrigin;
 
-        /// <summary>Same-entity observations are never filtered by origin (see class doc) —
-        /// only different-entity observations are, and only after the whole walk completes.</summary>
-        public void RecordSame(double value)
-        {
-            var (bucket, agree) = Bucket(value, buckets);
-            SameCount++;
-            _sameHistogram[bucket]++;
-            if (agree) SameAgree++;
-        }
+        public void RecordSame(string originLabel, double value) => Record(_sameByOrigin, originLabel, value);
+        public void RecordDiff(string originLabel, double value) => Record(_diffByOrigin, originLabel, value);
 
-        public void RecordDiff(string originLabel, double value)
+        private void Record(Dictionary<string, OriginBucket> byOrigin, string originLabel, double value)
         {
-            if (!_diffByOrigin.TryGetValue(originLabel, out var bucket))
+            if (!byOrigin.TryGetValue(originLabel, out var bucket))
             {
                 bucket = new OriginBucket(buckets);
-                _diffByOrigin[originLabel] = bucket;
+                byOrigin[originLabel] = bucket;
             }
             bucket.Record(value);
         }
-
-        private static (int Bucket, bool Agree) Bucket(double value, int bucketCount)
-        {
-            var clamped = Math.Clamp(value, 0.0, 1.0);
-            var bucket = Math.Min(bucketCount - 1, (int)(clamped * bucketCount));
-            return (bucket, clamped >= 1.0 - AgreementEpsilon);
-        }
     }
 
-    /// <summary>Running tallies for ONE origin's different-entity observations of ONE field.</summary>
+    /// <summary>Running tallies for ONE origin's observations (same- or different-entity — two
+    /// separate instances per origin) of ONE field.</summary>
     private sealed class OriginBucket(int buckets)
     {
         private readonly long[] _histogram = new long[buckets];

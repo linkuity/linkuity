@@ -7,9 +7,10 @@ namespace Linkuity.Cli;
 /// <summary>
 /// Human-readable field-evidence calibration report. Every guard rail the measurement carries —
 /// zero-observation fields, an UNUSABLE m &lt;= u field, a SMOOTHING-DEPENDENT boundary estimate,
-/// origins excluded from a field's own u by measured determination — gets its own visible line
-/// rather than being folded into the table, because those are exactly the situations someone
-/// skimming a wall of numbers is most likely to miss.
+/// a field's own origin excluded from its own m/u by measured determination, smoothing flipping
+/// which of m/u is larger — gets its own visible line rather than being folded into the table,
+/// because those are exactly the situations someone skimming a wall of numbers is most likely to
+/// miss.
 /// </summary>
 public static class FieldEvidenceCalibrationTextFormatter
 {
@@ -31,12 +32,16 @@ public static class FieldEvidenceCalibrationTextFormatter
             $"unlabeled/skipped {result.UnlabeledCandidatePairs:N0}");
         sb.AppendLine(CultureInfo.InvariantCulture,
             $"candidate pairs whose owning blocking key could not be attributed to one field " +
-            $"(never excluded from any field's u): {result.UnattributableOwnerCandidatePairs:N0}");
+            $"(never excluded from any field's m/u): {result.UnattributableOwnerCandidatePairs:N0}");
         sb.AppendLine();
 
-        sb.AppendLine("m = P(agree | same entity)   u = P(agree | different entity, candidate pair,");
-        sb.AppendLine("EXCLUDING pairs owned by an origin whose MEASURED agreement rate on this field is >= the");
-        sb.AppendLine("determination threshold — see 'excluded' below and the per-origin table further down).");
+        sb.AppendLine("m = P(agree | same entity)   u = P(agree | different entity, candidate pair) — BOTH");
+        sb.AppendLine("EXCLUDING pairs owned by THIS FIELD'S OWN origin, only when that origin's MEASURED");
+        sb.AppendLine("agreement rate on this field is >= the determination threshold. A DIFFERENT field's");
+        sb.AppendLine("origin, however high its rate measures, never excludes anything here — see the per-origin");
+        sb.AppendLine("table further down. m/u below are the CONDITIONED figures (same population); the");
+        sb.AppendLine("UNCONDITIONED m (every same-entity observation, no origin filtering) is shown alongside");
+        sb.AppendLine("whenever it differs.");
         sb.AppendLine("agree := similarity == 1.0 on a Compared signal. m/u below are smoothed");
         sb.AppendLine("((agreements + 0.5) / (comparisons + 1)); raw (unsmoothed) rates are in parentheses.");
         sb.AppendLine("A field marked UNUSABLE emits no bits (see the section below); its m/u are still shown.");
@@ -47,7 +52,9 @@ public static class FieldEvidenceCalibrationTextFormatter
         {
             var agree = f.Usable ? FormatBits(f.AgreementBits) : "UNUSABLE";
             var disagree = f.Usable ? FormatBits(f.DisagreementBits) : "UNUSABLE";
-            var flags = (f.Usable ? "" : " [UNUSABLE]") + (f.SmoothingDependent ? " [SMOOTHING-DEPENDENT]" : "");
+            var flags = (f.Usable ? "" : " [UNUSABLE]")
+                + (f.SmoothingDependent ? " [SMOOTHING-DEPENDENT]" : "")
+                + (f.SmoothedOrderingDiffersFromRaw ? " [ORDERING-FLIPPED-BY-SMOOTHING]" : "");
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"{f.FieldName,-24} {f.SameEntityComparisons,10:N0}  {FormatRate(f.SmoothedM, f.RawM),-12} " +
                 $"{f.DifferentEntityComparisons,8:N0} {f.DifferentEntityExcludedByDetermination,9:N0}  {FormatRate(f.SmoothedU, f.RawU),-12} " +
@@ -55,22 +62,42 @@ public static class FieldEvidenceCalibrationTextFormatter
         }
         sb.AppendLine();
 
+        var conditioned = result.Fields.Where(f => f.SameEntityExcludedByDetermination > 0).ToList();
+        if (conditioned.Count > 0)
+        {
+            sb.AppendLine("CONDITIONED VS UNCONDITIONED m — these fields' own origin was excluded from u, so the");
+            sb.AppendLine("SAME same-entity pairs are excluded from m too (m and u must come from one population,");
+            sb.AppendLine("not m over every candidate divided by u over a subset). Unconditioned m — every same-");
+            sb.AppendLine("entity observation, no filtering — is shown for comparison; it is NOT what bits use:");
+            foreach (var f in conditioned)
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  {f.FieldName}: conditioned m={FormatRate(f.SmoothedM, f.RawM)}  " +
+                    $"(n={f.SameEntityComparisons:N0}, excluded={f.SameEntityExcludedByDetermination:N0})   " +
+                    $"unconditioned m={FormatRate(f.UnconditionedSmoothedM, f.UnconditionedRawM)}  " +
+                    $"(n={f.UnconditionedSameEntityComparisons:N0})");
+            sb.AppendLine();
+        }
+
         var withOrigins = result.Fields.Where(f => f.OriginDeterminations.Count > 0).ToList();
         if (withOrigins.Count > 0)
         {
             sb.AppendLine("PER-ORIGIN DETERMINATION — for every origin (a blocking-role field, or the unattributable");
             sb.AppendLine("bucket) that owned at least one different-entity candidate for this field, the rate at");
-            sb.AppendLine("which those candidates agree on THIS field. An origin is excluded from this field's u only");
-            sb.AppendLine("when its rate is >= the determination threshold (0.95) AND it is not the unattributable");
-            sb.AppendLine("bucket. n is the observation count behind the rate — a rate from a handful of pairs is not");
-            sb.AppendLine("the same kind of number as one from thousands:");
+            sb.AppendLine("which those candidates agree on THIS field. ONLY the row whose origin equals this field's");
+            sb.AppendLine("own name can ever be EXCLUDED (and only when its rate is >= 0.95); every other row is a");
+            sb.AppendLine("cross-field diagnostic that never decides anything, however high it measures. n is the");
+            sb.AppendLine("observation count behind the rate — a rate from a handful of pairs is not the same kind");
+            sb.AppendLine("of number as one from thousands:");
             foreach (var f in withOrigins)
             {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName}:");
                 foreach (var d in f.OriginDeterminations)
+                {
+                    var self = string.Equals(d.OriginLabel, f.FieldName, StringComparison.Ordinal) ? " (own)" : "";
                     sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    origin={d.OriginLabel,-20} n={d.Observations,10:N0}  agree={d.Agreements,10:N0}  " +
+                        $"    origin={d.OriginLabel,-20}{self,-6} n={d.Observations,10:N0}  agree={d.Agreements,10:N0}  " +
                         $"rate={d.DeterminationRate,8:P2}  {(d.Excluded ? "EXCLUDED" : "kept")}");
+                }
             }
             sb.AppendLine();
         }
@@ -105,8 +132,8 @@ public static class FieldEvidenceCalibrationTextFormatter
         var smoothingDependent = result.Fields.Where(f => f.SmoothingDependent && f.Usable).ToList();
         if (smoothingDependent.Count > 0)
         {
-            sb.AppendLine("SMOOTHING-DEPENDENT — raw m == 1 or raw u == 0, so the bits below rest entirely on the");
-            sb.AppendLine("continuity-correction constant rather than on any observed disagreement/coincidence.");
+            sb.AppendLine("SMOOTHING-DEPENDENT — raw m or raw u sits at 0 or 1, so the bits below rest entirely on");
+            sb.AppendLine("the continuity-correction constant rather than on any observed disagreement/coincidence.");
             sb.AppendLine("Shown under two constants so the sensitivity is visible, not just the primary number:");
             foreach (var f in smoothingDependent)
             {
@@ -119,11 +146,24 @@ public static class FieldEvidenceCalibrationTextFormatter
             sb.AppendLine();
         }
 
+        var orderingFlipped = result.Fields.Where(f => f.SmoothedOrderingDiffersFromRaw).ToList();
+        if (orderingFlipped.Count > 0)
+        {
+            sb.AppendLine("*** ORDERING-FLIPPED-BY-SMOOTHING: raw and smoothed m/u disagree on which is larger. ***");
+            sb.AppendLine("Usable is decided from the SMOOTHED values, so for these fields the smoothing constant —");
+            sb.AppendLine("not the data alone — decided whether this field is usable:");
+            foreach (var f in orderingFlipped)
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  {f.FieldName}: raw m={FormatRawOnly(f.RawM)} raw u={FormatRawOnly(f.RawU)}   " +
+                    $"smoothed m={f.SmoothedM:F6} smoothed u={f.SmoothedU:F6}");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("similarity distribution (10 buckets over [0,1], last bucket closed at 1.0):");
         foreach (var f in result.Fields)
         {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName} same-entity:      {Histogram(f.SameEntitySimilarityHistogram)}");
-            sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName} different-entity: {Histogram(f.DifferentEntitySimilarityHistogram)}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName} same-entity (conditioned): {Histogram(f.SameEntitySimilarityHistogram)}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  {f.FieldName} different-entity:          {Histogram(f.DifferentEntitySimilarityHistogram)}");
         }
 
         return sb.ToString();
@@ -131,10 +171,10 @@ public static class FieldEvidenceCalibrationTextFormatter
 
     private static string FormatRate(double? smoothed, double? raw)
         => smoothed is { } s
-            ? $"{s.ToString("F6", CultureInfo.InvariantCulture)}({FormatRaw(raw)})"
+            ? $"{s.ToString("F6", CultureInfo.InvariantCulture)}({FormatRawOnly(raw)})"
             : "n/a";
 
-    private static string FormatRaw(double? raw)
+    private static string FormatRawOnly(double? raw)
         => raw is { } r ? r.ToString("F4", CultureInfo.InvariantCulture) : "n/a";
 
     private static string FormatBits(double? bits)
