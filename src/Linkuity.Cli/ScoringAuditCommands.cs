@@ -47,6 +47,17 @@ public static class ScoringAuditCommands
             return 2;
         }
 
+        // --eval-only/--fit-fraction: same held-out split `match corpus calibrate` fits on (see
+        // AuditCliCommon.ApplyEvalOnlyFilter). Only meaningful for `audit` (ground-truth-driven);
+        // `explain` looks up two named records and has no held-out claim to make, so it is left
+        // alone rather than accepting flags it would silently ignore.
+        if (string.Equals(verb, "audit", StringComparison.OrdinalIgnoreCase))
+        {
+            var (evalRecords, evalErr) = AuditCliCommon.ApplyEvalOnlyFilter(options, records);
+            if (evalErr is not null) { await Console.Error.WriteLineAsync(evalErr); return 2; }
+            records = evalRecords;
+        }
+
         var service = new ScoringAuditService(MatchingDefaults.CreateRegistry());
 
         try

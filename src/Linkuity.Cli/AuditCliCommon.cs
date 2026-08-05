@@ -3,6 +3,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Linkuity.Core.Models;
 using Linkuity.Matching.Profiles;
+using Linkuity.Pipeline;
 
 namespace Linkuity.Cli;
 
@@ -143,5 +144,47 @@ internal static class AuditCliCommon
             return (value, null);
         }
         return (profile.MaxBlockSize, null);
+    }
+
+    // ---- --eval-only: restrict a loaded record set to the held-out half of the SAME split ----
+    // ---- `match corpus calibrate` uses, so a downstream evaluation can honestly claim it never ----
+    // ---- touched the records the evidence parameters were fit from. ----
+
+    /// <summary>
+    /// Filters <paramref name="records"/> down to the eval half of
+    /// <see cref="FieldEvidenceCalibrationService.IsFitHalf"/>'s split when <c>--eval-only</c> is
+    /// present, using the EXACT SAME function `match corpus calibrate` uses to build its fit half
+    /// — never a second, independently written hash split, which could silently diverge from it
+    /// and let "evaluated on held-out data" become a false claim nobody notices. Absent
+    /// <c>--eval-only</c>, every record is kept (today's behavior, unchanged) — but a
+    /// <c>--fit-fraction</c> given without it is refused rather than silently ignored, since a
+    /// flag that looks like it does something and does not is worse than one this command
+    /// rejects outright.
+    /// <para>
+    /// Shared by every corpus-scale audit command (`match corpus audit`, `match corpus ablate`,
+    /// `match scoring audit`) rather than duplicated in each: a threshold sweep and the
+    /// before/after comparison it feeds both depend on every command in the comparison having
+    /// filtered the SAME way, off the SAME split function.
+    /// </para>
+    /// </summary>
+    internal static (IReadOnlyList<EntityRecord> Records, string? Error) ApplyEvalOnlyFilter(
+        IReadOnlyDictionary<string, string> options, IReadOnlyList<EntityRecord> records)
+    {
+        var hasFitFraction = options.TryGetValue("fit-fraction", out var fitRaw);
+        if (!options.ContainsKey("eval-only"))
+            return hasFitFraction
+                ? (records, "`--fit-fraction` has no effect without `--eval-only`.")
+                : (records, null);
+
+        var fitFraction = 0.5;
+        if (hasFitFraction &&
+            (!double.TryParse(fitRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out fitFraction) ||
+             fitFraction <= 0 || fitFraction >= 1))
+            return (records, $"Invalid --fit-fraction value: {fitRaw}");
+
+        var evalHalf = records
+            .Where(r => !FieldEvidenceCalibrationService.IsFitHalf(r.SourceRecordId, fitFraction))
+            .ToList();
+        return (evalHalf, null);
     }
 }

@@ -61,6 +61,13 @@ public static class CorpusAuditCommands
                                           size, thresholds) for this run, and say so in the report.
                                           Evaluation inputs are never waived.
 
+          Held-out evaluation (report mode only, not compatible with the baseline gate):
+            --eval-only                   Restrict to the eval half of the SAME hash-of-id split
+                                          `match corpus calibrate` fits on, so this run can
+                                          honestly claim it never touched a fit-half record.
+            --fit-fraction <0..1>         Target fit-half share for the split above. Default 0.5.
+                                          Refused unless --eval-only is also given.
+
           Exit codes: 0 pass or report-only, 1 gate FAILURE, 2 usage error or gate REFUSAL.
         """;
 
@@ -108,6 +115,20 @@ public static class CorpusAuditCommands
             return 2;
         }
 
+        // --eval-only exists so a report-only run can honestly claim it never touched a fit-half
+        // record. Combined with the baseline gate it would break a second, unrelated guarantee:
+        // ValidateCoverage requires the records ID set and the ground-truth ID set to be exactly
+        // equal, and a ground-truth CSV built over the FULL corpus would then refuse every
+        // eval-only run for "missing" fit-half records that were deliberately excluded.
+        if (gateMode && options.ContainsKey("eval-only"))
+        {
+            await Console.Error.WriteLineAsync(
+                "--eval-only is not supported with the baseline gate (--write-baseline / " +
+                "--compare-baseline): gate mode requires exact ID-set equality between records " +
+                "and ground truth, which a held-out subset structurally cannot satisfy.");
+            return 2;
+        }
+
         // Validated BEFORE the audit runs: a corpus-scale audit is measured in minutes, and
         // discovering a bad --top after it is pure waste.
         var top = 20;
@@ -133,6 +154,10 @@ public static class CorpusAuditCommands
             await Console.Error.WriteLineAsync(ex.Message);
             return 2;
         }
+
+        var (evalRecords, evalErr) = AuditCliCommon.ApplyEvalOnlyFilter(options, records);
+        if (evalErr is not null) { await Console.Error.WriteLineAsync(evalErr); return 2; }
+        records = evalRecords;
 
         Dictionary<string, string> truth;
         try { truth = AuditCliCommon.ReadGroundTruthStrict(truthPath); }

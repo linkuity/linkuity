@@ -483,8 +483,18 @@ public sealed class FieldEvidenceCalibrationService
     /// property the task calls out explicitly, and the one plain <c>GetHashCode</c> cannot offer
     /// (randomized per process since .NET Core). Independent of arrival order: the same id
     /// always lands on the same side no matter where it sits in the input file.
+    /// <para>
+    /// PUBLIC (not merely internal) on purpose: this is the ONE place the fit/eval split is
+    /// computed, and any downstream instrument that needs to evaluate honestly on held-out data
+    /// — `match corpus audit --eval-only`, `match corpus ablate --eval-only`, `match scoring audit
+    /// --eval-only` (see <c>AuditCliCommon.ApplyEvalOnlyFilter</c> in Linkuity.Cli) — must call
+    /// this exact function rather than reimplement it. Two independently written hash splits
+    /// would diverge silently the first time either one's byte-composition or hash choice drifted,
+    /// and nobody downstream would notice until a "held-out" evaluation quietly included fit-half
+    /// records again.
+    /// </para>
     /// </summary>
-    internal static bool IsFitHalf(string sourceRecordId, double fitFraction)
+    public static bool IsFitHalf(string sourceRecordId, double fitFraction)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sourceRecordId));
         ulong v = 0;

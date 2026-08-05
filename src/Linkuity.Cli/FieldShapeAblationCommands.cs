@@ -41,6 +41,13 @@ public static class FieldShapeAblationCommands
             --max-block-size <n>          Overrides the profile's maxBlockSize. Held constant
                                           across every width so only the scoring input varies.
 
+          Held-out evaluation:
+            --eval-only                   Restrict to the eval half of the SAME hash-of-id split
+                                          `match corpus calibrate` fits on, so this run can
+                                          honestly claim it never touched a fit-half record.
+            --fit-fraction <0..1>         Target fit-half share for the split above. Default 0.5.
+                                          Refused unless --eval-only is also given.
+
           Exit codes: 0 report produced, 2 usage or validation error.
         """;
 
@@ -83,6 +90,10 @@ public static class FieldShapeAblationCommands
             await Console.Error.WriteLineAsync(ex.Message);
             return 2;
         }
+
+        var (evalRecords, evalErr) = AuditCliCommon.ApplyEvalOnlyFilter(options, records);
+        if (evalErr is not null) { await Console.Error.WriteLineAsync(evalErr); return 2; }
+        records = evalRecords;
 
         Dictionary<string, string> truth;
         try { truth = AuditCliCommon.ReadGroundTruthStrict(truthPath); }
