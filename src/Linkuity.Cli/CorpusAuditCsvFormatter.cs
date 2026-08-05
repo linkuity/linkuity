@@ -56,6 +56,18 @@ public static class CorpusAuditCsvFormatter
             Row("stratum", $"{s.Id}.non_comparable", s.NonComparable);
             Row("stratum", $"{s.Id}.post_cluster_true_positive", s.PostClusterTruePositive);
         }
+
+        // Present only when the merge policy could reject something (spec §6.4). Absent, not
+        // zero-filled, when cohesion is off — a CSV row of zeros would read as "measured and found
+        // nothing" rather than "not measured".
+        if (result.BlastRadius is { } br)
+        {
+            Row("cohesion_blast_radius", "rejected_components", br.RejectedComponents);
+            Row("cohesion_blast_radius", "components_containing_a_lost_correct_cluster",
+                br.ComponentsContainingALostCorrectCluster);
+            Row("cohesion_blast_radius", "correct_clusters_lost", br.CorrectClustersLost);
+            Row("cohesion_blast_radius", "records_in_lost_correct_clusters", br.RecordsInLostCorrectClusters);
+        }
         return sb.ToString();
     }
 }

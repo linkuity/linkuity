@@ -78,6 +78,21 @@ public static class CorpusAuditTextFormatter
                 $"{s.NoMatch,8:N0} {s.NonComparable,8:N0} {recall,8}");
         }
 
+        if (result.BlastRadius is { } br)
+        {
+            sb.AppendLine();
+            sb.AppendLine("cohesion blast radius (spec §6.4 — reject-wholesale destroys any correct");
+            sb.AppendLine("sub-cluster inside a rejected component, not only the contradiction that caused it):");
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"  components rejected for cohesion         {br.RejectedComponents:N0}");
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"  of those, containing a lost correct cluster {br.ComponentsContainingALostCorrectCluster:N0}");
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"  correct clusters lost                     {br.CorrectClustersLost:N0}");
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"  records in those lost clusters             {br.RecordsInLostCorrectClusters:N0}");
+        }
+
         var missed = result.AllTruePairs.Where(p => !p.SameCluster)
             .OrderBy(p => p.Stratum)
             .ThenBy(p => p.LeftSourceRecordId, StringComparer.Ordinal)

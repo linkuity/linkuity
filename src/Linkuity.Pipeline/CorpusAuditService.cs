@@ -147,13 +147,22 @@ public sealed class CorpusAuditService
         // comparisons contradict it too often is refused and dissolves into singletons. Must run
         // before SameCluster/ClusterPairCounts below so every number this audit reports — not just
         // the cluster summary — reflects the clustering production would actually have formed.
-        if (mergePolicyCanReject) ApplyClusterMergePolicy(roots, comparisons!, profile, _mergePolicy);
+        var rejectedComponents = mergePolicyCanReject
+            ? ApplyClusterMergePolicy(roots, comparisons!, profile, _mergePolicy)
+            : [];
 
         foreach (var state in truePairs.Values) state.SameCluster = roots[state.Left] == roots[state.Right];
 
+        // Spec §6.4/§9.7: computed from the SAME rejected-component list ApplyClusterMergePolicy
+        // just dissolved, and the SAME byLabel grouping truePairs was built from above — never a
+        // second, independently recomputed notion of "the true entity's full membership".
+        var blastRadius = mergePolicyCanReject
+            ? ComputeBlastRadius(rejectedComponents, trueLabel, byLabel)
+            : null;
+
         var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
         return BuildResult(records, profile, effectiveMax, normalized, trueLabel, roots,
-            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap);
+            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap, blastRadius);
     }
 
     private static long Pack(int lo, int hi) => ((long)lo << 32) | (uint)hi;
@@ -204,7 +213,7 @@ public sealed class CorpusAuditService
         IReadOnlyList<EntityRecord> records, MatchingProfile profile, int? effectiveMax,
         EntityRecord[] normalized, string?[] trueLabel, int[] roots,
         int unlabeled, long emitted, long occurrences, long floorLifted,
-        IEnumerable<TruePairState> states, long tp, long pp, long ap)
+        IEnumerable<TruePairState> states, long tp, long pp, long ap, CohesionBlastRadius? blastRadius)
     {
         var all = states.ToList();
 
@@ -269,7 +278,7 @@ public sealed class CorpusAuditService
         return new CorpusAuditResult(
             new CorpusAuditInputs(effectiveMax, profile.AutoMatchThreshold, profile.ReviewThreshold,
                 profile.ReviewFloorGate, coverage),
-            counts, metrics, summary, strata, outcomes);
+            counts, metrics, summary, strata, outcomes, blastRadius);
     }
 
     /// <summary>
@@ -500,6 +509,12 @@ public sealed class CorpusAuditService
 
     private static long Choose2(long n) => n * (n - 1) / 2;
 
+    /// <summary>A component the merge policy refused, captured with its pre-dissolution membership
+    /// so <see cref="ComputeBlastRadius"/> can ask what was inside it. The members list is the
+    /// SAME list <see cref="ApplyClusterMergePolicy"/> used to evaluate the policy — never
+    /// recomputed from the (by then dissolved) <c>roots</c> array.</summary>
+    internal sealed record RejectedComponent(IReadOnlyList<int> Members, ClusterMergeVerdict Verdict);
+
     /// <summary>
     /// Evaluates every multi-record root the walk produced through <paramref name="mergePolicy"/>
     /// — the SAME policy instance <see cref="Audit"/> was given, never one hardcoded here, so a
@@ -510,9 +525,11 @@ public sealed class CorpusAuditService
     /// whose endpoints share a root — never a second candidate-pair walk). A root the policy
     /// refuses has every member reset to its own root, in place, before returning — the audit's
     /// existing representation of "unclustered" — so the cluster metrics computed after this call
-    /// see singletons rather than a cluster production would never have formed.
+    /// see singletons rather than a cluster production would never have formed. Returns every
+    /// refused component (with the membership it had BEFORE dissolution) so a caller can measure
+    /// what the rejection destroyed, spec §6.4.
     /// </summary>
-    private static void ApplyClusterMergePolicy(
+    private static List<RejectedComponent> ApplyClusterMergePolicy(
         int[] roots, IReadOnlyList<(int Left, int Right, bool IsAuto)> comparisons, MatchingProfile profile,
         IClusterMergePolicy mergePolicy)
     {
@@ -529,6 +546,7 @@ public sealed class CorpusAuditService
             tally[root] = (cmp + 1, agr + (isAuto ? 1 : 0));
         }
 
+        var rejected = new List<RejectedComponent>();
         foreach (var (root, members) in membersByRoot)
         {
             if (members.Count < 2) continue; // singleton: no cluster for the policy to refuse
@@ -536,10 +554,57 @@ public sealed class CorpusAuditService
             // Members comes from the component's own membership list, never from
             // default(ClusterEvidenceCounts) — that reads as a fully-agreeing zero-member cluster.
             var counts = new ClusterEvidenceCounts(members.Count, cmp, agr);
-            if (mergePolicy.Evaluate(counts, profile) == ClusterMergeVerdict.Accepted) continue;
+            var verdict = mergePolicy.Evaluate(counts, profile);
+            if (verdict == ClusterMergeVerdict.Accepted) continue;
 
+            rejected.Add(new RejectedComponent(members, verdict));
             foreach (var member in members) roots[member] = member;
         }
+        return rejected;
+    }
+
+    /// <summary>
+    /// Spec §6.4/§9.7: the accepted design is reject-wholesale — a component that fails cohesion
+    /// dissolves to singletons IN FULL, taking any correct sub-grouping with it. This asks, for
+    /// each rejected component, whether a true entity's ENTIRE membership (every record ground
+    /// truth assigns that label, corpuswide — <paramref name="byLabel"/>) happened to land inside
+    /// it. Such a sub-grouping is not a heuristic guess at "correct" — every member of the real
+    /// entity is present and nothing else carries its label, so on its own it would have been a
+    /// perfectly correct cluster. Restricted to <see cref="ClusterMergeVerdict.RejectedForCohesion"/>
+    /// because this is a cohesion measurement: <c>MaxAutoClusterSize</c> stays off throughout
+    /// stage 1b, but a caller that turned it on should not have its rejections silently folded in
+    /// here as if cohesion had caused them. A true label with fewer than two members corpuswide is
+    /// already a singleton and has nothing to lose, so it is not counted.
+    /// </summary>
+    internal static CohesionBlastRadius ComputeBlastRadius(
+        IReadOnlyList<RejectedComponent> rejectedComponents,
+        string?[] trueLabel,
+        IReadOnlyDictionary<string, List<int>> byLabel)
+    {
+        long rejectedForCohesion = 0, componentsWithLoss = 0, clustersLost = 0, recordsLost = 0;
+
+        foreach (var component in rejectedComponents)
+        {
+            if (component.Verdict != ClusterMergeVerdict.RejectedForCohesion) continue;
+            rejectedForCohesion++;
+
+            var memberSet = new HashSet<int>(component.Members);
+            var seenLabels = new HashSet<string>(StringComparer.Ordinal);
+            var lostHere = 0;
+            foreach (var i in component.Members)
+            {
+                if (trueLabel[i] is not { } label || !seenLabels.Add(label)) continue;
+                var fullMembership = byLabel[label];
+                if (fullMembership.Count < 2 || !fullMembership.TrueForAll(memberSet.Contains)) continue;
+                lostHere++;
+                recordsLost += fullMembership.Count;
+            }
+            if (lostHere == 0) continue;
+            componentsWithLoss++;
+            clustersLost += lostHere;
+        }
+
+        return new CohesionBlastRadius(rejectedForCohesion, componentsWithLoss, clustersLost, recordsLost);
     }
 
     /// <summary>

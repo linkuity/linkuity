@@ -65,10 +65,31 @@ public sealed record TruePairOutcome(
 public sealed record CorpusAuditClusterSummary(
     int GoldenRecordCount, int LargestClusterSize, int UnifiedClusterCount, int SingletonCount);
 
+/// <summary>
+/// What cluster-cohesion rejection destroyed, spec §6.4/§9.7: "the re-run must report how often a
+/// failing component contains previously-correct clusters. If that number is large, peel-back is
+/// worth revisiting despite its order-dependence." The design in play is reject-wholesale — a
+/// component that fails cohesion dissolves to singletons in full, so a true entity whose entire
+/// membership happened to land inside that component is destroyed along with whatever else made
+/// the component fail. <see cref="RejectedComponents"/> counts only
+/// <see cref="Linkuity.Matching.Clustering.ClusterMergeVerdict.RejectedForCohesion"/> — this is a
+/// cohesion measurement, not a size-guard one, and <c>MaxAutoClusterSize</c> is off throughout
+/// stage 1b.
+/// </summary>
+public sealed record CohesionBlastRadius(
+    long RejectedComponents,
+    long ComponentsContainingALostCorrectCluster,
+    long CorrectClustersLost,
+    long RecordsInLostCorrectClusters);
+
 public sealed record CorpusAuditResult(
     CorpusAuditInputs Inputs,
     CorpusAuditCounts Counts,
     CorpusAuditMetrics Metrics,
     CorpusAuditClusterSummary ClusterSummary,
     IReadOnlyList<CorpusStratumRow> Strata,
-    IReadOnlyList<TruePairOutcome> AllTruePairs);
+    IReadOnlyList<TruePairOutcome> AllTruePairs,
+    // Null exactly when the merge policy cannot reject anything under this profile (cohesion off,
+    // no size guard) — the same "off means off, not a fabricated zero" shape CorpusAuditService
+    // already uses for the `comparisons` list it builds during the walk.
+    CohesionBlastRadius? BlastRadius = null);
