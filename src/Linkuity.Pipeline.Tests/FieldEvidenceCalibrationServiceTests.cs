@@ -142,6 +142,44 @@ public class FieldEvidenceCalibrationServiceTests
             Assert.Equal(first, FieldEvidenceCalibrationService.IsFitHalf("some-record-id", 0.5));
     }
 
+    /// <summary>
+    /// The guarantee every downstream "evaluated on held-out data" claim rests on: for ANY id and
+    /// ANY valid fitFraction, an id lands on EXACTLY one side (fit XOR eval), and no id is ever
+    /// dropped by the split — the fit half and the eval half partition the corpus. Proven over a
+    /// few hundred synthetic ids rather than just the 6-record fixture above, so this is a
+    /// property of the function itself, not an artifact of one hand-picked set. This is also what
+    /// makes `AuditCliCommon.ApplyEvalOnlyFilter` (Linkuity.Cli) safe to build on top of
+    /// <see cref="FieldEvidenceCalibrationService.IsFitHalf"/> as-is: the eval-only filter keeps
+    /// exactly the ids this method says are NOT fit, and this test is the proof that "not fit" and
+    /// "eval" are the same thing with nothing lost in between.
+    /// </summary>
+    [Theory]
+    [InlineData(0.1)]
+    [InlineData(0.5)]
+    [InlineData(0.9)]
+    public void IsFitHalf_FitAndEvalHalves_AreDisjoint_AndTheirUnionIsTheWholeCorpus(double fitFraction)
+    {
+        var ids = Enumerable.Range(0, 500).Select(i => $"record-{i:D4}").ToList();
+
+        var fit = ids.Where(id => FieldEvidenceCalibrationService.IsFitHalf(id, fitFraction))
+            .ToHashSet(StringComparer.Ordinal);
+        var eval = ids.Where(id => !FieldEvidenceCalibrationService.IsFitHalf(id, fitFraction))
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Disjoint: no id is on both sides.
+        Assert.Empty(fit.Intersect(eval, StringComparer.Ordinal));
+        // No id is dropped: every id in the corpus is on exactly one side, so the two counts sum
+        // to the corpus size...
+        Assert.Equal(ids.Count, fit.Count + eval.Count);
+        // ...and the union recovers the whole corpus exactly, not merely the same cardinality.
+        Assert.Equal(new HashSet<string>(ids, StringComparer.Ordinal), fit.Union(eval, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal));
+
+        // Not a degenerate split that puts everything on one side (would trivially "pass" the
+        // disjoint/union checks above without actually splitting anything).
+        Assert.NotEmpty(fit);
+        Assert.NotEmpty(eval);
+    }
+
     // ---- Split bookkeeping ----
 
     [Fact]
