@@ -1,9 +1,9 @@
-"""Tests for the GLEIF organization corpus builder.
+r"""Tests for the GLEIF organization corpus builder.
 
 Runs entirely on synthetic fixtures. Nothing here touches the 4.9 GB source, so the
 whole suite must stay under a second -- a test suite nobody runs is not a test suite.
 
-    python -m unittest discover -s tools\\corpus -p "test_*.py" -v
+    python -m unittest discover -s tools\corpus -p "test_*.py" -v
 """
 import unittest
 
@@ -28,17 +28,17 @@ class TestDominantScript(unittest.TestCase):
         self.assertEqual(g.dominant_script("Prva stavebna sporitelna"), "LATIN")
 
     def test_diacritics_are_still_latin(self):
-        self.assertEqual(g.dominant_script("Prva stavebna sporitelna".replace("a", "á")), "LATIN")
+        self.assertEqual(g.dominant_script("Prva stavebna sporitelna".replace("a", "\u00e1")), "LATIN")
 
     def test_cyrillic(self):
-        self.assertEqual(g.dominant_script("Общество"), "CYRILLIC")
+        self.assertEqual(g.dominant_script("\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e"), "CYRILLIC")
 
     def test_digits_and_punctuation_only_is_none(self):
         self.assertEqual(g.dominant_script("123 -- 456"), "NONE")
 
     def test_mixed_takes_the_majority(self):
         # 8 Cyrillic letters vs 3 Latin -> CYRILLIC
-        self.assertEqual(g.dominant_script("Общество LLC"), "CYRILLIC")
+        self.assertEqual(g.dominant_script("\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e LLC"), "CYRILLIC")
 
 
 class TestScriptRelation(unittest.TestCase):
@@ -46,7 +46,7 @@ class TestScriptRelation(unittest.TestCase):
         self.assertEqual(g.script_relation("ACME GMBH", "ACME GesmbH"), "same")
 
     def test_cross_script(self):
-        self.assertEqual(g.script_relation("MATADOR Rus LLC", "Общество"), "cross")
+        self.assertEqual(g.script_relation("MATADOR Rus LLC", "\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e"), "cross")
 
     def test_unscripted_alias_counts_as_same(self):
         # A name with no letters cannot be evidence of a script change, and calling it
