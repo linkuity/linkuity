@@ -249,5 +249,19 @@ class TestSampleFraction(unittest.TestCase):
         self.assertGreater(len({int(v * 10) for v in vals}), 5)
 
 
+class TestSha256(unittest.TestCase):
+    def test_matches_hashlib_and_is_uppercase(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "f.bin")
+            payload = b"gleif-org corpus builder\n" * 100
+            with open(path, "wb") as fh:
+                fh.write(payload)
+            digest = g.sha256(path)
+            self.assertEqual(digest, hashlib.sha256(payload).hexdigest().upper())
+            self.assertEqual(digest, digest.upper())
+            self.assertEqual(len(digest), 64)
+
+
 if __name__ == "__main__":
     unittest.main()
