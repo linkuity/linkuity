@@ -263,5 +263,102 @@ class TestSha256(unittest.TestCase):
             self.assertEqual(len(digest), 64)
 
 
+def write_records(path, ids, extra=None):
+    """Write a records.csv with the real header and only ids populated."""
+    extra = extra or {}
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(g.RECORD_COLUMNS)
+        for rid in ids:
+            values = extra.get(rid, {})
+            w.writerow([values.get(c, "") if c != "id" else rid for c in g.RECORD_COLUMNS])
+
+
+def write_truth(path, pairs):
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["record_id", "canonical_key"])
+        w.writerows(pairs)
+
+
+class TestVerificationPredicates(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+
+    def p(self, name):
+        return os.path.join(self.tmp, name)
+
+    def test_ids_unique_and_sorted_passes(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0", "gleif-AAA-1", "gleif-BBB-0"])
+        self.assertEqual(g.check_ids_unique_and_sorted(self.p("r.csv")), [])
+
+    def test_duplicate_id_is_reported(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0", "gleif-AAA-0"])
+        problems = g.check_ids_unique_and_sorted(self.p("r.csv"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("gleif-AAA-0", problems[0])
+
+    def test_out_of_order_id_is_reported(self):
+        write_records(self.p("r.csv"), ["gleif-BBB-0", "gleif-AAA-0"])
+        self.assertEqual(len(g.check_ids_unique_and_sorted(self.p("r.csv"))), 1)
+
+    def test_gated_subset_passes(self):
+        write_records(self.p("full.csv"), ["gleif-AAA-0", "gleif-AAA-1", "gleif-AAA-2"])
+        write_records(self.p("gated.csv"), ["gleif-AAA-0", "gleif-AAA-2"])
+        self.assertEqual(g.check_gated_is_subset(self.p("gated.csv"), self.p("full.csv")), [])
+
+    def test_gated_record_absent_from_full_is_reported(self):
+        write_records(self.p("full.csv"), ["gleif-AAA-0"])
+        write_records(self.p("gated.csv"), ["gleif-AAA-0", "gleif-AAA-9"])
+        problems = g.check_gated_is_subset(self.p("gated.csv"), self.p("full.csv"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("gleif-AAA-9", problems[0])
+
+    def test_truth_covers_records_passes(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0", "gleif-AAA-1"])
+        write_truth(self.p("t.csv"), [("gleif-AAA-0", "AAA"), ("gleif-AAA-1", "AAA")])
+        self.assertEqual(g.check_truth_covers_records(self.p("r.csv"), self.p("t.csv")), [])
+
+    def test_unlabelled_record_is_reported(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0", "gleif-AAA-1"])
+        write_truth(self.p("t.csv"), [("gleif-AAA-0", "AAA")])
+        self.assertEqual(len(g.check_truth_covers_records(self.p("r.csv"), self.p("t.csv"))), 1)
+
+    def test_wrong_canonical_key_is_reported(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0"])
+        write_truth(self.p("t.csv"), [("gleif-AAA-0", "BBB")])
+        self.assertEqual(len(g.check_truth_covers_records(self.p("r.csv"), self.p("t.csv"))), 1)
+
+    def test_sample_entity_complete_passes(self):
+        write_records(self.p("gated.csv"), ["gleif-AAA-0", "gleif-AAA-1", "gleif-BBB-0"])
+        write_records(self.p("s.csv"), ["gleif-AAA-0", "gleif-AAA-1"])
+        self.assertEqual(g.check_sample_entity_complete(self.p("s.csv"), self.p("gated.csv")), [])
+
+    def test_split_entity_in_sample_is_reported(self):
+        write_records(self.p("gated.csv"), ["gleif-AAA-0", "gleif-AAA-1"])
+        write_records(self.p("s.csv"), ["gleif-AAA-0"])
+        problems = g.check_sample_entity_complete(self.p("s.csv"), self.p("gated.csv"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("AAA", problems[0])
+
+    def test_fingerprint_reports_population_and_a_slice_hash(self):
+        write_records(self.p("r.csv"), ["gleif-AAA-0", "gleif-AAA-1", "gleif-BBB-0", "gleif-CCC-0"],
+                      extra={"gleif-AAA-0": {"region": "CA"}, "gleif-BBB-0": {"region": "NY"}})
+        fp = g.field_fingerprint(self.p("r.csv"), slice_size=2)
+        self.assertEqual(fp["records"], 4)
+        self.assertAlmostEqual(fp["population"]["region"], 0.5)
+        self.assertEqual(len(fp["sliceSha256"]), 64)
+
+    def test_fingerprint_slice_hash_changes_when_two_columns_are_swapped(self):
+        # A swapped city/region mapping changes neither the record count nor the
+        # partition. This is the check that catches it.
+        write_records(self.p("a.csv"), ["gleif-AAA-0"], extra={"gleif-AAA-0": {"city": "Dublin", "region": "L"}})
+        write_records(self.p("b.csv"), ["gleif-AAA-0"], extra={"gleif-AAA-0": {"city": "L", "region": "Dublin"}})
+        self.assertNotEqual(g.field_fingerprint(self.p("a.csv"), slice_size=1)["sliceSha256"],
+                            g.field_fingerprint(self.p("b.csv"), slice_size=1)["sliceSha256"])
+
+
 if __name__ == "__main__":
     unittest.main()

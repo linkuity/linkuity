@@ -9,6 +9,7 @@ No I/O side effects at import time.
 import csv
 import functools
 import hashlib
+import os
 import unicodedata
 
 # --- alias type vocabulary -------------------------------------------------------
@@ -239,3 +240,145 @@ def sha256(path):
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest().upper()
+
+
+def _read_ids(path):
+    """Yield record ids from a records.csv, streaming."""
+    with open(path, encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        id_col = next(reader).index("id")
+        for row in reader:
+            yield row[id_col]
+
+
+def _sort_key(rid):
+    """(LEI, ordinal) -- the output ordering. Ordinal sorts numerically, not as text."""
+    lei = lei_from_record_id(rid)
+    return lei, int(rid[rid.rindex("-") + 1:])
+
+
+def check_ids_unique_and_sorted(records_csv_path):
+    """Spec check 2. Sortedness makes every other check an O(1)-memory merge."""
+    problems, previous = [], None
+    for rid in _read_ids(records_csv_path):
+        key = _sort_key(rid)
+        if previous is not None:
+            if key == previous[1]:
+                problems.append(f"duplicate record id {rid}")
+            elif key < previous[1]:
+                problems.append(f"record id {rid} sorts before {previous[0]}")
+        previous = (rid, key)
+        if len(problems) >= 10:
+            break
+    return problems
+
+
+def check_gated_is_subset(gated_csv, full_csv):
+    """Spec check 1. Lockstep merge; both files share the (LEI, ordinal) ordering."""
+    problems = []
+    full = _read_ids(full_csv)
+    current = next(full, None)
+    for rid in _read_ids(gated_csv):
+        target = _sort_key(rid)
+        while current is not None and _sort_key(current) < target:
+            current = next(full, None)
+        if current is None or _sort_key(current) != target:
+            problems.append(f"gated record {rid} is not present in {os.path.basename(full_csv)}")
+            if len(problems) >= 10:
+                break
+        else:
+            current = next(full, None)
+    return problems
+
+
+def check_truth_covers_records(records_csv, truth_csv):
+    """Every record labelled exactly once, key == the LEI in its own id.
+
+    Report mode of `corpus audit` does NOT enforce record/ground-truth id-set equality --
+    only --compare-baseline does -- so this check is what proves label completeness.
+    """
+    problems = []
+    with open(truth_csv, encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        rid_col, key_col = header.index("record_id"), header.index("canonical_key")
+        truth = ((row[rid_col], row[key_col]) for row in reader)
+
+        for rid in _read_ids(records_csv):
+            entry = next(truth, None)
+            if entry is None:
+                problems.append(f"record {rid} has no ground-truth row")
+                break
+            if entry[0] != rid:
+                problems.append(f"ground truth is out of step: expected {rid}, saw {entry[0]}")
+                break
+            expected_key = lei_from_record_id(rid)
+            if entry[1] != expected_key:
+                problems.append(f"record {rid} keyed {entry[1]}, expected {expected_key}")
+                if len(problems) >= 10:
+                    break
+        else:
+            if next(truth, None) is not None:
+                problems.append("ground truth has rows with no corresponding record")
+    return problems
+
+
+def check_sample_entity_complete(sample_csv, gated_csv):
+    """Spec check 3. Every entity in the sample brings ALL of its gated records.
+
+    Counts per LEI in both files; the sample's LEI set is small enough to hold.
+    """
+    wanted = {}
+    for rid in _read_ids(sample_csv):
+        lei = lei_from_record_id(rid)
+        wanted[lei] = wanted.get(lei, 0) + 1
+
+    actual = {}
+    for rid in _read_ids(gated_csv):
+        lei = lei_from_record_id(rid)
+        if lei in wanted:
+            actual[lei] = actual.get(lei, 0) + 1
+
+    problems = []
+    for lei in sorted(wanted):
+        if wanted[lei] != actual.get(lei, 0):
+            problems.append(f"entity {lei} is split: {wanted[lei]} record(s) in the sample, "
+                            f"{actual.get(lei, 0)} in the gate corpus")
+            if len(problems) >= 10:
+                break
+    return problems
+
+
+def field_fingerprint(records_csv, slice_size=500):
+    """Spec check 6: per-column population rates plus a hash over a deterministic slice.
+
+    Partition and id checks cannot catch a CONSISTENTLY wrong build. A swapped
+    city/region mapping changes neither the record count nor the partition -- it changes
+    this hash. The slice is taken at a fixed stride so it spans the whole file rather
+    than its (LOU-correlated) head.
+    """
+    with open(records_csv, encoding="utf-8", newline="") as fh:
+        total = sum(1 for _ in fh) - 1
+    stride = max(1, total // slice_size)
+
+    populated = {c: 0 for c in RECORD_COLUMNS}
+    digest = hashlib.sha256()
+    taken = 0
+    with open(records_csv, encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        for index, row in enumerate(reader):
+            for name, value in zip(header, row):
+                if value:
+                    populated[name] += 1
+            if index % stride == 0 and taken < slice_size:
+                digest.update(("\x1f".join(row) + "\x1e").encode("utf-8"))
+                taken += 1
+
+    return {
+        "records": total,
+        "population": {c: (populated[c] / total if total else 0.0) for c in RECORD_COLUMNS},
+        "sliceSize": taken,
+        "sliceStride": stride,
+        "sliceSha256": digest.hexdigest(),
+    }
