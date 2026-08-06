@@ -7,8 +7,10 @@ linkuity/docs/superpowers/specs/2026-08-05-gleif-labelled-org-corpus-design.md.
 No I/O side effects at import time.
 """
 import csv
+import dataclasses
 import functools
 import hashlib
+import json
 import os
 import unicodedata
 
@@ -382,3 +384,124 @@ def field_fingerprint(records_csv, slice_size=500):
         "sliceStride": stride,
         "sliceSha256": digest.hexdigest(),
     }
+
+
+@dataclasses.dataclass
+class BuildConfig:
+    """Everything the build depends on, injectable so the tests exercise the real path.
+
+    `expected` maps observed-count name -> pinned value. A missing key or a None value
+    means "not pinned yet": the build runs every stage, prints a paste-ready block, and
+    refuses to publish. Same convention as build-sec-recall-corpus.py.
+    """
+    gleif_path: str
+    sec_path: str
+    out_dir: str
+    expected: dict
+    sample_target: int = 200_000
+    expected_gleif_sha256: str = ""
+    expected_sec_sha256: str = ""
+
+
+def tmp_dir(config):
+    return os.path.join(config.out_dir, ".build-tmp")
+
+
+CIK_AUTHORITY = "RA000665"
+
+
+def _open_pair(directory, records_name, truth_name):
+    rf = open(os.path.join(directory, records_name), "w", newline="", encoding="utf-8")
+    tf = open(os.path.join(directory, truth_name), "w", newline="", encoding="utf-8")
+    rw, tw = csv.writer(rf), csv.writer(tf)
+    rw.writerow(RECORD_COLUMNS)
+    tw.writerow(["record_id", "canonical_key"])
+    return rf, tf, rw, tw
+
+
+def run_parse(config):
+    """One streaming pass over GLEIF; writes both variants and the CIK candidate set.
+
+    Peak memory is the current row plus the CIK candidate map (a few thousand entries),
+    so it is independent of corpus size.
+    """
+    csv.field_size_limit(10_000_000)
+    out = tmp_dir(config)
+    os.makedirs(out, exist_ok=True)
+
+    alias_types, script_relations = {}, {}
+    entities = gated_records = full_records = 0
+    gated_pairs = full_pairs = 0
+    cik = {"rows": 0, "numeric": 0, "seriesIds": 0, "empty": 0,
+           "wrongAuthorityCikShaped": 0}
+    cik_candidates = {}
+
+    gf, gt, gw, gtw = _open_pair(out, "records.csv", "ground-truth.csv")
+    ff, ft, fw, ftw = _open_pair(out, "records-full.csv", "ground-truth-full.csv")
+    try:
+        with open(config.gleif_path, encoding="utf-8", newline="") as fh:
+            reader = csv.reader(fh)
+            ix = column_index(next(reader))
+            authority_col = ix["Entity.RegistrationAuthority.RegistrationAuthorityID"]
+            entity_id_col = ix["Entity.RegistrationAuthority.RegistrationAuthorityEntityID"]
+
+            for lineno, row in enumerate(reader, start=2):
+                try:
+                    records = entity_records(row, ix)
+                except ValueError as exc:
+                    raise ValueError(f"line {lineno}: {exc}") from exc
+
+                entities += 1
+                lei = row[ix["LEI"]].strip()
+                gated_in_entity = 0
+                for record in records:
+                    alias_types[record["alias_type"]] = alias_types.get(record["alias_type"], 0) + 1
+                    script_relations[record["script_relation"]] = \
+                        script_relations.get(record["script_relation"], 0) + 1
+                    values = [record[c] for c in RECORD_COLUMNS]
+                    fw.writerow(values)
+                    ftw.writerow([record["id"], lei])
+                    full_records += 1
+                    if record["_gated"]:
+                        gw.writerow(values)
+                        gtw.writerow([record["id"], lei])
+                        gated_records += 1
+                        gated_in_entity += 1
+                full_pairs += true_pairs_from_sizes([len(records)])
+                gated_pairs += true_pairs_from_sizes([gated_in_entity])
+
+                authority = row[authority_col].strip()
+                entity_id = row[entity_id_col].strip()
+                if authority == CIK_AUTHORITY:
+                    cik["rows"] += 1
+                    if not entity_id:
+                        cik["empty"] += 1
+                    elif entity_id.isdigit():
+                        cik["numeric"] += 1
+                        cik_candidates[entity_id.zfill(10)] = {
+                            "lei": lei,
+                            "record": {c: records[0][c] for c in RECORD_COLUMNS},
+                        }
+                    else:
+                        cik["seriesIds"] += 1
+                elif entity_id.isdigit() and len(entity_id.lstrip("0")) <= 10:
+                    # British Virgin Islands and Cayman company numbers collide with
+                    # zero-padded CIKs. Counted, never joined -- spec section 2.
+                    cik["wrongAuthorityCikShaped"] += 1
+    finally:
+        for handle in (gf, gt, ff, ft):
+            handle.close()
+
+    observed = {
+        "entities": entities,
+        "gatedRecords": gated_records,
+        "fullRecords": full_records,
+        "gatedTruePairs": gated_pairs,
+        "fullTruePairs": full_pairs,
+        "aliasTypes": dict(sorted(alias_types.items())),
+        "scriptRelations": dict(sorted(script_relations.items())),
+        "cik": cik,
+    }
+    with open(os.path.join(out, "cik-candidates.json"), "w", encoding="utf-8") as fh:
+        json.dump(cik_candidates, fh, sort_keys=True)
+    return observed   # run_build caches this to parse-counts.json

@@ -360,5 +360,176 @@ class TestVerificationPredicates(unittest.TestCase):
                             g.field_fingerprint(self.p("b.csv"), slice_size=1)["sliceSha256"])
 
 
+def write_gleif_fixture(path):
+    """A 14-row GLEIF-shaped file exercising every branch the parse stage has.
+
+    Deliberately NOT sorted by LEI in a couple of places is out of scope: GLEIF is
+    published in ascending LEI order and the builder relies on that, so the fixture
+    mirrors it.
+    """
+    rows = [
+        # 3 gated records (LEGAL + PREVIOUS + TRADING), full payload
+        gleif_row("LEI0000000000000001", "ACME LTD",
+                  others=[("OLD ACME LTD", "PREVIOUS_LEGAL_NAME"),
+                          ("ACME TRADING", "TRADING_OR_OPERATING_NAME")],
+                  address={"address_line": "1 Main St", "city": "Dublin", "region": "Leinster",
+                           "postal_code": "D01", "country": "IE", "jurisdiction": "IE",
+                           "legal_form": "H8VW"}),
+        # singleton distractor, region missing
+        gleif_row("LEI0000000000000002", "BOREAL HOLDINGS SA",
+                  address={"address_line": "2 Rue Neuve", "city": "Paris", "region": "",
+                           "postal_code": "75001", "country": "FR", "jurisdiction": "FR",
+                           "legal_form": "6QQB"}),
+        # same-script transliteration: gated
+        gleif_row("LEI0000000000000003", "Prv\u00e1 stavebn\u00e1 sporite\u013ea",
+                  translits=[("Prva stavebna sporitelna", "AUTO_ASCII_TRANSLITERATED_LEGAL_NAME")],
+                  address={"address_line": "3 Hlavna", "city": "Bratislava", "region": "",
+                           "postal_code": "81109", "country": "SK", "jurisdiction": "SK",
+                           "legal_form": "8Z6G"}),
+        # cross-script transliteration: NOT gated, present in full only
+        gleif_row("LEI0000000000000004",
+                  "\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e \u0410\u043b\u044c\u0444\u0430",
+                  translits=[("Obshchestvo Alfa", "PREFERRED_ASCII_TRANSLITERATED_LEGAL_NAME")],
+                  address={"address_line": "4 Tverskaya", "city": "Moscow", "region": "",
+                           "postal_code": "125009", "country": "RU", "jurisdiction": "RU",
+                           "legal_form": "AXSB"}),
+        # alternative language: NEVER gated, and it sits between two gated aliases so the
+        # ordinal-assignment rule is exercised end to end
+        gleif_row("LEI0000000000000005", "MATADOR AUTOMOTIVE",
+                  others=[("\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e \u041c\u0430\u0442\u0430\u0434\u043e\u0440",
+                           "ALTERNATIVE_LANGUAGE_LEGAL_NAME"),
+                          ("MATADOR AUTO", "TRADING_OR_OPERATING_NAME")],
+                  address={"address_line": "5 Long Rd", "city": "Bratislava", "region": "",
+                           "postal_code": "81109", "country": "SK", "jurisdiction": "SK",
+                           "legal_form": "8Z6G"}),
+        # duplicate alias, case-folded away
+        gleif_row("LEI0000000000000006", "CYGNUS PLC",
+                  others=[("cygnus plc", "PREVIOUS_LEGAL_NAME")],
+                  address={"address_line": "6 Cross St", "city": "London", "region": "England",
+                           "postal_code": "EC1", "country": "GB", "jurisdiction": "GB",
+                           "legal_form": "B6ES"}),
+        # CIK join, accepted
+        gleif_row("LEI0000000000000007", "DELTA CORP",
+                  address={"address_line": "7 Wall St", "city": "New York", "region": "NY",
+                           "postal_code": "10005", "country": "US", "jurisdiction": "US-DE",
+                           "legal_form": "XTIQ"},
+                  ra=("RA000665", "1234")),
+        # CIK-shaped id under the WRONG authority: must be rejected and counted
+        gleif_row("LEI0000000000000008", "TORTOLA OFFSHORE LTD",
+                  address={"address_line": "8 Road Town", "city": "Tortola", "region": "",
+                           "postal_code": "VG1110", "country": "VG", "jurisdiction": "VG",
+                           "legal_form": "XTIQ"},
+                  ra=("RA000063", "1234")),
+        # RA000665 with a SEC SERIES id: excluded, counted, not a parse failure
+        gleif_row("LEI0000000000000009", "EPSILON FUND",
+                  address={"address_line": "9 State St", "city": "Boston", "region": "MA",
+                           "postal_code": "02109", "country": "US", "jurisdiction": "US-MA",
+                           "legal_form": "XTIQ"},
+                  ra=("RA000665", "S000005113")),
+        # RA000665 numeric id with NO matching CIK: counted separately
+        gleif_row("LEI0000000000000010", "ZETA UNLISTED INC",
+                  address={"address_line": "10 Elm St", "city": "Austin", "region": "TX",
+                           "postal_code": "73301", "country": "US", "jurisdiction": "US-TX",
+                           "legal_form": "XTIQ"},
+                  ra=("RA000665", "9999999")),
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(GLEIF_HEADER)
+        w.writerows(rows)
+
+
+def write_sec_fixture(path):
+    """cik-lookup-data.txt shape: NAME:CIK: with names that may contain colons."""
+    lines = [
+        "DELTA CORP:0000001234:",
+        "DELTA CORPORATION:0000001234:",
+        "DELTA CORP: THE:0000001234:",
+        "UNRELATED HOLDINGS:0000005555:",
+    ]
+    with open(path, "w", encoding="latin-1", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+class ParseFixture:
+    """Shared setUp for the stage tests. NOT a TestCase, so unittest does not collect it
+    and the parse assertions do not re-run once per downstream stage."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.gleif = os.path.join(self.tmp, "gleif.csv")
+        self.sec = os.path.join(self.tmp, "sec.txt")
+        write_gleif_fixture(self.gleif)
+        write_sec_fixture(self.sec)
+        self.out = os.path.join(self.tmp, "out")
+        self.config = g.BuildConfig(gleif_path=self.gleif, sec_path=self.sec,
+                                    out_dir=self.out, expected={}, sample_target=4)
+        self.observed = g.run_parse(self.config)
+
+    def path(self, name):
+        return os.path.join(g.tmp_dir(self.config), name)
+
+
+class TestParseStageEndToEnd(ParseFixture, unittest.TestCase):
+    def test_entity_and_record_counts(self):
+        self.assertEqual(self.observed["entities"], 10)
+        # full: 3 + 1 + 2 + 2 + 3 + 1 + 1 + 1 + 1 + 1
+        self.assertEqual(self.observed["fullRecords"], 16)
+        # gated drops the cross-script translit (1) and the alternative language (1)
+        self.assertEqual(self.observed["gatedRecords"], 14)
+
+    def test_alias_type_counts_are_reported(self):
+        # Only entity 001's "OLD ACME LTD" is a genuine PREVIOUS_LEGAL_NAME record.
+        # Entity 006's "cygnus plc" case-folds to its own legal name "CYGNUS PLC" and is
+        # dropped by entity_aliases before it is ever typed -- see
+        # TestEntityAliases.test_alias_equal_to_legal_name_is_dropped_case_insensitively.
+        self.assertEqual(self.observed["aliasTypes"]["PREVIOUS_LEGAL_NAME"], 1)
+        self.assertEqual(self.observed["aliasTypes"]["ALTERNATIVE_LANGUAGE_LEGAL_NAME"], 1)
+        self.assertEqual(self.observed["aliasTypes"]["AUTO_ASCII_TRANSLITERATED_LEGAL_NAME"], 1)
+
+    def test_true_pairs_match_the_independent_recount(self):
+        self.assertEqual(self.observed["gatedTruePairs"],
+                         g.recount_true_pairs(self.path("records.csv")))
+        self.assertEqual(self.observed["fullTruePairs"],
+                         g.recount_true_pairs(self.path("records-full.csv")))
+
+    def test_gated_is_a_strict_subset_with_identical_keys(self):
+        self.assertEqual(g.check_gated_is_subset(self.path("records.csv"),
+                                                 self.path("records-full.csv")), [])
+        self.assertEqual(g.check_truth_covers_records(self.path("records.csv"),
+                                                      self.path("ground-truth.csv")), [])
+        self.assertEqual(g.check_truth_covers_records(self.path("records-full.csv"),
+                                                      self.path("ground-truth-full.csv")), [])
+
+    def test_ordinals_survive_the_gate_filter(self):
+        # LEI...05 emits ordinals 0,1,2 with ordinal 1 excluded from the gate corpus.
+        ids = [r for r in _read_all_ids(self.path("records.csv"))
+               if r.startswith("gleif-LEI0000000000000005-")]
+        self.assertEqual(ids, ["gleif-LEI0000000000000005-0", "gleif-LEI0000000000000005-2"])
+
+    def test_ids_are_unique_and_sorted(self):
+        self.assertEqual(g.check_ids_unique_and_sorted(self.path("records.csv")), [])
+        self.assertEqual(g.check_ids_unique_and_sorted(self.path("records-full.csv")), [])
+
+    def test_missing_region_stays_empty(self):
+        with open(self.path("records.csv"), encoding="utf-8", newline="") as fh:
+            rows = list(_csv.DictReader(fh))
+        boreal = [r for r in rows if r["organization_name"] == "BOREAL HOLDINGS SA"][0]
+        self.assertEqual(boreal["region"], "")
+        self.assertEqual(boreal["city"], "Paris")
+
+    def test_cik_candidates_split_by_disposition(self):
+        c = self.observed["cik"]
+        self.assertEqual(c["numeric"], 2)          # 1234 and 9999999
+        self.assertEqual(c["seriesIds"], 1)        # S000005113
+        self.assertEqual(c["wrongAuthorityCikShaped"], 1)   # RA000063 with 1234
+
+
+def _read_all_ids(path):
+    return list(g._read_ids(path))
+
+
 if __name__ == "__main__":
     unittest.main()
