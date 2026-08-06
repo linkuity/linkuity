@@ -121,3 +121,79 @@ def script_relation(alias, legal):
     if a == "NONE" or l == "NONE":
         return "same"
     return "same" if a == l else "cross"
+
+
+def is_gated(alias_type, relation):
+    """Whether a record belongs in the GATE corpus (records.csv).
+
+    Non-gated records are DROPPED, never rekeyed -- rekeying would score an engine that
+    correctly matched a cross-script transliteration as a false merge. Spec section 5.
+    """
+    if alias_type not in KNOWN_ALIAS_TYPES:
+        raise ValueError(f"unknown alias type {alias_type!r}")
+    if alias_type in ALWAYS_GATED:
+        return True
+    if alias_type in TRANSLITERATED_TYPES:
+        return relation == "same"
+    return False   # ALTERNATIVE_LANGUAGE_LEGAL_NAME
+
+
+def entity_aliases(row, ix):
+    """(name, alias_type, script_relation) per distinct name, LEGAL first.
+
+    Distinctness is case-folded; first occurrence in source order wins its type. Source
+    order is: legal name, OtherEntityName 1..5, TransliteratedOtherEntityName 1..5.
+    """
+    legal = row[ix["Entity.LegalName"]].strip()
+    if not legal:
+        raise ValueError("blank Entity.LegalName")
+
+    out = [(legal, LEGAL, "same")]
+    seen = {legal.casefold()}
+    for value_col, type_col in OTHER_NAME_SLOTS + TRANSLITERATED_SLOTS:
+        name = row[ix[value_col]].strip()
+        if not name:
+            continue
+        alias_type = row[ix[type_col]].strip()
+        if alias_type not in KNOWN_ALIAS_TYPES:
+            raise ValueError(f"unknown alias type {alias_type!r} in column {type_col}")
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((name, alias_type, script_relation(name, legal)))
+    return out
+
+
+def entity_records(row, ix):
+    """One record dict per distinct name, each carrying the entity's whole payload.
+
+    `_ordinal` is assigned over the FULL alias list, before gating, so a gated record has
+    the same id in records.csv and records-full.csv.
+    """
+    lei = row[ix["LEI"]].strip()
+    payload = {corpus_col: row[ix[gleif_col]].strip()
+               for corpus_col, gleif_col in ADDRESS_COLUMNS}
+
+    records = []
+    for ordinal, (name, alias_type, relation) in enumerate(entity_aliases(row, ix)):
+        record = dict(payload)
+        record["id"] = record_id(lei, ordinal)
+        record["organization_name"] = name
+        record["alias_type"] = alias_type
+        record["script_relation"] = relation
+        record["_ordinal"] = ordinal
+        record["_gated"] = is_gated(alias_type, relation)
+        records.append(record)
+    return records
+
+
+def record_id(lei, ordinal):
+    return f"gleif-{lei}-{ordinal}"
+
+
+def lei_from_record_id(rid):
+    """'gleif-<LEI>-<ordinal>' -> '<LEI>'. Used by the INDEPENDENT true-pair recount."""
+    if not rid.startswith("gleif-"):
+        raise ValueError(f"not a gleif record id: {rid!r}")
+    return rid[len("gleif-"):rid.rindex("-")]
