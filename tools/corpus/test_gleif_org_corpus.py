@@ -5,6 +5,9 @@ whole suite must stay under a second -- a test suite nobody runs is not a test s
 
     python -m unittest discover -s tools\corpus -p "test_*.py" -v
 """
+import csv as _csv
+import os
+import tempfile
 import unittest
 
 import gleif_org_corpus as g
@@ -189,6 +192,61 @@ class TestEntityRecords(unittest.TestCase):
         rid = g.record_id("LEI0000000000000011", 3)
         self.assertEqual(rid, "gleif-LEI0000000000000011-3")
         self.assertEqual(g.lei_from_record_id(rid), "LEI0000000000000011")
+
+
+class TestTruePairs(unittest.TestCase):
+    def test_singletons_contribute_nothing(self):
+        self.assertEqual(g.true_pairs_from_sizes([1, 1, 1]), 0)
+
+    def test_pair_and_triple(self):
+        self.assertEqual(g.true_pairs_from_sizes([2, 3]), 1 + 3)
+
+    def test_matches_the_pinned_sec_figure_shape(self):
+        # C(n,2) summed -- same formula build-sec-recall-corpus.py uses.
+        self.assertEqual(g.true_pairs_from_sizes([5]), 10)
+
+
+class TestIndependentRecount(unittest.TestCase):
+    def test_recount_agrees_with_the_emitting_formula(self):
+        rows = [("gleif-AAA-0",), ("gleif-AAA-1",), ("gleif-AAA-3",),
+                ("gleif-BBB-0",), ("gleif-BBB-2",),
+                ("gleif-CCC-0",)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "records.csv")
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                w = _csv.writer(fh)
+                w.writerow(g.RECORD_COLUMNS)
+                for (rid,) in rows:
+                    w.writerow([rid] + [""] * (len(g.RECORD_COLUMNS) - 1))
+            self.assertEqual(g.recount_true_pairs(path),
+                             g.true_pairs_from_sizes([3, 2, 1]))
+
+    def test_recount_rejects_a_non_gleif_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "records.csv")
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                w = _csv.writer(fh)
+                w.writerow(g.RECORD_COLUMNS)
+                w.writerow(["sec-0000000003-0"] + [""] * (len(g.RECORD_COLUMNS) - 1))
+            with self.assertRaises(ValueError):
+                g.recount_true_pairs(path)
+
+
+class TestSampleFraction(unittest.TestCase):
+    def test_in_unit_interval(self):
+        for lei in ["A" * 20, "B" * 20, "5493001KJTIIGC8Y1R12"]:
+            self.assertTrue(0.0 <= g.sample_fraction(lei) < 1.0)
+
+    def test_deterministic(self):
+        self.assertEqual(g.sample_fraction("5493001KJTIIGC8Y1R12"),
+                         g.sample_fraction("5493001KJTIIGC8Y1R12"))
+
+    def test_spreads_across_the_interval(self):
+        # A hash sample must not correlate with LEI prefix. Sequential LEIs sharing a
+        # 16-char prefix must not land in the same decile -- that correlation is exactly
+        # the head-of-file bias that invalidated the first round of measurements.
+        vals = [g.sample_fraction(f"5493001KJTIIGC8Y1R{i:02d}") for i in range(40)]
+        self.assertGreater(len({int(v * 10) for v in vals}), 5)
 
 
 if __name__ == "__main__":

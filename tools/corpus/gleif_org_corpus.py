@@ -197,3 +197,45 @@ def lei_from_record_id(rid):
     if not rid.startswith("gleif-"):
         raise ValueError(f"not a gleif record id: {rid!r}")
     return rid[len("gleif-"):rid.rindex("-")]
+
+
+def true_pairs_from_sizes(sizes):
+    """Sum of C(n,2) over entity sizes -- the same formula build-sec-recall-corpus.py uses."""
+    return sum(n * (n - 1) // 2 for n in sizes)
+
+
+def recount_true_pairs(records_csv_path):
+    """Recount true pairs from records.csv ALONE, deriving membership from record ids.
+
+    Deliberately shares no state with the counter that emitted ground truth: spec check 7.
+    Streams, and relies only on ids being grouped, not on the file being sorted.
+    """
+    sizes = {}
+    with open(records_csv_path, encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        id_col = header.index("id")
+        for row in reader:
+            lei = lei_from_record_id(row[id_col])
+            sizes[lei] = sizes.get(lei, 0) + 1
+    return true_pairs_from_sizes(sizes.values())
+
+
+def sample_fraction(lei):
+    """Deterministic value in [0,1) from blake2b(LEI), for entity-level sampling.
+
+    Hash-based, never prefix-based: GLEIF is written in ascending LEI order and the LEI
+    prefix encodes the issuing LOU, which correlates with jurisdiction and therefore with
+    script. A file-prefix sample reads Region at 76.0% against 65.9% corpus-wide.
+    """
+    digest = hashlib.blake2b(lei.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") / 2 ** 64
+
+
+def sha256(path):
+    """Uppercase hex SHA-256, streamed -- same convention as the SEC builder."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest().upper()
