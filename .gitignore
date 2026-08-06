@@ -61,3 +61,7 @@ docs/roadmap/
 docs/marketing/
 docs/architecture-decisions/
 
+
+# Python (tools/corpus corpus builders)
+__pycache__/
+*.py[cod]
