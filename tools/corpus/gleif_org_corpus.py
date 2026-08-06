@@ -505,3 +505,49 @@ def run_parse(config):
     with open(os.path.join(out, "cik-candidates.json"), "w", encoding="utf-8") as fh:
         json.dump(cik_candidates, fh, sort_keys=True)
     return observed   # run_build caches this to parse-counts.json
+
+
+def run_sample(config):
+    """Draw a bounded iteration sample from the GATE corpus, by entity.
+
+    Selection is `sample_fraction(lei) < p` with p = target / gated_records, so it is
+    deterministic, uncorrelated with LEI prefix, and needs no second pass to size. The
+    resulting record count lands NEAR the target rather than on it; the observed value is
+    pinned rather than forced, because forcing it would mean truncating an entity.
+    """
+    out = tmp_dir(config)
+    gated_path = os.path.join(out, "records.csv")
+    with open(gated_path, encoding="utf-8", newline="") as fh:
+        gated_records = sum(1 for _ in fh) - 1
+    probability = min(1.0, config.sample_target / gated_records) if gated_records else 0.0
+
+    sizes, entities = {}, 0
+    with open(gated_path, encoding="utf-8", newline="") as rf, \
+         open(os.path.join(out, "records-200k.csv"), "w", newline="", encoding="utf-8") as sf, \
+         open(os.path.join(out, "ground-truth-200k.csv"), "w", newline="", encoding="utf-8") as tf:
+        reader = csv.reader(rf)
+        header = next(reader)
+        id_col = header.index("id")
+        sw, tw = csv.writer(sf), csv.writer(tf)
+        sw.writerow(RECORD_COLUMNS)
+        tw.writerow(["record_id", "canonical_key"])
+
+        current_lei, keep = None, False
+        for row in reader:
+            lei = lei_from_record_id(row[id_col])
+            if lei != current_lei:
+                current_lei = lei
+                keep = sample_fraction(lei) < probability
+                if keep:
+                    entities += 1
+            if keep:
+                sw.writerow(row)
+                tw.writerow([row[id_col], lei])
+                sizes[lei] = sizes.get(lei, 0) + 1
+
+    return {
+        "sampleRecords": sum(sizes.values()),
+        "sampleEntities": entities,
+        "sampleTruePairs": true_pairs_from_sizes(sizes.values()),
+        "sampleProbability": probability,
+    }

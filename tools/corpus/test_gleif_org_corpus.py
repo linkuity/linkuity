@@ -531,5 +531,32 @@ def _read_all_ids(path):
     return list(g._read_ids(path))
 
 
+class TestSampleStage(ParseFixture, unittest.TestCase):
+    """Reuses the parse-stage fixture; sample_target=4 on a 14-record gate corpus."""
+
+    def test_sample_is_entity_complete(self):
+        observed = g.run_sample(self.config)
+        self.assertEqual(g.check_sample_entity_complete(self.path("records-200k.csv"),
+                                                        self.path("records.csv")), [])
+        self.assertGreater(observed["sampleRecords"], 0)
+        self.assertLessEqual(observed["sampleRecords"], self.observed["gatedRecords"])
+
+    def test_sample_true_pairs_match_the_independent_recount(self):
+        observed = g.run_sample(self.config)
+        self.assertEqual(observed["sampleTruePairs"],
+                         g.recount_true_pairs(self.path("records-200k.csv")))
+
+    def test_sample_truth_is_complete_and_correctly_keyed(self):
+        g.run_sample(self.config)
+        self.assertEqual(g.check_truth_covers_records(self.path("records-200k.csv"),
+                                                      self.path("ground-truth-200k.csv")), [])
+
+    def test_sample_is_deterministic(self):
+        g.run_sample(self.config)
+        first = _read_all_ids(self.path("records-200k.csv"))
+        g.run_sample(self.config)
+        self.assertEqual(first, _read_all_ids(self.path("records-200k.csv")))
+
+
 if __name__ == "__main__":
     unittest.main()
