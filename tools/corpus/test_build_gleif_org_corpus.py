@@ -2,9 +2,10 @@ r"""Tests for build-gleif-org-corpus.py's --stage argument handling.
 
 The driver's filename is not a valid Python identifier (hyphens), so it is loaded via
 importlib rather than a normal import. This file tests ONLY the stage-selection logic --
-argument parsing and canonical ordering -- never the build itself, which touches a 4.9 GB
-source and takes minutes. See gleif_org_corpus.run_build for the stage semantics this
-canonicalizes into.
+argument parsing and the (order-cosmetic) canonicalization done by resolve_stages --
+never the build itself, which touches a 4.9 GB source and takes minutes. run_build tests
+stage MEMBERSHIP, never order, so resolve_stages's sorting is a readability aid, not a
+correctness mechanism; see gleif_org_corpus.run_build for the actual stage semantics.
 
     python -m unittest discover -s tools\corpus -p "test_*.py" -v
 """
@@ -27,7 +28,10 @@ class TestResolveStages(unittest.TestCase):
         self.assertEqual(driver.resolve_stages(["verify"]), ["verify"])
 
     def test_out_of_order_selection_is_canonicalized(self):
-        # publish must never run before verify, regardless of the order typed.
+        # Normalisation only: run_build tests stage MEMBERSHIP, never order, so it
+        # already runs verify's code before publish's code regardless of list order.
+        # This pins that resolve_stages reports the selection in canonical STAGE_ORDER
+        # for readability, not that ordering affects run_build's behavior.
         self.assertEqual(driver.resolve_stages(["publish", "verify"]), ["verify", "publish"])
 
 
@@ -37,9 +41,12 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(driver.resolve_stages(args.stage), driver.g.STAGE_ORDER)
 
     def test_stage_publish_verify_resolves_to_verify_then_publish(self):
-        # This is the exact defect this test guards against: --stage used to accept only
-        # one value, so `--stage publish` alone could never satisfy run_build's
-        # "publish requires verify in the same invocation" guard.
+        # Pins that argparse's nargs="+" accepts multiple --stage values (the actual
+        # fix for the defect: --stage used to accept only one value, so `--stage
+        # publish` alone could never satisfy run_build's "publish requires verify in
+        # the same invocation" guard) and that resolve_stages reports them in
+        # canonical STAGE_ORDER for readability -- not because run_build needs them in
+        # that order; it tests membership, not order.
         args = driver.build_arg_parser().parse_args(["--stage", "publish", "verify"])
         self.assertEqual(driver.resolve_stages(args.stage), ["verify", "publish"])
 

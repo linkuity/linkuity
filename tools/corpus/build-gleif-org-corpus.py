@@ -11,8 +11,10 @@ Stages run in order by default; --stage re-runs a subset of them against the exi
 temp directory, so fixing a verification bug does not cost another pass over 4.9 GB.
 --stage accepts multiple values because run_build refuses to publish unless "verify" is
 in the SAME invocation -- a single-valued --stage could never express "verify then
-publish, but skip parse", which is exactly the workflow this exists for. Stages are
-always run in STAGE_ORDER regardless of the order typed.
+publish, but skip parse", which is exactly the workflow this exists for. Selected
+stages are reported in canonical STAGE_ORDER regardless of the order typed, purely for
+readability -- run_build itself tests stage membership, not order, so this is not what
+makes verify run before publish.
 
     python build-gleif-org-corpus.py
     python build-gleif-org-corpus.py --stage verify
@@ -77,9 +79,17 @@ def build_arg_parser():
 
 
 def resolve_stages(selected):
-    """Canonicalize --stage into STAGE_ORDER, regardless of the order typed.
+    """Return the requested stages in canonical STAGE_ORDER.
 
-    `--stage publish verify` must run verify before publish, not publish first.
+    Note this is normalisation, NOT a correctness fix. `run_build` tests stage
+    MEMBERSHIP (`"publish" in stages`), never order, so it already runs verify's code
+    before publish's code whichever order the list arrives in. Sorting exists so the
+    stage list reads canonically wherever it is logged or reported, and so the contract
+    stays honest if run_build ever does become order-sensitive.
+
+    The actual defect this file fixed was `--stage` accepting a single value while
+    run_build requires verify and publish in the SAME invocation -- which made
+    `--stage publish` impossible to satisfy. `nargs="+"` is what fixed that.
     """
     return [s for s in g.STAGE_ORDER if s in selected] if selected else g.STAGE_ORDER
 
