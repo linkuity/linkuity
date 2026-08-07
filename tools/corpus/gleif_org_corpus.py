@@ -566,13 +566,14 @@ def run_sample(config):
 
 
 def read_sec_names(sec_path, wanted_ciks):
-    """CIK -> ordered names, for the wanted CIKs only.
+    """CIK -> ordered names, for the wanted CIKs only. Also returns the blank-name count.
 
     The lookup file is latin-1, one 'NAME:CIK:' per line, and names may contain colons --
     split on the LAST one, exactly as build-sec-recall-corpus.py does.
     """
     names = {}
     malformed = []
+    blank_name_rows = 0
     with open(sec_path, encoding="latin-1") as fh:
         for lineno, raw in enumerate(fh, start=1):
             raw = raw.strip()
@@ -584,13 +585,19 @@ def read_sec_names(sec_path, wanted_ciks):
                 malformed.append((lineno, raw[:80]))
                 continue
             if i == 0:
-                continue          # blank-name row: four exist, all documented in the SEC builder
+                # BLANK-NAME row: a valid CIK with a zero-length name. Four exist in this
+                # snapshot and each of those CIKs has a real named entry elsewhere, so the
+                # exclusion loses no registrant. COUNTED, not silently skipped -- the SEC
+                # builder carries a long comment about these same four rows, because a bare
+                # `continue` here once put two different record counts into circulation.
+                blank_name_rows += 1
+                continue
             cik = body[i + 1:]
             if cik in wanted_ciks:
                 names.setdefault(cik, []).append(body[:i])
     if malformed:
         raise ValueError(f"{len(malformed)} unparsable SEC row(s), first at line {malformed[0][0]}")
-    return names
+    return names, blank_name_rows
 
 
 def run_cik(config):
@@ -604,7 +611,7 @@ def run_cik(config):
     with open(os.path.join(out, "cik-candidates.json"), encoding="utf-8") as fh:
         candidates = json.load(fh)
 
-    sec_names = read_sec_names(config.sec_path, set(candidates))
+    sec_names, sec_blank_name_rows = read_sec_names(config.sec_path, set(candidates))
     joined = sorted(c for c in candidates if c in sec_names)
 
     cik_dir = os.path.join(out, "cik")
@@ -648,4 +655,5 @@ def run_cik(config):
         "cikTruePairs": true_pairs_from_sizes(sizes),
         "cikUnresolvedNumeric": unresolved,
         "cikDuplicateLeis": duplicate_leis,
+        "cikSecBlankNameRows": sec_blank_name_rows,
     }

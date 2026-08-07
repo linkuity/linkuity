@@ -43,6 +43,7 @@ EXPECTED = {
     "cikTruePairs": 12_636,
     "cikUnresolvedNumeric": 10,
     "cikDuplicateLeis": 0,
+    "cikSecBlankNameRows": 4,
     "cik": {
         "rows": 27_500,
         "numeric": 5_045,

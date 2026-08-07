@@ -440,12 +440,17 @@ def write_gleif_fixture(path):
 
 
 def write_sec_fixture(path):
-    """cik-lookup-data.txt shape: NAME:CIK: with names that may contain colons."""
+    """cik-lookup-data.txt shape: NAME:CIK: with names that may contain colons.
+
+    Includes one blank-name row (":0000009999:") -- that CIK is not in the parse
+    fixture's candidate set, so it must never affect cikEntities/cikRecords/cikTruePairs.
+    """
     lines = [
         "DELTA CORP:0000001234:",
         "DELTA CORPORATION:0000001234:",
         "DELTA CORP: THE:0000001234:",
         "UNRELATED HOLDINGS:0000005555:",
+        ":0000009999:",
     ]
     with open(path, "w", encoding="latin-1", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -525,6 +530,7 @@ class TestParseStageEndToEnd(ParseFixture, unittest.TestCase):
         self.assertEqual(c["numeric"], 2)          # 1234 and 9999999
         self.assertEqual(c["seriesIds"], 1)        # S000005113
         self.assertEqual(c["wrongAuthorityCikShaped"], 1)   # RA000063 with 1234
+        self.assertEqual(c["duplicateCikKeys"], 0)  # standard fixture has no collision
 
 
 class TestCikCollisionCounting(unittest.TestCase):
@@ -641,6 +647,15 @@ class TestCikStage(ParseFixture, unittest.TestCase):
                   encoding="utf-8", newline="") as fh:
             keys = {r["canonical_key"] for r in _csv.DictReader(fh)}
         self.assertEqual(keys, {"0000001234"})
+
+    def test_blank_name_row_is_counted_not_joined(self):
+        # The fixture's ":0000009999:" row is a valid CIK with no name. Its CIK is not in
+        # the candidate set, so it must be counted but never affect the join.
+        observed = g.run_cik(self.config)
+        self.assertEqual(observed["cikSecBlankNameRows"], 1)
+        self.assertEqual(observed["cikEntities"], 1)
+        self.assertEqual(observed["cikRecords"], 4)
+        self.assertEqual(observed["cikTruePairs"], 6)
 
 
 if __name__ == "__main__":
