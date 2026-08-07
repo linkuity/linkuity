@@ -835,11 +835,39 @@ def run_publish(config, observed):
     # ADDITIVE over foreign keys: the build refreshes exactly BUILD_OWNED_MANIFEST_KEYS and
     # carries everything else forward untouched. Rebuilding from a fixed key set instead
     # would delete that measurement silently.
-    carried = {}
+    # Where to read the foreign keys from. The canonical manifest wins when both exist --
+    # it is the newer of the two. `.prev` is the fallback, and that is not a corner case:
+    # it is EXACTLY the state a crashed publish leaves behind, and the obvious response to
+    # a crash is to re-run the build. Reading only the canonical path would mean a routine
+    # retry rebuilt the manifest with no foreign keys and then deleted the one file that
+    # still held them -- destroying the `budget` block silently, one retry cycle later.
+    # So .prev is BOTH written and read: it is the recovery source across a failed publish,
+    # not a staging artifact.
+    read_from = None
     if os.path.exists(manifest_path):
-        with open(manifest_path, encoding="utf-8") as fh:
-            carried = {key: value for key, value in json.load(fh).items()
-                       if key not in BUILD_OWNED_MANIFEST_KEYS}
+        read_from = manifest_path
+    elif os.path.exists(previous_manifest_path):
+        read_from = previous_manifest_path
+
+    carried = {}
+    if read_from is not None:
+        # Refusing to publish over a manifest that cannot be read is the correct outcome:
+        # its foreign keys cannot be carried, and continuing would drop them. Named, not a
+        # bare traceback, and raised BEFORE anything is renamed, moved or removed.
+        try:
+            with open(read_from, encoding="utf-8") as fh:
+                existing = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{read_from} is not valid JSON ({exc}); refusing to publish, "
+                             f"because overwriting it would lose the keys it carries") from exc
+        if not isinstance(existing, dict):
+            raise ValueError(f"{read_from} is valid JSON but not an object "
+                             f"({type(existing).__name__}); refusing to publish, because "
+                             f"overwriting it would lose the keys it carries")
+        carried = {key: value for key, value in existing.items()
+                   if key not in BUILD_OWNED_MANIFEST_KEYS}
+
+    if os.path.exists(manifest_path):
         # RENAMED aside before the move loop, never deleted. Two invariants that used to be
         # in tension, now both held for the whole window:
         #   * the CANONICAL path is absent throughout the loop, so a crash partway through
@@ -849,7 +877,8 @@ def run_publish(config, observed):
         #     nowhere else, and re-earning them means re-running a 78-minute, 9.3 GB audit,
         #     so deleting here would trade a millisecond-wide invariant for a durability
         #     hole on the most expensive artifact on the branch.
-        # The .prev copy is removed LAST, only once the new manifest is safely written.
+        # The .prev copy is removed LAST, only once the new manifest is safely written --
+        # and, per the block above, only once its keys have been read back into it.
         os.replace(manifest_path, previous_manifest_path)
 
     hashes = {}
@@ -875,8 +904,10 @@ def run_publish(config, observed):
     })
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)
-    # LAST: the carried measurement is only safely in the new file once the write above
-    # has returned, so this is the first moment .prev is redundant rather than the backup.
+    # LAST, and only ever after .prev has been READ: `carried` came from whichever of the
+    # two files existed, so by this line its keys are in the manifest just written. That is
+    # the first moment .prev stops being the backup and becomes redundant. Deleting it any
+    # earlier -- or on a path that never read it -- is the silent-loss bug this guards.
     if os.path.exists(previous_manifest_path):
         os.remove(previous_manifest_path)
     shutil.rmtree(tmp, ignore_errors=True)

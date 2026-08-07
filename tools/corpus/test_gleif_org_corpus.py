@@ -810,6 +810,70 @@ class TestVerifyAndPublish(unittest.TestCase):
         with open(previous_path, encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["budget"], foreign)
 
+    def test_a_retry_after_a_crashed_publish_recovers_the_carried_keys(self):
+        # The crash test above proves .prev is WRITTEN. This proves it is READ, which is
+        # the half that matters in practice: the obvious response to a crashed publish is
+        # to re-run the build, and on that run the canonical manifest does not exist. If
+        # run_publish only ever read the canonical path, the retry would rebuild with no
+        # foreign keys and then delete the one file still holding them -- destroying the
+        # `budget` block silently, one retry cycle after the crash it survived.
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        manifest_path = os.path.join(self.out, "corpus.manifest.json")
+        previous_path = manifest_path + ".prev"
+        foreign = {"recall": 0.2914, "note": "78 minutes and 9.3 GB, not reproducible here"}
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        manifest["budget"] = foreign
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, sort_keys=True)
+
+        observed = self._consistent_observed(config)
+        os.remove(os.path.join(g.tmp_dir(config), "records-200k.csv"))
+        with self.assertRaises(OSError):
+            g.run_publish(config, observed)
+        self.assertFalse(os.path.exists(manifest_path))
+        self.assertTrue(os.path.exists(previous_path))
+
+        # THE RETRY -- a plain re-run of the whole build, nothing hand-repaired.
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        with open(manifest_path, encoding="utf-8") as fh:
+            recovered = json.load(fh)
+        self.assertEqual(recovered["budget"], foreign)
+        self.assertEqual(recovered["counts"]["entities"], 10)
+        self.assertFalse(os.path.exists(previous_path))
+
+    def test_publish_refuses_over_a_manifest_it_cannot_read(self):
+        # Low severity -- it fails before the rename and the move loop, so nothing is lost.
+        # But the failure must NAME the file rather than surfacing a bare JSONDecodeError,
+        # and it must refuse rather than silently discarding the keys it could not read.
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        manifest_path = os.path.join(self.out, "corpus.manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+
+        observed = self._consistent_observed(config)
+        with self.assertRaises(ValueError) as ctx:
+            g.run_publish(config, observed)
+        self.assertIn("corpus.manifest.json", str(ctx.exception))
+        self.assertIn("refusing to publish", str(ctx.exception))
+        # Refused early: the unreadable file is untouched and no .prev was created.
+        self.assertTrue(os.path.exists(manifest_path))
+        self.assertFalse(os.path.exists(manifest_path + ".prev"))
+
+    def test_publish_refuses_over_a_manifest_that_is_not_an_object(self):
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        manifest_path = os.path.join(self.out, "corpus.manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            fh.write("[1, 2, 3]")
+
+        observed = self._consistent_observed(config)
+        with self.assertRaises(ValueError) as ctx:
+            g.run_publish(config, observed)
+        self.assertIn("not an object", str(ctx.exception))
+
     def test_partial_stage_run_skips_verify_derived_expectations(self):
         # fieldSliceSha256 is produced only by run_verify, so pinning it must not make a
         # correct `--stage parse` abort with "observed None != expected ...".
