@@ -827,6 +827,7 @@ def run_publish(config, observed):
     out, tmp = config.out_dir, tmp_dir(config)
     os.makedirs(os.path.join(out, "cik"), exist_ok=True)
     manifest_path = os.path.join(out, "corpus.manifest.json")
+    previous_manifest_path = manifest_path + ".prev"
 
     # The manifest is a DURABLE RECORD, not just a build artifact: it accumulates
     # measurement this build cannot produce (today a ~12 KB `budget` block -- 78 minutes
@@ -839,11 +840,17 @@ def run_publish(config, observed):
         with open(manifest_path, encoding="utf-8") as fh:
             carried = {key: value for key, value in json.load(fh).items()
                        if key not in BUILD_OWNED_MANIFEST_KEYS}
-        # Removed BEFORE the move loop, and only after being read above. The eight
-        # artifacts are replaced one at a time, so a crash partway through would otherwise
-        # leave a mixed-generation corpus beside a manifest asserting completeness --
-        # inverting the invariant that no manifest means the build did not finish.
-        os.remove(manifest_path)
+        # RENAMED aside before the move loop, never deleted. Two invariants that used to be
+        # in tension, now both held for the whole window:
+        #   * the CANONICAL path is absent throughout the loop, so a crash partway through
+        #     cannot leave a mixed-generation corpus beside a manifest asserting
+        #     completeness -- "no manifest" keeps meaning "the build did not finish";
+        #   * the carried foreign keys SURVIVE that crash. They exist in this file and
+        #     nowhere else, and re-earning them means re-running a 78-minute, 9.3 GB audit,
+        #     so deleting here would trade a millisecond-wide invariant for a durability
+        #     hole on the most expensive artifact on the branch.
+        # The .prev copy is removed LAST, only once the new manifest is safely written.
+        os.replace(manifest_path, previous_manifest_path)
 
     hashes = {}
     for name in PUBLISHED_FILES:
@@ -868,6 +875,10 @@ def run_publish(config, observed):
     })
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)
+    # LAST: the carried measurement is only safely in the new file once the write above
+    # has returned, so this is the first moment .prev is redundant rather than the backup.
+    if os.path.exists(previous_manifest_path):
+        os.remove(previous_manifest_path)
     shutil.rmtree(tmp, ignore_errors=True)
     return manifest_path
 

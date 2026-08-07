@@ -774,15 +774,27 @@ class TestVerifyAndPublish(unittest.TestCase):
         self.assertEqual(rebuilt["budget"], foreign)
         self.assertEqual(rebuilt["counts"]["entities"], 10)
         self.assertEqual(rebuilt["snapshot"], "20260727-1600")
+        # The .prev backup is a crash-window artifact only: a SUCCESSFUL publish must not
+        # leave a second manifest lying beside the real one for a reader to mistake.
+        self.assertFalse(os.path.exists(manifest_path + ".prev"))
 
-    def test_a_crash_mid_publish_leaves_no_manifest_claiming_completeness(self):
-        # The artifacts are moved one at a time. If the previous run's manifest were still
-        # on disk, a failure partway through would leave a mixed-generation corpus beside a
-        # manifest asserting it is complete.
+    def test_a_crash_mid_publish_keeps_both_invariants(self):
+        # The artifacts are moved one at a time, and BOTH of these must hold across that
+        # window -- they used to be in tension:
+        #   (a) no corpus.manifest.json, so the half-moved corpus reads as unfinished
+        #       rather than as a complete one described by the previous run's manifest;
+        #   (b) the carried foreign keys survive, because they exist in that file and
+        #       nowhere else. Deleting instead of renaming satisfied (a) and broke (b).
         config = self.config({"entities": 10})
         self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
         manifest_path = os.path.join(self.out, "corpus.manifest.json")
-        self.assertTrue(os.path.exists(manifest_path))
+        previous_path = manifest_path + ".prev"
+        foreign = {"recall": 0.2914, "note": "78 minutes and 9.3 GB, not reproducible here"}
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        manifest["budget"] = foreign
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, sort_keys=True)
 
         observed = g.run_parse(config)
         observed.update(g.run_sample(config))
@@ -792,7 +804,11 @@ class TestVerifyAndPublish(unittest.TestCase):
         os.remove(os.path.join(g.tmp_dir(config), "records-200k.csv"))
         with self.assertRaises(OSError):
             g.run_publish(config, observed)
-        self.assertFalse(os.path.exists(manifest_path))
+
+        self.assertFalse(os.path.exists(manifest_path))          # (a)
+        self.assertTrue(os.path.exists(previous_path))           # (b)
+        with open(previous_path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["budget"], foreign)
 
     def test_partial_stage_run_skips_verify_derived_expectations(self):
         # fieldSliceSha256 is produced only by run_verify, so pinning it must not make a
