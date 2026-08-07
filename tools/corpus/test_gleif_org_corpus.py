@@ -118,37 +118,61 @@ class TestIsGated(unittest.TestCase):
 class TestEntityAliases(unittest.TestCase):
     def test_singleton_yields_just_the_legal_name(self):
         row = gleif_row("LEI0000000000000001", "ACME LTD")
-        self.assertEqual(g.entity_aliases(row, IX), [("ACME LTD", "LEGAL", "same")])
+        aliases, drops = g.entity_aliases(row, IX)
+        self.assertEqual(aliases, [("ACME LTD", "LEGAL", "same")])
+        # Nine unused slot pairs. An absent alias is not a declined row, so nothing counts.
+        self.assertEqual(drops, {"blankName": 0, "dedupedCaseFold": 0})
 
     def test_legal_name_is_always_first(self):
         row = gleif_row("LEI0000000000000002", "ACME LTD",
                         others=[("OLD ACME LTD", "PREVIOUS_LEGAL_NAME")])
-        self.assertEqual(g.entity_aliases(row, IX)[0][1], "LEGAL")
+        self.assertEqual(g.entity_aliases(row, IX)[0][0][1], "LEGAL")
 
     def test_alias_equal_to_legal_name_is_dropped_case_insensitively(self):
         row = gleif_row("LEI0000000000000003", "ACME LTD",
                         others=[("acme ltd", "PREVIOUS_LEGAL_NAME")])
-        self.assertEqual(len(g.entity_aliases(row, IX)), 1)
+        aliases, drops = g.entity_aliases(row, IX)
+        self.assertEqual(len(aliases), 1)
+        # The drop is COUNTED, not silent: this is a populated source slot the build
+        # declines to emit, and ~5k of them were unaccounted for before this counter.
+        self.assertEqual(drops["dedupedCaseFold"], 1)
 
     def test_duplicate_aliases_keep_first_occurrence_type(self):
         row = gleif_row("LEI0000000000000004", "ACME LTD",
                         others=[("ACME TRADING", "TRADING_OR_OPERATING_NAME"),
                                 ("acme trading", "PREVIOUS_LEGAL_NAME")])
-        aliases = g.entity_aliases(row, IX)
+        aliases, drops = g.entity_aliases(row, IX)
         self.assertEqual(len(aliases), 2)
         self.assertEqual(aliases[1], ("ACME TRADING", "TRADING_OR_OPERATING_NAME", "same"))
+        self.assertEqual(drops["dedupedCaseFold"], 1)
+
+    def test_blank_named_slot_that_carries_a_type_is_counted(self):
+        row = gleif_row("LEI0000000000000012", "ACME LTD",
+                        others=[("   ", "PREVIOUS_LEGAL_NAME")])
+        aliases, drops = g.entity_aliases(row, IX)
+        self.assertEqual(len(aliases), 1)
+        self.assertEqual(drops, {"blankName": 1, "dedupedCaseFold": 0})
+
+    def test_blank_named_slot_with_a_garbage_type_still_raises(self):
+        # Check ORDER, not just presence: the blank-name skip used to run first, so a
+        # snapshot that introduced a new alias type on a blank-name slot would have been
+        # waved through instead of aborting the build.
+        row = gleif_row("LEI0000000000000013", "ACME LTD", others=[("", "SOMETHING_NEW")])
+        with self.assertRaises(ValueError) as ctx:
+            g.entity_aliases(row, IX)
+        self.assertIn("SOMETHING_NEW", str(ctx.exception))
 
     def test_transliterated_type_is_read_from_its_own_column(self):
         row = gleif_row("LEI0000000000000005", "Prv\u00e1 stavebn\u00e1",
                         translits=[("Prva stavebna", "AUTO_ASCII_TRANSLITERATED_LEGAL_NAME")])
-        self.assertEqual(g.entity_aliases(row, IX)[1][1],
+        self.assertEqual(g.entity_aliases(row, IX)[0][1][1],
                          "AUTO_ASCII_TRANSLITERATED_LEGAL_NAME")
 
     def test_cross_script_alias_is_labelled_cross(self):
         row = gleif_row("LEI0000000000000006",
                         "\u041e\u0431\u0449\u0435\u0441\u0442\u0432\u043e",
                         others=[("MATADOR Rus LLC", "ALTERNATIVE_LANGUAGE_LEGAL_NAME")])
-        self.assertEqual(g.entity_aliases(row, IX)[1][2], "cross")
+        self.assertEqual(g.entity_aliases(row, IX)[0][1][2], "cross")
 
     def test_untyped_alias_raises_rather_than_being_bucketed(self):
         row = gleif_row("LEI0000000000000007", "ACME LTD", others=[("ACME PLC", "")])
@@ -169,8 +193,9 @@ class TestEntityRecords(unittest.TestCase):
                                  "region": "", "postal_code": "D01",
                                  "country": "IE", "jurisdiction": "IE",
                                  "legal_form": "H8VW"})
-        records = g.entity_records(row, IX)
+        records, drops = g.entity_records(row, IX)
         self.assertEqual(len(records), 2)
+        self.assertEqual(drops, {"blankName": 0, "dedupedCaseFold": 0})
         for r in records:
             self.assertEqual(r["city"], "Dublin")
             self.assertEqual(r["legal_form"], "H8VW")
@@ -183,7 +208,7 @@ class TestEntityRecords(unittest.TestCase):
         row = gleif_row("LEI0000000000000010", "ACME LTD",
                         others=[("ACME SA", "ALTERNATIVE_LANGUAGE_LEGAL_NAME"),
                                 ("OLD ACME LTD", "PREVIOUS_LEGAL_NAME")])
-        records = g.entity_records(row, IX)
+        records, _ = g.entity_records(row, IX)
         self.assertEqual([r["_ordinal"] for r in records], [0, 1, 2])
         self.assertEqual([r["_gated"] for r in records], [True, False, True])
         gated = [r["_ordinal"] for r in records if r["_gated"]]
@@ -495,6 +520,13 @@ class TestParseStageEndToEnd(ParseFixture, unittest.TestCase):
         self.assertEqual(self.observed["aliasTypes"]["ALTERNATIVE_LANGUAGE_LEGAL_NAME"], 1)
         self.assertEqual(self.observed["aliasTypes"]["AUTO_ASCII_TRANSLITERATED_LEGAL_NAME"], 1)
 
+    def test_alias_drops_are_counted_by_reason(self):
+        # Entity 006's "cygnus plc" is the only declined alias slot in the fixture, and it
+        # is the reason aliasTypes["PREVIOUS_LEGAL_NAME"] reads 1 and not 2. Before these
+        # counters existed that difference had no name anywhere in the observed dict.
+        self.assertEqual(self.observed["aliasDrops"],
+                         {"blankName": 0, "dedupedCaseFold": 1})
+
     def test_true_pairs_match_the_independent_recount(self):
         self.assertEqual(self.observed["gatedTruePairs"],
                          g.recount_true_pairs(self.path("records.csv")))
@@ -720,6 +752,98 @@ class TestVerifyAndPublish(unittest.TestCase):
         with open(os.path.join(self.out, "corpus.manifest.json"), encoding="utf-8") as fh:
             second = json.load(fh)["sha256"]
         self.assertEqual(first, second)
+
+    def test_publish_preserves_manifest_keys_the_build_does_not_own(self):
+        # The published manifest carries a `budget` block written out of band -- 78 minutes
+        # of full-corpus audit the build itself cannot reproduce. A rebuild must refresh
+        # only its own keys and carry foreign ones through untouched.
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        manifest_path = os.path.join(self.out, "corpus.manifest.json")
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        foreign = {"recall": 0.2914, "note": "measured out of band"}
+        manifest["budget"] = foreign
+        manifest["counts"] = "stale, must be refreshed"
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, sort_keys=True)
+
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        with open(manifest_path, encoding="utf-8") as fh:
+            rebuilt = json.load(fh)
+        self.assertEqual(rebuilt["budget"], foreign)
+        self.assertEqual(rebuilt["counts"]["entities"], 10)
+        self.assertEqual(rebuilt["snapshot"], "20260727-1600")
+
+    def test_a_crash_mid_publish_leaves_no_manifest_claiming_completeness(self):
+        # The artifacts are moved one at a time. If the previous run's manifest were still
+        # on disk, a failure partway through would leave a mixed-generation corpus beside a
+        # manifest asserting it is complete.
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 0)
+        manifest_path = os.path.join(self.out, "corpus.manifest.json")
+        self.assertTrue(os.path.exists(manifest_path))
+
+        observed = g.run_parse(config)
+        observed.update(g.run_sample(config))
+        observed.update(g.run_cik(config))
+        self.assertEqual(g.run_verify(config, observed), [])
+        # Break the move loop partway: records-200k.csv is the fifth of eight.
+        os.remove(os.path.join(g.tmp_dir(config), "records-200k.csv"))
+        with self.assertRaises(OSError):
+            g.run_publish(config, observed)
+        self.assertFalse(os.path.exists(manifest_path))
+
+    def test_partial_stage_run_skips_verify_derived_expectations(self):
+        # fieldSliceSha256 is produced only by run_verify, so pinning it must not make a
+        # correct `--stage parse` abort with "observed None != expected ...".
+        expected = {"entities": 10, "fieldSliceSha256": "0" * 64,
+                    "fieldFingerprint": {"population": {"region": 1.0}}}
+        config = self.config(expected)
+        self.assertEqual(g.run_build(config, ["parse", "sample", "cik"]), 0)
+        # And a single stage re-run against the now-cached downstream counts, which is the
+        # workflow the driver's docstring advertises.
+        self.assertEqual(g.run_build(config, ["parse"]), 0)
+        self.assertEqual(g.run_build(config, ["sample"]), 0)
+
+    def test_full_run_still_catches_a_wrong_field_slice_hash(self):
+        # The partial-run relaxation must not weaken the run that actually publishes.
+        expected = {"entities": 10, "fieldSliceSha256": "0" * 64}
+        self.assertEqual(g.run_build(self.config(expected), g.STAGE_ORDER), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "corpus.manifest.json")))
+
+    def test_full_run_still_catches_a_wrong_population_rate(self):
+        # The fixture's gate corpus really is 0.5 populated on region, so 0.25 is wrong.
+        expected = {"entities": 10, "fieldFingerprint": {"population": {"region": 0.25}}}
+        self.assertEqual(g.run_build(self.config(expected), g.STAGE_ORDER), 1)
+
+    def _consistent_observed(self, config):
+        observed = g.run_parse(config)
+        observed.update(g.run_sample(config))
+        observed.update(g.run_cik(config))
+        self.assertEqual(g.run_verify(config, observed), [])
+        return observed
+
+    def test_verify_asserts_the_cik_numeric_reconciliation(self):
+        config = self.config({})
+        observed = self._consistent_observed(config)
+        observed["cikUnresolvedNumeric"] += 1
+        problems = g.run_verify(config, observed)
+        self.assertTrue(any("cik.numeric" in p for p in problems), problems)
+
+    def test_verify_asserts_the_cik_rows_reconciliation(self):
+        config = self.config({})
+        observed = self._consistent_observed(config)
+        observed["cik"]["seriesIds"] += 1
+        problems = g.run_verify(config, observed)
+        self.assertTrue(any("cik.rows" in p for p in problems), problems)
+
+    def test_verify_asserts_alias_types_sum_to_full_records(self):
+        config = self.config({})
+        observed = self._consistent_observed(config)
+        observed["aliasTypes"]["LEGAL"] += 1
+        problems = g.run_verify(config, observed)
+        self.assertTrue(any("sum(aliasTypes)" in p for p in problems), problems)
 
     def test_verify_catches_a_corrupted_gate_corpus(self):
         # Stop before publish: run_publish removes the temp directory, so corrupting it

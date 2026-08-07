@@ -59,6 +59,15 @@ EXPECTED = {
         "wrongAuthorityCikShaped": 1_455_066,
         "duplicateCikKeys": 14,
     },
+    # Populated alias slots the build DECLINES to emit. Reconciling the source vocabulary
+    # against aliasTypes is what showed these rows leaving with no counter at all.
+    # blankName is 0 for THIS snapshot: every blank alias slot also has a blank type, so it
+    # is an unused column pair rather than a declined row. Pinned at 0 rather than dropped,
+    # because a snapshot that starts publishing a typed slot with no name must be visible.
+    "aliasDrops": {
+        "blankName": 0,
+        "dedupedCaseFold": 5_012,
+    },
     "aliasTypes": {
         "LEGAL": 3_385_273,
         "PREVIOUS_LEGAL_NAME": 270_924,
@@ -67,7 +76,29 @@ EXPECTED = {
         "PREFERRED_ASCII_TRANSLITERATED_LEGAL_NAME": 94_747,
         "AUTO_ASCII_TRANSLITERATED_LEGAL_NAME": 65_256,
     },
+    # Verify-derived: only run_verify computes the field fingerprint, so check_expectations
+    # skips both of these on a run that does not include the verify stage.
     "fieldSliceSha256": "4674d9a11dd58a60e758d06cfb6a4c2bcf4e61e631e2476d6e33209e1d57956d",
+    # The slice hash covers 500 of 3.9M records, so it catches a swapped column mapping but
+    # only inside the slice. The population rates are the other half of spec check 6: they
+    # are computed over EVERY record, so a coverage regression outside the slice -- a field
+    # that stops being emitted for one country, say -- moves these and nothing else.
+    # jurisdiction is NOT 1.0: ~4 gated records lack it.
+    "fieldFingerprint": {
+        "population": {
+            "id": 1.0,
+            "organization_name": 1.0,
+            "address_line": 1.0,
+            "city": 1.0,
+            "region": 0.6789769105949834,
+            "postal_code": 0.9876510671921934,
+            "country": 1.0,
+            "jurisdiction": 0.999998986317568,
+            "legal_form": 1.0,
+            "alias_type": 1.0,
+            "script_relation": 1.0,
+        },
+    },
 }
 
 def build_arg_parser():

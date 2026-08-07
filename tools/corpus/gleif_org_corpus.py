@@ -144,44 +144,64 @@ def is_gated(alias_type, relation):
 
 
 def entity_aliases(row, ix):
-    """(name, alias_type, script_relation) per distinct name, LEGAL first.
+    """((name, alias_type, script_relation) per distinct name, LEGAL first), plus drops.
 
     Distinctness is case-folded; first occurrence in source order wins its type. Source
     order is: legal name, OtherEntityName 1..5, TransliteratedOtherEntityName 1..5.
+
+    Returns (aliases, drops) with drops == {"blankName": n, "dedupedCaseFold": n}. Both
+    are populated alias slots this function DECLINES to emit, so both get a named counter
+    rather than a bare `continue` -- the build's Global Constraint, and the third instance
+    of this defect class found in this corpus. The function stays PURE: it runs once per
+    source row and run_parse accumulates, instead of this holding state across calls.
     """
     legal = row[ix["Entity.LegalName"]].strip()
     if not legal:
         raise ValueError("blank Entity.LegalName")
 
     out = [(legal, LEGAL, "same")]
+    drops = {"blankName": 0, "dedupedCaseFold": 0}
     seen = {legal.casefold()}
     for value_col, type_col in OTHER_NAME_SLOTS + TRANSLITERATED_SLOTS:
         name = row[ix[value_col]].strip()
-        if not name:
-            continue
         alias_type = row[ix[type_col]].strip()
+        if not name and not alias_type:
+            # An UNUSED slot, not a declined row: GLEIF pads every entity out to 5 + 5
+            # name/type column pairs, so the overwhelming majority of slots are empty
+            # pairs carrying no alias at all. There is nothing here to count.
+            continue
+        # The type check runs BEFORE the blank-name check on purpose. A garbage type on a
+        # blank-name slot is still a snapshot change, and skipping the slot on its blank
+        # name first would route it past the abort-do-not-bucket protection.
         if alias_type not in KNOWN_ALIAS_TYPES:
             raise ValueError(f"unknown alias type {alias_type!r} in column {type_col}")
+        if not name:
+            drops["blankName"] += 1
+            continue
         key = name.casefold()
         if key in seen:
+            drops["dedupedCaseFold"] += 1
             continue
         seen.add(key)
         out.append((name, alias_type, script_relation(name, legal)))
-    return out
+    return out, drops
 
 
 def entity_records(row, ix):
-    """One record dict per distinct name, each carrying the entity's whole payload.
+    """(one record dict per distinct name, alias drop counts) for this entity.
 
-    `_ordinal` is assigned over the FULL alias list, before gating, so a gated record has
-    the same id in records.csv and records-full.csv.
+    Each record carries the entity's whole payload. `_ordinal` is assigned over the FULL
+    alias list, before gating, so a gated record has the same id in records.csv and
+    records-full.csv. The drop counts are passed straight through from entity_aliases so
+    run_parse can accumulate them without reaching past this function.
     """
     lei = row[ix["LEI"]].strip()
     payload = {corpus_col: row[ix[gleif_col]].strip()
                for corpus_col, gleif_col in ADDRESS_COLUMNS}
 
+    aliases, drops = entity_aliases(row, ix)
     records = []
-    for ordinal, (name, alias_type, relation) in enumerate(entity_aliases(row, ix)):
+    for ordinal, (name, alias_type, relation) in enumerate(aliases):
         record = dict(payload)
         record["id"] = record_id(lei, ordinal)
         record["organization_name"] = name
@@ -190,7 +210,7 @@ def entity_records(row, ix):
         record["_ordinal"] = ordinal
         record["_gated"] = is_gated(alias_type, relation)
         records.append(record)
-    return records
+    return records, drops
 
 
 def record_id(lei, ordinal):
@@ -432,6 +452,10 @@ def run_parse(config):
     os.makedirs(out, exist_ok=True)
 
     alias_types, script_relations = {}, {}
+    # Alias slots that were populated in the source but declined by entity_aliases. Named
+    # counters, never a bare skip: reconciling the source vocabulary against the emitted
+    # aliasTypes is how these ~5k rows were found missing in the first place.
+    alias_drops = {"blankName": 0, "dedupedCaseFold": 0}
     entities = gated_records = full_records = 0
     gated_pairs = full_pairs = 0
     cik = {"rows": 0, "numeric": 0, "seriesIds": 0, "empty": 0,
@@ -449,9 +473,11 @@ def run_parse(config):
 
             for lineno, row in enumerate(reader, start=2):
                 try:
-                    records = entity_records(row, ix)
+                    records, drops = entity_records(row, ix)
                 except ValueError as exc:
                     raise ValueError(f"line {lineno}: {exc}") from exc
+                for reason, count in drops.items():
+                    alias_drops[reason] += count
 
                 entities += 1
                 lei = row[ix["LEI"]].strip()
@@ -513,6 +539,7 @@ def run_parse(config):
         "gatedTruePairs": gated_pairs,
         "fullTruePairs": full_pairs,
         "aliasTypes": dict(sorted(alias_types.items())),
+        "aliasDrops": dict(sorted(alias_drops.items())),
         "scriptRelations": dict(sorted(script_relations.items())),
         "cik": cik,
     }
@@ -672,6 +699,13 @@ PUBLISHED_FILES = [
 
 SNAPSHOT = "20260727-1600"
 
+# The manifest keys this build GENERATES. Everything else found in an existing manifest is
+# foreign and is carried forward by run_publish -- see the comment there.
+BUILD_OWNED_MANIFEST_KEYS = frozenset({
+    "snapshot", "gleifSource", "secSource", "gleifSourceSha256", "secSourceSha256",
+    "sha256", "counts", "fieldFingerprint", "gatedAliasTypes",
+})
+
 
 def _flatten(observed, prefix=""):
     """Flatten nested observed counts to dotted keys so expectations can pin any of them."""
@@ -685,11 +719,31 @@ def _flatten(observed, prefix=""):
     return flat
 
 
-def check_expectations(observed, expected):
-    """-> (problems, unpinned). None or absent means 'not pinned yet'."""
+# Expectation keys that only run_verify can produce. Nothing else in the build computes
+# the field fingerprint, so on a partial run these are absent BY DESIGN, not wrong.
+VERIFY_DERIVED_EXPECTATIONS = ("fieldSliceSha256", "fieldFingerprint")
+
+
+def _is_verify_derived(key):
+    """True for a flattened expectation key that only exists once verify has run."""
+    return key.split(".")[0] in VERIFY_DERIVED_EXPECTATIONS
+
+
+def check_expectations(observed, expected, verify_ran=True):
+    """-> (problems, unpinned). None or absent means 'not pinned yet'.
+
+    `verify_ran` says whether run_verify ran in THIS invocation. When it did not, the
+    verify-derived keys are skipped entirely: comparing them against a value nothing
+    computed made `--stage parse`, `--stage sample` and `--stage cik` each abort with
+    "CORPUS INTEGRITY FAILURE ... observed None" on a completely correct run. This
+    narrows WHICH keys are checked on a partial run; it never weakens the check when
+    verify did run, which is the only run that can publish.
+    """
     flat_observed, flat_expected = _flatten(observed), _flatten(expected)
     problems, unpinned = [], []
     for key, want in flat_expected.items():
+        if not verify_ran and _is_verify_derived(key):
+            continue
         if want is None:
             unpinned.append(key)
             continue
@@ -742,6 +796,24 @@ def run_verify(config, observed):
     if bad:
         problems.append(f"{len(bad)} CIK key(s) are not 10-digit numerics, e.g. {bad[0]!r}")
 
+    # Accounting identities over counters that are incremented in DIFFERENT places. They
+    # held when checked by hand during review; in code they are the mechanism that catches
+    # the NEXT uncounted `continue`, because any new silent drop makes one side short.
+    cik = observed["cik"]
+    for left_name, left, right_name, right in [
+        ("cik.numeric", cik["numeric"],
+         "cikEntities + cikUnresolvedNumeric + cik.duplicateCikKeys",
+         observed["cikEntities"] + observed["cikUnresolvedNumeric"] + cik["duplicateCikKeys"]),
+        ("cik.rows", cik["rows"],
+         "cik.numeric + cik.seriesIds + cik.empty",
+         cik["numeric"] + cik["seriesIds"] + cik["empty"]),
+        ("fullRecords", observed["fullRecords"],
+         "sum(aliasTypes)", sum(observed["aliasTypes"].values())),
+    ]:
+        if left != right:
+            problems.append(f"reconciliation failed: {left_name} = {left:,} "
+                            f"!= {right_name} = {right:,}")
+
     return problems
 
 
@@ -754,6 +826,25 @@ def run_publish(config, observed):
     """
     out, tmp = config.out_dir, tmp_dir(config)
     os.makedirs(os.path.join(out, "cik"), exist_ok=True)
+    manifest_path = os.path.join(out, "corpus.manifest.json")
+
+    # The manifest is a DURABLE RECORD, not just a build artifact: it accumulates
+    # measurement this build cannot produce (today a ~12 KB `budget` block -- 78 minutes
+    # and 9.3 GB of full-corpus audit, added out of band). Regeneration must therefore be
+    # ADDITIVE over foreign keys: the build refreshes exactly BUILD_OWNED_MANIFEST_KEYS and
+    # carries everything else forward untouched. Rebuilding from a fixed key set instead
+    # would delete that measurement silently.
+    carried = {}
+    if os.path.exists(manifest_path):
+        with open(manifest_path, encoding="utf-8") as fh:
+            carried = {key: value for key, value in json.load(fh).items()
+                       if key not in BUILD_OWNED_MANIFEST_KEYS}
+        # Removed BEFORE the move loop, and only after being read above. The eight
+        # artifacts are replaced one at a time, so a crash partway through would otherwise
+        # leave a mixed-generation corpus beside a manifest asserting completeness --
+        # inverting the invariant that no manifest means the build did not finish.
+        os.remove(manifest_path)
+
     hashes = {}
     for name in PUBLISHED_FILES:
         source, target = os.path.join(tmp, name), os.path.join(out, name)
@@ -762,7 +853,8 @@ def run_publish(config, observed):
 
     # Computed in run_verify against the same bytes -- do not re-walk 4M records here.
     fingerprint = observed["fieldFingerprint"]
-    manifest = {
+    manifest = dict(carried)
+    manifest.update({
         "snapshot": SNAPSHOT,
         "gleifSource": config.gleif_path,
         "secSource": config.sec_path,
@@ -773,8 +865,7 @@ def run_publish(config, observed):
         "fieldFingerprint": fingerprint,
         "gatedAliasTypes": sorted(ALWAYS_GATED)
                            + [f"{t} (same-script only)" for t in sorted(TRANSLITERATED_TYPES)],
-    }
-    manifest_path = os.path.join(out, "corpus.manifest.json")
+    })
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)
     shutil.rmtree(tmp, ignore_errors=True)
@@ -829,7 +920,8 @@ def run_build(config, stages):
                 print(f"  - {problem}", file=sys.stderr)
             return 1
 
-    mismatches, unpinned = check_expectations(observed, config.expected)
+    mismatches, unpinned = check_expectations(observed, config.expected,
+                                              verify_ran="verify" in stages)
     if mismatches:
         print("CORPUS INTEGRITY FAILURE -- refusing to write:", file=sys.stderr)
         for mismatch in mismatches:
