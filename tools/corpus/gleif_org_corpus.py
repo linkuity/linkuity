@@ -12,6 +12,8 @@ import functools
 import hashlib
 import json
 import os
+import shutil
+import sys
 import unicodedata
 
 # --- alias type vocabulary -------------------------------------------------------
@@ -657,3 +659,190 @@ def run_cik(config):
         "cikDuplicateLeis": duplicate_leis,
         "cikSecBlankNameRows": sec_blank_name_rows,
     }
+
+
+STAGE_ORDER = ["parse", "sample", "cik", "verify", "publish"]
+
+PUBLISHED_FILES = [
+    "records.csv", "ground-truth.csv",
+    "records-full.csv", "ground-truth-full.csv",
+    "records-200k.csv", "ground-truth-200k.csv",
+    os.path.join("cik", "records.csv"), os.path.join("cik", "ground-truth.csv"),
+]
+
+SNAPSHOT = "20260727-1600"
+
+
+def _flatten(observed, prefix=""):
+    """Flatten nested observed counts to dotted keys so expectations can pin any of them."""
+    flat = {}
+    for key, value in observed.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict):
+            flat.update(_flatten(value, prefix=f"{name}."))
+        else:
+            flat[name] = value
+    return flat
+
+
+def check_expectations(observed, expected):
+    """-> (problems, unpinned). None or absent means 'not pinned yet'."""
+    flat_observed, flat_expected = _flatten(observed), _flatten(expected)
+    problems, unpinned = [], []
+    for key, want in flat_expected.items():
+        if want is None:
+            unpinned.append(key)
+            continue
+        got = flat_observed.get(key)
+        if got != want:
+            problems.append(f"{key}: observed {got:,} != expected {want:,}"
+                            if isinstance(got, int) and isinstance(want, int)
+                            else f"{key}: observed {got!r} != expected {want!r}")
+    return problems, unpinned
+
+
+def run_verify(config, observed):
+    """Spec section 8, checks 1-3 and 6-8. Returns a list of problems; empty means pass.
+
+    Also computes the field fingerprint and writes `fieldSliceSha256` into `observed`, so
+    a swapped column mapping is a pinnable expectation rather than a manual eyeball.
+    """
+    out = tmp_dir(config)
+    p = lambda *parts: os.path.join(out, *parts)
+    problems = []
+
+    observed["fieldFingerprint"] = field_fingerprint(p("records.csv"))
+    observed["fieldSliceSha256"] = observed["fieldFingerprint"]["sliceSha256"]
+
+    problems += check_gated_is_subset(p("records.csv"), p("records-full.csv"))
+    for name in ["records.csv", "records-full.csv", "records-200k.csv"]:
+        problems += [f"{name}: {x}" for x in check_ids_unique_and_sorted(p(name))]
+    for records, truth in [("records.csv", "ground-truth.csv"),
+                           ("records-full.csv", "ground-truth-full.csv"),
+                           ("records-200k.csv", "ground-truth-200k.csv")]:
+        problems += [f"{records}: {x}" for x in check_truth_covers_records(p(records), p(truth))]
+    problems += check_sample_entity_complete(p("records-200k.csv"), p("records.csv"))
+
+    # Check 7: recount with code that shares no state with the emitting counter.
+    for name, key in [("records.csv", "gatedTruePairs"),
+                      ("records-full.csv", "fullTruePairs"),
+                      ("records-200k.csv", "sampleTruePairs")]:
+        recount = recount_true_pairs(p(name))
+        if recount != observed.get(key):
+            problems.append(f"{name}: independent recount {recount:,} != emitted "
+                            f"{observed.get(key)!r}")
+
+    # Check 8: the CIK probe's join cardinality.
+    if observed.get("cikDuplicateLeis"):
+        problems.append(f"{observed['cikDuplicateLeis']} LEI(s) map to more than one CIK")
+    with open(p("cik", "ground-truth.csv"), encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        next(reader)
+        bad = [row[1] for row in reader if len(row[1]) != 10 or not row[1].isdigit()]
+    if bad:
+        problems.append(f"{len(bad)} CIK key(s) are not 10-digit numerics, e.g. {bad[0]!r}")
+
+    return problems
+
+
+def run_publish(config, observed):
+    """Move the temp build into place and write the manifest LAST.
+
+    os.replace, not shutil.move: on Windows shutil.move raises when the target already
+    exists, which would make the second run of the byte-reproducibility check fail for a
+    reason that has nothing to do with reproducibility.
+    """
+    out, tmp = config.out_dir, tmp_dir(config)
+    os.makedirs(os.path.join(out, "cik"), exist_ok=True)
+    hashes = {}
+    for name in PUBLISHED_FILES:
+        source, target = os.path.join(tmp, name), os.path.join(out, name)
+        os.replace(source, target)
+        hashes[name.replace(os.sep, "/")] = sha256(target)
+
+    # Computed in run_verify against the same bytes -- do not re-walk 4M records here.
+    fingerprint = observed["fieldFingerprint"]
+    manifest = {
+        "snapshot": SNAPSHOT,
+        "gleifSource": config.gleif_path,
+        "secSource": config.sec_path,
+        "gleifSourceSha256": config.expected_gleif_sha256 or sha256(config.gleif_path),
+        "secSourceSha256": config.expected_sec_sha256 or sha256(config.sec_path),
+        "sha256": hashes,
+        "counts": observed,
+        "fieldFingerprint": fingerprint,
+        "gatedAliasTypes": sorted(ALWAYS_GATED)
+                           + [f"{t} (same-script only)" for t in sorted(TRANSLITERATED_TYPES)],
+    }
+    manifest_path = os.path.join(out, "corpus.manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return manifest_path
+
+
+def run_build(config, stages):
+    """Run the requested stages in order. 0 = published, 1 = failed, 2 = not pinned."""
+    if "publish" in stages and "verify" not in stages:
+        # --stage publish on its own would move an unverified build into place, which is
+        # precisely the partial-corpus-that-looks-complete failure the temp dir prevents.
+        print("publish requires verify in the same run.", file=sys.stderr)
+        return 1
+
+    if "parse" in stages:
+        for label, path, expected in [("GLEIF", config.gleif_path, config.expected_gleif_sha256),
+                                      ("SEC", config.sec_path, config.expected_sec_sha256)]:
+            actual = sha256(path)
+            if not expected:
+                print(f"{label} SHA-256 is not pinned yet:\n  {actual}", file=sys.stderr)
+                return 2
+            if actual != expected:
+                print(f"{label} SNAPSHOT CHANGED -- refusing to write.\n"
+                      f"  expected {expected}\n  actual   {actual}", file=sys.stderr)
+                return 1
+
+    # Each stage's counts are cached on disk so `--stage verify` after a code fix costs
+    # seconds instead of another pass over 4.9 GB.
+    observed = {}
+    for stage, runner, cache in [("parse", run_parse, "parse-counts.json"),
+                                 ("sample", run_sample, "sample-counts.json"),
+                                 ("cik", run_cik, "cik-counts.json")]:
+        cache_path = os.path.join(tmp_dir(config), cache)
+        if stage in stages:
+            counts = runner(config)
+            with open(cache_path, "w", encoding="utf-8") as fh:
+                json.dump(counts, fh, indent=2, sort_keys=True)
+        elif os.path.exists(cache_path):
+            with open(cache_path, encoding="utf-8") as fh:
+                counts = json.load(fh)
+        else:
+            print(f"stage '{stage}' was skipped and {cache} does not exist -- run it first.",
+                  file=sys.stderr)
+            return 1
+        observed.update(counts)
+
+    if "verify" in stages:
+        problems = run_verify(config, observed)
+        if problems:
+            print("CORPUS VERIFICATION FAILURE -- refusing to write:", file=sys.stderr)
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+
+    mismatches, unpinned = check_expectations(observed, config.expected)
+    if mismatches:
+        print("CORPUS INTEGRITY FAILURE -- refusing to write:", file=sys.stderr)
+        for mismatch in mismatches:
+            print(f"  - {mismatch}", file=sys.stderr)
+        return 1
+    if unpinned:
+        print("Not pinned yet: " + ", ".join(sorted(unpinned)), file=sys.stderr)
+        print(json.dumps(observed, indent=2, sort_keys=True))
+        print("Paste these into EXPECTED and re-run.", file=sys.stderr)
+        return 2
+
+    if "publish" in stages:
+        path = run_publish(config, observed)
+        print(f"wrote {observed['gatedRecords']:,} gated records, "
+              f"{observed['gatedTruePairs']:,} true pairs -> {path}")
+    return 0

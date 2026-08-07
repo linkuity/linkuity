@@ -7,11 +7,16 @@ silently.
 
 Design: linkuity/docs/superpowers/specs/2026-08-05-gleif-labelled-org-corpus-design.md
 
-Stages run in order by default; --stage re-runs one of them against the existing temp
-directory, so fixing a verification bug does not cost another pass over 4.9 GB.
+Stages run in order by default; --stage re-runs a subset of them against the existing
+temp directory, so fixing a verification bug does not cost another pass over 4.9 GB.
+--stage accepts multiple values because run_build refuses to publish unless "verify" is
+in the SAME invocation -- a single-valued --stage could never express "verify then
+publish, but skip parse", which is exactly the workflow this exists for. Stages are
+always run in STAGE_ORDER regardless of the order typed.
 
     python build-gleif-org-corpus.py
     python build-gleif-org-corpus.py --stage verify
+    python build-gleif-org-corpus.py --stage verify publish
 """
 import argparse
 import sys
@@ -60,20 +65,33 @@ EXPECTED = {
         "PREFERRED_ASCII_TRANSLITERATED_LEGAL_NAME": 94_747,
         "AUTO_ASCII_TRANSLITERATED_LEGAL_NAME": 65_256,
     },
-    "fieldSliceSha256": None,
+    "fieldSliceSha256": "4674d9a11dd58a60e758d06cfb6a4c2bcf4e61e631e2476d6e33209e1d57956d",
 }
 
-def main(argv=None):
+def build_arg_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=g.STAGE_ORDER,   # one definition, in the module
-                        help="run one stage against the existing temp directory")
-    args = parser.parse_args(argv)
+    parser.add_argument("--stage", choices=g.STAGE_ORDER, nargs="+",
+                        help="run these stages against the existing temp directory, "
+                             "in STAGE_ORDER; publish requires verify in the same call")
+    return parser
+
+
+def resolve_stages(selected):
+    """Canonicalize --stage into STAGE_ORDER, regardless of the order typed.
+
+    `--stage publish verify` must run verify before publish, not publish first.
+    """
+    return [s for s in g.STAGE_ORDER if s in selected] if selected else g.STAGE_ORDER
+
+
+def main(argv=None):
+    args = build_arg_parser().parse_args(argv)
 
     config = g.BuildConfig(gleif_path=GLEIF, sec_path=SEC, out_dir=OUT,
                            expected=EXPECTED, sample_target=200_000,
                            expected_gleif_sha256=EXPECTED_GLEIF_SHA256,
                            expected_sec_sha256=EXPECTED_SEC_SHA256)
-    stages = [args.stage] if args.stage else g.STAGE_ORDER
+    stages = resolve_stages(args.stage)
     return g.run_build(config, stages)
 
 

@@ -6,6 +6,7 @@ whole suite must stay under a second -- a test suite nobody runs is not a test s
     python -m unittest discover -s tools\corpus -p "test_*.py" -v
 """
 import csv as _csv
+import json
 import os
 import tempfile
 import unittest
@@ -656,6 +657,82 @@ class TestCikStage(ParseFixture, unittest.TestCase):
         self.assertEqual(observed["cikEntities"], 1)
         self.assertEqual(observed["cikRecords"], 4)
         self.assertEqual(observed["cikTruePairs"], 6)
+
+
+class TestVerifyAndPublish(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.gleif = os.path.join(self.tmp, "gleif.csv")
+        self.sec = os.path.join(self.tmp, "sec.txt")
+        write_gleif_fixture(self.gleif)
+        write_sec_fixture(self.sec)
+        self.out = os.path.join(self.tmp, "out")
+
+    def config(self, expected):
+        return g.BuildConfig(gleif_path=self.gleif, sec_path=self.sec, out_dir=self.out,
+                             expected=expected, sample_target=4,
+                             expected_gleif_sha256=g.sha256(self.gleif),
+                             expected_sec_sha256=g.sha256(self.sec))
+
+    def test_unpinned_expectations_refuse_to_publish(self):
+        code = g.run_build(self.config({"entities": None}), g.STAGE_ORDER)
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "corpus.manifest.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.out, "records.csv")))
+
+    def test_mismatched_expectation_refuses_to_publish(self):
+        code = g.run_build(self.config({"entities": 999}), g.STAGE_ORDER)
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "corpus.manifest.json")))
+
+    def test_changed_source_hash_refuses_before_parsing(self):
+        config = self.config({"entities": 10})
+        config.expected_gleif_sha256 = "0" * 64
+        self.assertEqual(g.run_build(config, g.STAGE_ORDER), 1)
+
+    def test_successful_build_publishes_every_artifact_with_manifest_last(self):
+        code = g.run_build(self.config({"entities": 10}), g.STAGE_ORDER)
+        self.assertEqual(code, 0)
+        for name in ["records.csv", "ground-truth.csv", "records-full.csv",
+                     "ground-truth-full.csv", "records-200k.csv", "ground-truth-200k.csv",
+                     os.path.join("cik", "records.csv"), os.path.join("cik", "ground-truth.csv"),
+                     "corpus.manifest.json"]:
+            self.assertTrue(os.path.exists(os.path.join(self.out, name)), name)
+
+    def test_manifest_records_hashes_counts_and_the_field_fingerprint(self):
+        g.run_build(self.config({"entities": 10}), g.STAGE_ORDER)
+        with open(os.path.join(self.out, "corpus.manifest.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["snapshot"], "20260727-1600")
+        self.assertEqual(len(manifest["gleifSourceSha256"]), 64)
+        self.assertIn("records.csv", manifest["sha256"])
+        self.assertEqual(manifest["counts"]["entities"], 10)
+        self.assertIn("sliceSha256", manifest["fieldFingerprint"])
+        self.assertIn("aliasTypes", manifest["counts"])
+
+    def test_build_is_byte_reproducible(self):
+        self.assertEqual(g.run_build(self.config({"entities": 10}), g.STAGE_ORDER), 0)
+        with open(os.path.join(self.out, "corpus.manifest.json"), encoding="utf-8") as fh:
+            first = json.load(fh)["sha256"]
+        self.assertEqual(g.run_build(self.config({"entities": 10}), g.STAGE_ORDER), 0)
+        with open(os.path.join(self.out, "corpus.manifest.json"), encoding="utf-8") as fh:
+            second = json.load(fh)["sha256"]
+        self.assertEqual(first, second)
+
+    def test_verify_catches_a_corrupted_gate_corpus(self):
+        # Stop before publish: run_publish removes the temp directory, so corrupting it
+        # afterwards would test nothing.
+        config = self.config({"entities": 10})
+        self.assertEqual(g.run_build(config, ["parse", "sample", "cik"]), 0)
+        # Append a gated record that exists in no full corpus.
+        with open(os.path.join(g.tmp_dir(config), "records.csv"),
+                  "a", newline="", encoding="utf-8") as fh:
+            _csv.writer(fh).writerow(["gleif-ZZZ0000000000000-0"]
+                                     + [""] * (len(g.RECORD_COLUMNS) - 1))
+        self.assertEqual(g.run_build(config, ["verify", "publish"]), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "corpus.manifest.json")))
 
 
 if __name__ == "__main__":
