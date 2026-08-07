@@ -527,6 +527,46 @@ class TestParseStageEndToEnd(ParseFixture, unittest.TestCase):
         self.assertEqual(c["wrongAuthorityCikShaped"], 1)   # RA000063 with 1234
 
 
+class TestCikCollisionCounting(unittest.TestCase):
+    """Self-contained: two LEIs whose numeric ids zero-pad to the same CIK.
+
+    Deliberately NOT built on the shared ParseFixture fixture -- reusing it would
+    perturb every already-pinned count in TestParseStageEndToEnd.
+    """
+
+    def test_duplicate_cik_key_is_counted_and_first_wins(self):
+        import json
+
+        rows = [
+            gleif_row("LEI0000000000000101", "FIRST TRUST CORP",
+                      address={"address_line": "1 First St", "city": "Boston", "region": "MA",
+                               "postal_code": "02109", "country": "US", "jurisdiction": "US-MA",
+                               "legal_form": "XTIQ"},
+                      ra=("RA000665", "42")),
+            gleif_row("LEI0000000000000102", "SECOND SERIES LLC",
+                      address={"address_line": "2 Second St", "city": "Chicago", "region": "IL",
+                               "postal_code": "60601", "country": "US", "jurisdiction": "US-IL",
+                               "legal_form": "XTIQ"},
+                      ra=("RA000665", "0000000042")),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            gleif_path = os.path.join(tmp, "gleif.csv")
+            with open(gleif_path, "w", newline="", encoding="utf-8") as fh:
+                w = _csv.writer(fh)
+                w.writerow(GLEIF_HEADER)
+                w.writerows(rows)
+            config = g.BuildConfig(gleif_path=gleif_path, sec_path="",
+                                   out_dir=os.path.join(tmp, "out"), expected={})
+            observed = g.run_parse(config)
+
+            self.assertEqual(observed["cik"]["duplicateCikKeys"], 1)
+            with open(os.path.join(g.tmp_dir(config), "cik-candidates.json"),
+                      encoding="utf-8") as fh:
+                candidates = json.load(fh)
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates["0000000042"]["lei"], "LEI0000000000000101")
+
+
 def _read_all_ids(path):
     return list(g._read_ids(path))
 
@@ -556,6 +596,51 @@ class TestSampleStage(ParseFixture, unittest.TestCase):
         first = _read_all_ids(self.path("records-200k.csv"))
         g.run_sample(self.config)
         self.assertEqual(first, _read_all_ids(self.path("records-200k.csv")))
+
+
+class TestCikStage(ParseFixture, unittest.TestCase):
+    def test_only_the_right_authority_joins(self):
+        observed = g.run_cik(self.config)
+        # DELTA CORP (RA000665, 1234) joins. TORTOLA (RA000063, same digits) does not.
+        self.assertEqual(observed["cikEntities"], 1)
+        with open(os.path.join(g.tmp_dir(self.config), "cik", "records.csv"),
+                  encoding="utf-8", newline="") as fh:
+            rows = list(_csv.DictReader(fh))
+        names = {r["organization_name"] for r in rows}
+        self.assertIn("DELTA CORP", names)
+        self.assertNotIn("TORTOLA OFFSHORE LTD", names)
+
+    def test_records_and_pairs(self):
+        observed = g.run_cik(self.config)
+        # 1 GLEIF + 3 SEC names for CIK 0000001234
+        self.assertEqual(observed["cikRecords"], 4)
+        self.assertEqual(observed["cikTruePairs"], 6)
+
+    def test_ids_name_their_source(self):
+        g.run_cik(self.config)
+        with open(os.path.join(g.tmp_dir(self.config), "cik", "records.csv"),
+                  encoding="utf-8", newline="") as fh:
+            ids = [r["id"] for r in _csv.DictReader(fh)]
+        self.assertIn("cik-0000001234-gleif-0", ids)
+        self.assertIn("cik-0000001234-sec-0", ids)
+
+    def test_sec_name_containing_a_colon_is_parsed_on_the_last_colon(self):
+        g.run_cik(self.config)
+        with open(os.path.join(g.tmp_dir(self.config), "cik", "records.csv"),
+                  encoding="utf-8", newline="") as fh:
+            names = {r["organization_name"] for r in _csv.DictReader(fh)}
+        self.assertIn("DELTA CORP: THE", names)
+
+    def test_numeric_id_with_no_matching_cik_is_counted_not_dropped(self):
+        observed = g.run_cik(self.config)
+        self.assertEqual(observed["cikUnresolvedNumeric"], 1)   # ZETA UNLISTED INC, 9999999
+
+    def test_canonical_key_is_the_cik(self):
+        g.run_cik(self.config)
+        with open(os.path.join(g.tmp_dir(self.config), "cik", "ground-truth.csv"),
+                  encoding="utf-8", newline="") as fh:
+            keys = {r["canonical_key"] for r in _csv.DictReader(fh)}
+        self.assertEqual(keys, {"0000001234"})
 
 
 if __name__ == "__main__":

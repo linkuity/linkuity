@@ -433,7 +433,7 @@ def run_parse(config):
     entities = gated_records = full_records = 0
     gated_pairs = full_pairs = 0
     cik = {"rows": 0, "numeric": 0, "seriesIds": 0, "empty": 0,
-           "wrongAuthorityCikShaped": 0}
+           "wrongAuthorityCikShaped": 0, "duplicateCikKeys": 0}
     cik_candidates = {}
 
     gf, gt, gw, gtw = _open_pair(out, "records.csv", "ground-truth.csv")
@@ -478,7 +478,19 @@ def run_parse(config):
                         cik["empty"] += 1
                     elif entity_id.isdigit():
                         cik["numeric"] += 1
-                        cik_candidates[entity_id.zfill(10)] = {
+                        key = entity_id.zfill(10)
+                        if key in cik_candidates:
+                            # Two LEIs claiming one CIK. Measured: 14 of these exist, and
+                            # they are NOT all duplicate registrations -- several are a fund
+                            # trust and one of its series (RBC FUNDS TRUST vs RBC BlueBay
+                            # Emerging Market Unconstrained Fixed Income Fund), i.e. distinct
+                            # legal entities sharing one SEC filing. Keying both to the CIK
+                            # would assert they are the same entity, so the collision is
+                            # DROPPED -- but counted, never silently, because a bare
+                            # overwrite here is what made 5,045 and 5,031 both look correct.
+                            cik["duplicateCikKeys"] += 1
+                            continue
+                        cik_candidates[key] = {
                             "lei": lei,
                             "record": {c: records[0][c] for c in RECORD_COLUMNS},
                         }
@@ -550,4 +562,90 @@ def run_sample(config):
         "sampleEntities": entities,
         "sampleTruePairs": true_pairs_from_sizes(sizes.values()),
         "sampleProbability": probability,
+    }
+
+
+def read_sec_names(sec_path, wanted_ciks):
+    """CIK -> ordered names, for the wanted CIKs only.
+
+    The lookup file is latin-1, one 'NAME:CIK:' per line, and names may contain colons --
+    split on the LAST one, exactly as build-sec-recall-corpus.py does.
+    """
+    names = {}
+    malformed = []
+    with open(sec_path, encoding="latin-1") as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            body = raw[:-1] if raw.endswith(":") else raw
+            i = body.rfind(":")
+            if i < 0:
+                malformed.append((lineno, raw[:80]))
+                continue
+            if i == 0:
+                continue          # blank-name row: four exist, all documented in the SEC builder
+            cik = body[i + 1:]
+            if cik in wanted_ciks:
+                names.setdefault(cik, []).append(body[:i])
+    if malformed:
+        raise ValueError(f"{len(malformed)} unparsable SEC row(s), first at line {malformed[0][0]}")
+    return names
+
+
+def run_cik(config):
+    """Cross-source probe: one GLEIF record and every SEC name, keyed by CIK.
+
+    Small by construction (12,636 true pairs) and never gated. It exists because it is
+    the only labelled data here where one entity appears with sharply different field
+    coverage on different records -- the Principle 7 case. Spec section 4.1.
+    """
+    out = tmp_dir(config)
+    with open(os.path.join(out, "cik-candidates.json"), encoding="utf-8") as fh:
+        candidates = json.load(fh)
+
+    sec_names = read_sec_names(config.sec_path, set(candidates))
+    joined = sorted(c for c in candidates if c in sec_names)
+
+    cik_dir = os.path.join(out, "cik")
+    os.makedirs(cik_dir, exist_ok=True)
+    sizes = []
+    seen_leis = {}
+    duplicate_leis = 0
+    with open(os.path.join(cik_dir, "records.csv"), "w", newline="", encoding="utf-8") as rf, \
+         open(os.path.join(cik_dir, "ground-truth.csv"), "w", newline="", encoding="utf-8") as tf:
+        rw, tw = csv.writer(rf), csv.writer(tf)
+        rw.writerow(RECORD_COLUMNS)
+        tw.writerow(["record_id", "canonical_key"])
+        for cik in joined:
+            candidate = candidates[cik]
+            lei = candidate["lei"]
+            if lei in seen_leis:
+                duplicate_leis += 1
+            seen_leis[lei] = cik
+
+            gleif_id = f"cik-{cik}-gleif-0"
+            record = dict(candidate["record"])
+            record["id"] = gleif_id
+            rw.writerow([record[c] for c in RECORD_COLUMNS])
+            tw.writerow([gleif_id, cik])
+
+            for ordinal, name in enumerate(sec_names[cik]):
+                sec_id = f"cik-{cik}-sec-{ordinal}"
+                row = {c: "" for c in RECORD_COLUMNS}
+                row["id"] = sec_id
+                row["organization_name"] = name
+                row["alias_type"] = LEGAL
+                row["script_relation"] = "same"
+                rw.writerow([row[c] for c in RECORD_COLUMNS])
+                tw.writerow([sec_id, cik])
+            sizes.append(1 + len(sec_names[cik]))
+
+    unresolved = sum(1 for c in candidates if c not in sec_names)
+    return {
+        "cikEntities": len(joined),
+        "cikRecords": sum(sizes),
+        "cikTruePairs": true_pairs_from_sizes(sizes),
+        "cikUnresolvedNumeric": unresolved,
+        "cikDuplicateLeis": duplicate_leis,
     }

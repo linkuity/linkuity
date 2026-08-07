@@ -41,7 +41,7 @@ EXPECTED = {
     "cikEntities": 5_021,
     "cikRecords": 12_883,
     "cikTruePairs": 12_636,
-    "cikUnresolvedNumeric": 24,
+    "cikUnresolvedNumeric": 10,
     "cikDuplicateLeis": 0,
     "cik": {
         "rows": 27_500,
@@ -49,6 +49,7 @@ EXPECTED = {
         "seriesIds": 22_454,
         "empty": 1,
         "wrongAuthorityCikShaped": 1_455_066,
+        "duplicateCikKeys": 14,
     },
     "aliasTypes": {
         "LEGAL": 3_385_273,
