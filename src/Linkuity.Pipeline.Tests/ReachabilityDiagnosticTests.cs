@@ -213,6 +213,31 @@ public class ReachabilityDiagnosticTests
     }
 
     [Fact]
+    public void CauseADetailCountsPairsNotSharedKeys()
+    {
+        // r0/r1 ("ACME TRADING LIMITED" clones) share SIX distinct keys at block size 4:
+        // fp:"acme trading" (1 fingerprint key), token:acme + token:trading (2 token keys), and
+        // acr:atl + acr:at + acr:acme (3 acronym keys). Before the fix, CauseADetail counted one
+        // increment PER SHARED KEY, so this single true pair produced
+        // {(fingerprint,4):1, (token,4):2, (acronym,4):3} -- summing to 6 for ONE pair. The fix
+        // dedupes to (strategy, blockSize) buckets the pair actually touches, so each of the
+        // three buckets must read exactly 1, and none may exceed CauseA.PairCount (1) for this
+        // single-true-pair fixture.
+        var result = Diagnose(SuppressedSharedKeyFixture(), maxBlockSize: 2);
+
+        Assert.Equal(1, result.CauseA.PairCount);
+        Assert.Equal(3, result.CauseADetail.Count);
+        Assert.All(result.CauseADetail, d => Assert.Equal(1, d.PairCount));
+        Assert.All(result.CauseADetail, d => Assert.Equal(4, d.BlockSize));
+        Assert.Equal(
+            new[] { "acronym", "fingerprint", "token" },
+            result.CauseADetail.Select(d => d.Strategy).OrderBy(s => s, StringComparer.Ordinal).ToList());
+        // The un-deduped bug would have summed to 6; the fixed total across buckets is 3, and no
+        // single bucket may exceed the fixture's one true pair.
+        Assert.Equal(3, result.CauseADetail.Sum(d => d.PairCount));
+    }
+
+    [Fact]
     public void PairSharingAnUndeclaredColumnValueIsCauseB2()
     {
         // Names share nothing; postal_code is equal; the profile does not declare postal_code.

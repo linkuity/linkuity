@@ -30,7 +30,19 @@ public sealed record NormalizationTally(
 
 /// <summary>Cause A detail: which strategy owned the suppressed key, and how big the block was.
 /// This is what a per-feature threshold would be chosen FROM — an aggregate count of cause A
-/// tells you the cap hurt, not what to set it to.</summary>
+/// tells you the cap hurt, not what to set it to.
+///
+/// Each bucket answers: if this strategy's threshold were raised above this block size, how many
+/// currently-suppressed true pairs would become reachable? PairCount is deduped so a pair sharing
+/// several keys from the same strategy at the same block size (common for multi-token names) is
+/// counted once per bucket it touches, not once per key.
+///
+/// Buckets are NOT a partition of cause A and must NOT be summed: a pair whose shared keys sit at
+/// DIFFERENT block sizes correctly appears in more than one bucket, since raising the threshold
+/// past any one of them would recover that pair. Summing the buckets therefore double-counts such
+/// pairs and can exceed <c>CauseA.PairCount</c> — that is not a reconciliation failure, it is the
+/// buckets overlapping by construction. The pair total is always <c>CauseA.PairCount</c>.
+/// </summary>
 public sealed record SuppressedKeyDetail(string Strategy, int BlockSize, long PairCount);
 
 public sealed record SampledPair(string LeftSourceRecordId, string RightSourceRecordId, string CanonicalKey);

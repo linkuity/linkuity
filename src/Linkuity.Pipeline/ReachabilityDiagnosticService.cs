@@ -114,13 +114,22 @@ public sealed class ReachabilityDiagnosticService
                             // Cause A: every key both records carry was thrown away by the cap.
                             aCount++;
                             aSampler.Offer(members[i], members[j], canonical);
+
+                            // Dedupe to (strategy, blockSize) buckets THIS PAIR TOUCHES before
+                            // incrementing: a multi-token org name can share several keys from the
+                            // same strategy at the same block size (e.g. "ACME TRADING LIMITED"
+                            // clones share 3 acronym keys at block size 4), and counting each
+                            // shared key separately would inflate one pair into several -- exactly
+                            // the number a per-feature threshold must not be chosen from.
+                            var bucketsTouched = new HashSet<(string Strategy, int BlockSize)>();
                             foreach (var keyId in sharedIgnoringSuppression)
                             {
                                 var strategy = OwningStrategyOf(keyId, index, records, profile, _registry, owningStrategyCache);
                                 var blockSize = index.KeyCount[keyId];
-                                var detailKey = (strategy, blockSize);
-                                aDetailCounts[detailKey] = aDetailCounts.GetValueOrDefault(detailKey) + 1;
+                                bucketsTouched.Add((strategy, blockSize));
                             }
+                            foreach (var detailKey in bucketsTouched)
+                                aDetailCounts[detailKey] = aDetailCounts.GetValueOrDefault(detailKey) + 1;
                         }
                         else
                         {
