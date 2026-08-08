@@ -248,4 +248,98 @@ public class BlockingAuditServiceTests
         Assert.Empty(result.Reachability.MissedPairs);
         Assert.Equal(1.0, result.Reachability.Recall);
     }
+
+    // ~50 records with overlapping names: two ACME-family clusters (blocks of size 3, 5 and 8,
+    // via shared fingerprint/token/acronym keys) plus 42 uniquely-named singleton records. Gives
+    // TotalCandidatePairs > 0, at least one key with >= 3 members, and block sizes spanning more
+    // than one histogram bucket -- CorpusAuditFixtures.Profile()'s strategies are
+    // ["fingerprint", "token", "acronym"].
+    private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile) LargeishFixture()
+    {
+        var profile = CorpusAuditFixtures.Profile();
+        var records = new List<EntityRecord>();
+        for (var i = 0; i < 5; i++) records.Add(CorpusAuditFixtures.Org($"acme-h-{i}", "ACME HOLDINGS INC"));
+        for (var i = 0; i < 3; i++) records.Add(CorpusAuditFixtures.Org($"acme-t-{i}", "ACME TRADING LTD"));
+        for (var i = 0; i < 42; i++) records.Add(CorpusAuditFixtures.Org($"solo-{i}", $"SOLOWORD{i}"));
+        return (records, profile);
+    }
+
+    // 600 entities x 2 records. Every name is a single globally-unique token, so no two records
+    // in the whole fixture share a fingerprint/token/acronym key -- all 600 entity pairs are
+    // unreachable. 600 is STRICTLY MORE than BlockingAuditService.MissedPairSampleCap (500): if it
+    // were not, the cap test below would pass while asserting nothing.
+    private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile) ManyMissedPairsFixture()
+    {
+        var profile = CorpusAuditFixtures.Profile();
+        var records = new List<EntityRecord>();
+        for (var i = 0; i < 600; i++)
+        {
+            records.Add(CorpusAuditFixtures.Org($"ent{i}-l", $"LEFTUNIQTOKEN{i}"));
+            records.Add(CorpusAuditFixtures.Org($"ent{i}-r", $"RIGHTUNIQTOKEN{i}"));
+        }
+        return (records, profile);
+    }
+
+    // Pairs each entity's two records (ids "ent{i}-l" / "ent{i}-r") under a shared canonical key
+    // "ent{i}", recovered by stripping the trailing "-l"/"-r" tag.
+    private static Dictionary<string, string> GroundTruthWithManyUnreachablePairs(IReadOnlyList<EntityRecord> records)
+        => records.ToDictionary(r => r.SourceRecordId, r => r.SourceRecordId[..^2], StringComparer.Ordinal);
+
+    [Fact]
+    public void CandidatePairCountMatchesTheOwnershipWalk()
+    {
+        // The distinct-pair count must be identical to what the engine-parity walk emits.
+        // Previously this was computed by materialising a HashSet of every pair.
+        var (records, profile) = LargeishFixture();
+        var result = new BlockingAuditService(MatchingDefaults.CreateRegistry())
+            .Audit(records, profile);
+
+        var index = BlockingKeyIndex.Build(records, profile, MatchingDefaults.CreateRegistry());
+        var expected = 0;
+        BlockingKeyIndex.ForEachCandidatePair(index, null, (_, _) => expected++);
+
+        Assert.Equal(expected, result.Structural.TotalCandidatePairs);
+    }
+
+    [Fact]
+    public void MissedPairsAreCappedButTheCountIsNot()
+    {
+        var (records, profile) = ManyMissedPairsFixture();
+        var truth = GroundTruthWithManyUnreachablePairs(records);
+
+        var result = new BlockingAuditService(MatchingDefaults.CreateRegistry())
+            .Audit(records, profile, truth);
+
+        Assert.NotNull(result.Reachability);
+        var missedCount = result.Reachability!.TrueMatchPairs - result.Reachability.ReachablePairs;
+        Assert.True(result.Reachability.MissedPairs.Count <= BlockingAuditService.MissedPairSampleCap);
+        Assert.True(missedCount > result.Reachability.MissedPairs.Count,
+            "fixture must produce more missed pairs than the cap, or this asserts nothing");
+        Assert.Equal(missedCount, result.Reachability.MissedPairCount);
+    }
+
+    [Fact]
+    public void MissedPairSampleIsDeterministicAcrossRuns()
+    {
+        var (records, profile) = ManyMissedPairsFixture();
+        var truth = GroundTruthWithManyUnreachablePairs(records);
+        var service = new BlockingAuditService(MatchingDefaults.CreateRegistry());
+
+        var first = service.Audit(records, profile, truth).Reachability!.MissedPairs
+            .Select(m => (m.LeftSourceRecordId, m.RightSourceRecordId)).ToList();
+        var second = service.Audit(records, profile, truth).Reachability!.MissedPairs
+            .Select(m => (m.LeftSourceRecordId, m.RightSourceRecordId)).ToList();
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void BlockSizeHistogramTotalsMatchTheBlockCount()
+    {
+        var (records, profile) = LargeishFixture();
+        var result = new BlockingAuditService(MatchingDefaults.CreateRegistry())
+            .Audit(records, profile);
+
+        Assert.Equal(result.Structural.TotalBlocks, result.Structural.SizeHistogram.Sum(b => b.BlockCount));
+    }
 }

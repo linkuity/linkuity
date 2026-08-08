@@ -26,20 +26,30 @@ public sealed record BlockingBlock(
     public int Size => MemberSourceRecordIds.Count;
 }
 
+/// <summary>How many blocks fall in each size bucket. Replaces retaining every block: the
+/// distribution is what a frequency threshold is chosen from, and it is bounded by bucket count
+/// rather than by corpus size.</summary>
+public sealed record BlockingSizeBucket(int MinSize, int MaxSize, int BlockCount, long RecordSlots);
+
 /// <summary>Aggregate structure of the blocking output (no ground truth needed).</summary>
 public sealed record BlockingStructuralStats(
     int TotalBlocks,
     int SingletonRecordCount,
-    int TotalCandidatePairs,
+    long TotalCandidatePairs,
+    long TotalBlockPairVisits,
     int MaxBlockSize,
     double MeanBlockSize,
-    IReadOnlyList<BlockingBlock> LargestBlocks);
+    IReadOnlyList<BlockingBlock> LargestBlocks,
+    IReadOnlyList<BlockingSizeBucket> SizeHistogram);
 
-/// <summary>Blocking recall ceiling and diagnostics against a ground-truth map.</summary>
+/// <summary>Blocking recall ceiling and diagnostics against a ground-truth map. MissedPairCount is
+/// the exact total; MissedPairs is a deterministic sample capped at
+/// <see cref="BlockingAuditService.MissedPairSampleCap"/> so memory does not scale with corpus size.</summary>
 public sealed record BlockingReachabilityReport(
     int TrueMatchPairs,
     int ReachablePairs,
     double Recall,
+    int MissedPairCount,
     IReadOnlyList<MissedPair> MissedPairs,
     IReadOnlyList<StrategyAttribution> Attribution);
 
