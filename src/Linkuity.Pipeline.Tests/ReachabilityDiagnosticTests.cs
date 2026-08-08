@@ -168,26 +168,32 @@ public class ReachabilityDiagnosticTests
     ///            undeclared postal_code                            -> cause B2
     ///   - v0/v1  "VELVET FOUNDRY" / "CASCADE ORBIT", nothing shared -> cause B3
     /// </summary>
+    /// <summary>country is added to every record (Task 4): equal on every pair EXCEPT v0/v1,
+    /// which deliberately differ (US/DE). Equal-country is safe to add to the A/B1/B2 pairs
+    /// without changing their classification -- cause A short-circuits before any column
+    /// equality check runs, and B1/B2 only need Count &gt; 0 on their OWN qualifying column, which
+    /// is already true regardless of what else matches. v0/v1 must stay unequal, since an equal
+    /// undeclared column there would reclassify the pair from B3 to B2.</summary>
     private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) MixedCausesFixture()
     {
         var records = new List<EntityRecord>
         {
-            Org("r0", "ACME TRADING LIMITED"),
-            Org("r1", "ACME TRADING LIMITED"),
-            Org("r2", "ACME TRADING LIMITED"),
-            Org("r3", "ACME TRADING LIMITED"),
+            Org("r0", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r1", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r2", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r3", "ACME TRADING LIMITED", ("country", "US")),
 
-            Org("g0", "GLOBEX UNIQUE CORP"),
-            Org("g1", "GLOBEX UNIQUE CORP"),
+            Org("g0", "GLOBEX UNIQUE CORP", ("country", "US")),
+            Org("g1", "GLOBEX UNIQUE CORP", ("country", "US")),
 
-            Org("d0", "KAPPA VENTURES", ("address_line", "500 ELM ST")),
-            Org("d1", "LYNX ENTERPRISES", ("address_line", "500 ELM ST")),
+            Org("d0", "KAPPA VENTURES", ("address_line", "500 ELM ST"), ("country", "US")),
+            Org("d1", "LYNX ENTERPRISES", ("address_line", "500 ELM ST"), ("country", "US")),
 
-            Org("q0", "ORCHID METRICS", ("postal_code", "30003")),
-            Org("q1", "TUNDRA ANALYTICS", ("postal_code", "30003")),
+            Org("q0", "ORCHID METRICS", ("postal_code", "30003"), ("country", "US")),
+            Org("q1", "TUNDRA ANALYTICS", ("postal_code", "30003"), ("country", "US")),
 
-            Org("v0", "VELVET FOUNDRY"),
-            Org("v1", "CASCADE ORBIT"),
+            Org("v0", "VELVET FOUNDRY", ("country", "US")),
+            Org("v1", "CASCADE ORBIT", ("country", "DE")),
         };
         var groundTruth = new Dictionary<string, string>
         {
@@ -198,6 +204,46 @@ public class ReachabilityDiagnosticTests
             ["v0"] = "velvet-cascade", ["v1"] = "velvet-cascade",
         };
         return (records, NameAndAddressProfile(), groundTruth);
+    }
+
+    /// <summary>Task 4: exercises the control walk's exclusion path directly. stride =
+    /// floor(sqrt(4)) = 2, so the only two candidate control pairs are (idx0,idx2) and
+    /// (idx1,idx3). idx0/idx2 ("x0"/"x2") are a ground-truthed true pair AND coincidentally
+    /// share postal_code "11111" -- if the exclusion silently dropped rather than counted, or
+    /// leaked their postal_code into the aggregate, this test catches it. idx1/idx3 are not a
+    /// true pair and have distinct postal codes, so they contribute one clean sample with no
+    /// match.</summary>
+    private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) AccidentalControlCollisionFixture()
+    {
+        var records = new List<EntityRecord>
+        {
+            Org("x0", "SAME NAME ONE", ("postal_code", "11111")),
+            Org("x1", "OTHER A", ("postal_code", "22222")),
+            Org("x2", "SAME NAME ONE", ("postal_code", "11111")),
+            Org("x3", "OTHER B", ("postal_code", "33333")),
+        };
+        var groundTruth = new Dictionary<string, string> { ["x0"] = "g1", ["x2"] = "g1" };
+        return (records, NameOnlyProfile(), groundTruth);
+    }
+
+    /// <summary>Task 4: a column ("special_code") that co-occurs on the one unreachable true
+    /// pair (m0/m2, equal "S1") but on NEITHER of the two control pairs the stride walk visits
+    /// (m0/m1 = S1 vs S2, m2/m3 = S1 vs S3) -- control rate exactly 0 for that column. Pins that
+    /// Lift is null rather than +Infinity or a divide-by-zero exception in that case. m0's and
+    /// m2's names ("VELVET FOUNDRY" / "CASCADE ORBIT") are the same pair already verified
+    /// share-nothing in MixedCausesFixture, so this pair is genuinely unreachable (B2, via the
+    /// shared undeclared special_code) rather than reachable by blocking.</summary>
+    private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) LiftIsNullFixture()
+    {
+        var records = new List<EntityRecord>
+        {
+            Org("m0", "VELVET FOUNDRY", ("special_code", "S1")),
+            Org("m2", "CASCADE ORBIT", ("special_code", "S1")),
+            Org("m1", "PRIMA FILLER", ("special_code", "S2")),
+            Org("m3", "SECUNDA FILLER", ("special_code", "S3")),
+        };
+        var groundTruth = new Dictionary<string, string> { ["m0"] = "pair1", ["m2"] = "pair1" };
+        return (records, NameOnlyProfile(), groundTruth);
     }
 
     // ------------------------------------------------------------------------------------
@@ -298,6 +344,106 @@ public class ReachabilityDiagnosticTests
             () => ReachabilityDiagnosticService.AssertReconciles(
                 truePairs: 10, reachable: 4, unreachable: 5,   // 4 + 5 != 10
                 a: 2, b1: 1, b2: 1, b3: 1));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Task 4: field co-occurrence and the non-pair control.
+    // ------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ControlSampleIsDeterministic()
+    {
+        var a = Diagnose(MixedCausesFixture(), maxBlockSize: null).Control;
+        var b = Diagnose(MixedCausesFixture(), maxBlockSize: null).Control;
+        Assert.Equal(a.SampledPairCount, b.SampledPairCount);
+        Assert.Equal(a.ByColumn["country"].SharedCount, b.ByColumn["country"].SharedCount);
+    }
+
+    [Fact]
+    public void ControlSampleContainsNoTruePairs()
+    {
+        var result = Diagnose(MixedCausesFixture(), maxBlockSize: null);
+        Assert.Equal(0, result.Control.TruePairsAccidentallyIncluded);
+    }
+
+    [Fact]
+    public void RatesCarrySampleSizeAndInterval()
+    {
+        var result = Diagnose(MixedCausesFixture(), maxBlockSize: null);
+        var country = result.Control.ByColumn["country"];
+        Assert.True(country.SampleSize > 0);
+        Assert.True(country.IntervalLow <= country.Rate && country.Rate <= country.IntervalHigh);
+    }
+
+    [Fact]
+    public void LowCardinalityColumnsShowNoLiftOverTheControl()
+    {
+        // Not a correctness assertion about the engine -- it pins that lift is COMPUTED and
+        // reported, so a reader cannot mistake a high co-occurrence rate for signal.
+        var result = Diagnose(MixedCausesFixture(), maxBlockSize: null);
+        Assert.True(result.Unreachable.ByColumn["country"].Lift.HasValue);
+    }
+
+    [Fact]
+    public void ControlExcludesAccidentalTruePairsFromAggregatesAndCountsTheExclusion()
+    {
+        // stride = floor(sqrt(4)) = 2. The only stride-2 pair (x0,x2) IS a ground-truthed true
+        // pair that also happens to share postal_code "11111". If the implementation silently
+        // dropped it instead of counting it, or forgot to exclude its postal_code from the
+        // aggregate, this test would not catch a count of 0 -- it specifically checks BOTH the
+        // counter AND that the excluded pair's values never reached ByColumn.
+        var result = Diagnose(AccidentalControlCollisionFixture(), maxBlockSize: null);
+
+        Assert.Equal(1, result.Control.TruePairsAccidentallyIncluded);
+        Assert.Equal(1, result.Control.SampledPairCount);
+
+        var postalCode = result.Control.ByColumn["postal_code"];
+        Assert.Equal(1, postalCode.SampleSize);
+        Assert.Equal(0, postalCode.SharedCount);
+    }
+
+    [Fact]
+    public void LiftIsNullWhenControlRateIsZero()
+    {
+        // special_code co-occurs on the one unreachable true pair but on neither control pair
+        // the stride walk visits, so the control's own rate for that column is exactly 0.
+        // Division by the control rate would be a divide-by-zero; Lift must be null instead.
+        var result = Diagnose(LiftIsNullFixture(), maxBlockSize: null);
+
+        var controlSpecialCode = result.Control.ByColumn["special_code"];
+        Assert.Equal(0, controlSpecialCode.SharedCount);
+        Assert.True(controlSpecialCode.SampleSize > 0);
+        Assert.Equal(0.0, controlSpecialCode.Rate);
+
+        var unreachableSpecialCode = result.Unreachable.ByColumn["special_code"];
+        Assert.True(unreachableSpecialCode.SampleSize > 0);
+        Assert.False(unreachableSpecialCode.Lift.HasValue);
+    }
+
+    [Fact]
+    public void WilsonIntervalStaysInRangeAtRateZero()
+    {
+        var (low, high) = ReachabilityDiagnosticService.WilsonInterval(successes: 0, sampleSize: 20);
+        Assert.True(low >= 0.0);
+        Assert.True(high <= 1.0);
+        Assert.Equal(0.0, low, precision: 10);
+    }
+
+    [Fact]
+    public void WilsonIntervalStaysInRangeAtRateOne()
+    {
+        var (low, high) = ReachabilityDiagnosticService.WilsonInterval(successes: 20, sampleSize: 20);
+        Assert.True(low >= 0.0);
+        Assert.True(high <= 1.0);
+        Assert.Equal(1.0, high, precision: 10);
+    }
+
+    [Fact]
+    public void WilsonIntervalHandlesZeroSampleSizeWithoutDividingByZero()
+    {
+        var (low, high) = ReachabilityDiagnosticService.WilsonInterval(successes: 0, sampleSize: 0);
+        Assert.Equal(0.0, low);
+        Assert.Equal(1.0, high);
     }
 
     // ------------------------------------------------------------------------------------

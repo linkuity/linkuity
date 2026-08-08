@@ -55,6 +55,12 @@ public sealed class ReachabilityDiagnosticService
             .ToList();
         var unusableBlockingFields = ComputeUnusableBlockingFields(profile, _registry);
 
+        // Every column present anywhere in the corpus, declared or not. Field co-occurrence is
+        // a taxonomy-agnostic measurement -- postal code, address line, city, country,
+        // jurisdiction, legal form are all just columns here -- so it runs generically over
+        // whatever columns the corpus actually carries rather than a hardcoded list.
+        var allColumns = AllColumnsOf(records);
+
         // Ground-truth groups, restricted to records actually present in this record set.
         var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (sourceId, canonical) in groundTruth)
@@ -71,6 +77,8 @@ public sealed class ReachabilityDiagnosticService
         var b2ByColumn = new Dictionary<string, long>(StringComparer.Ordinal);
         var aDetailCounts = new Dictionary<(string Strategy, int BlockSize), long>();
         var owningStrategyCache = new Dictionary<int, string>();
+
+        var unreachableAcc = new Dictionary<string, (long Shared, long Sample)>(StringComparer.Ordinal);
 
         var aSampler = new CappedPairSampler(CauseSampleCap);
         var b1Sampler = new CappedPairSampler(CauseSampleCap);
@@ -108,6 +116,11 @@ public sealed class ReachabilityDiagnosticService
                     }
                     else
                     {
+                        // Field co-occurrence is orthogonal to the A/B1/B2/B3 classification below
+                        // and runs for EVERY unreachable pair regardless of cause -- it answers "do
+                        // they share anything else", not "why can't the engine compare them".
+                        AccumulateColumnStats(left, right, allColumns, unreachableAcc);
+
                         var sharedIgnoringSuppression = BlockingKeyIndex.SharedKeysIgnoringSuppression(leftKeys, rightKeys);
                         if (sharedIgnoringSuppression.Count > 0)
                         {
@@ -198,6 +211,32 @@ public sealed class ReachabilityDiagnosticService
 
         var blocks = BuildBlockHistogram(index, records, profile, _registry, owningStrategyCache);
 
+        // The non-pair control: without it, a high co-occurrence rate on a low-cardinality
+        // column (country, jurisdiction) is unfalsifiable evidence -- see the class doc. Compute
+        // it BEFORE the unreachable-side figures so each column's Lift can reference the
+        // control's rate for that same column.
+        var (controlSampledPairCount, truePairsAccidentallyIncluded, controlAcc) =
+            BuildControlAccumulation(records, groundTruth, allColumns, ct);
+
+        var controlByColumn = allColumns.ToDictionary(
+            column => column,
+            column =>
+            {
+                var (shared, sampleSize) = controlAcc.TryGetValue(column, out var v) ? v : (0L, 0L);
+                return BuildCoOccurrence(column, shared, sampleSize, controlRateForLift: null);
+            },
+            StringComparer.Ordinal);
+
+        var unreachableByColumn = allColumns.ToDictionary(
+            column => column,
+            column =>
+            {
+                var (shared, sampleSize) = unreachableAcc.TryGetValue(column, out var v) ? v : (0L, 0L);
+                var controlRate = controlByColumn[column].Rate;
+                return BuildCoOccurrence(column, shared, sampleSize, controlRateForLift: controlRate);
+            },
+            StringComparer.Ordinal);
+
         return new ReachabilityDiagnosticResult(
             truePairs,
             reachablePairs,
@@ -208,8 +247,8 @@ public sealed class ReachabilityDiagnosticService
             causeB3,
             normalization,
             causeADetail,
-            Unreachable: new FieldCoOccurrenceSet(0, new Dictionary<string, FieldCoOccurrence>()),
-            Control: new ControlSet(0, 0, new Dictionary<string, FieldCoOccurrence>()),
+            Unreachable: new FieldCoOccurrenceSet(unreachablePairs, unreachableByColumn),
+            Control: new ControlSet(controlSampledPairCount, truePairsAccidentallyIncluded, controlByColumn),
             Blocks: blocks);
     }
 
@@ -291,6 +330,116 @@ public sealed class ReachabilityDiagnosticService
     private static bool ValuesEqual(string? left, string? right)
         => !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right)
            && string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Every column present anywhere in the corpus -- declared or undeclared alike.
+    /// Field co-occurrence is a taxonomy-agnostic measurement, not a classification: postal
+    /// code, address line, city, country, jurisdiction, legal form are all just columns here, so
+    /// this runs generically over whatever columns the corpus actually carries rather than a
+    /// hardcoded list.</summary>
+    private static List<string> AllColumnsOf(IReadOnlyList<EntityRecord> records)
+        => records.SelectMany(r => r.Fields.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(c => c, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>Accumulates, per column, how many pairs had a non-empty value on BOTH sides
+    /// (Sample) and how many of those were equal (Shared). Never retains a per-pair record --
+    /// only these two running counters per column, bounded by column count, not corpus size.
+    /// </summary>
+    private static void AccumulateColumnStats(
+        EntityRecord left, EntityRecord right, IReadOnlyList<string> columns,
+        Dictionary<string, (long Shared, long Sample)> acc)
+    {
+        foreach (var column in columns)
+        {
+            var leftValue = left.Fields.GetValueOrDefault(column);
+            var rightValue = right.Fields.GetValueOrDefault(column);
+            if (string.IsNullOrWhiteSpace(leftValue) || string.IsNullOrWhiteSpace(rightValue)) continue;
+
+            var (shared, sample) = acc.TryGetValue(column, out var v) ? v : (0L, 0L);
+            sample++;
+            if (string.Equals(leftValue.Trim(), rightValue.Trim(), StringComparison.OrdinalIgnoreCase)) shared++;
+            acc[column] = (shared, sample);
+        }
+    }
+
+    /// <summary>The non-pair control. Walks record indices at a fixed stride derived from the
+    /// corpus size -- floor(sqrt(recordCount)), floor 1 -- pairing each record with the one
+    /// `stride` ahead, rather than adjacent indices: ground-truth pairs for the same entity are
+    /// typically adjacent in source order (this is true of every fixture in this file and, per
+    /// the corpus build, of the GLEIF source too), so a stride of only 1 would make the control
+    /// sample mostly true pairs instead of non-pairs. sqrt(n) clears that adjacency while still
+    /// yielding an O(n) sample at full corpus scale (n - stride pairs, no dedup structure, no
+    /// per-pair retention -- only the running column counters survive the walk).
+    ///
+    /// Any stride pair that DOES turn out to share a ground-truth canonical id is a true pair,
+    /// not a control sample. It is excluded from the aggregate and the exclusion is counted into
+    /// TruePairsAccidentallyIncluded rather than silently dropped -- a silent skip here would
+    /// bias every base rate downward, making non-name fields look MORE discriminative than they
+    /// are, which is the opposite of what a control is for.</summary>
+    private static (long SampledPairCount, long TruePairsAccidentallyIncluded, Dictionary<string, (long Shared, long Sample)> Accumulator)
+        BuildControlAccumulation(
+            IReadOnlyList<EntityRecord> records,
+            IReadOnlyDictionary<string, string> groundTruth,
+            IReadOnlyList<string> columns,
+            CancellationToken ct)
+    {
+        var stride = Math.Max(1, (int)Math.Sqrt(records.Count));
+        var acc = new Dictionary<string, (long Shared, long Sample)>(StringComparer.Ordinal);
+        long sampled = 0, accidentallyIncluded = 0;
+
+        for (var i = 0; i + stride < records.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var left = records[i];
+            var right = records[i + stride];
+
+            var isTruePair =
+                groundTruth.TryGetValue(left.SourceRecordId, out var leftCanonical) &&
+                groundTruth.TryGetValue(right.SourceRecordId, out var rightCanonical) &&
+                string.Equals(leftCanonical, rightCanonical, StringComparison.Ordinal);
+
+            if (isTruePair) { accidentallyIncluded++; continue; }
+
+            sampled++;
+            AccumulateColumnStats(left, right, columns, acc);
+        }
+
+        return (sampled, accidentallyIncluded, acc);
+    }
+
+    /// <summary>95% Wilson score interval. Unlike the normal approximation, it does not extend
+    /// below 0 or above 1 when the observed rate sits at either extreme -- exactly the regime
+    /// several of these columns occupy (country near 1, a rare column near 0). Internal (not
+    /// private) so it is directly testable at the boundary rates, the case the normal
+    /// approximation gets wrong and the reason Wilson was chosen over it.</summary>
+    internal static (double Low, double High) WilsonInterval(long successes, long sampleSize)
+    {
+        if (sampleSize <= 0) return (0.0, 1.0);
+
+        const double z = 1.959963984540054; // two-sided 95% normal quantile
+        var n = (double)sampleSize;
+        var p = successes / n;
+        var z2 = z * z;
+        var denom = 1.0 + z2 / n;
+        var center = (p + z2 / (2 * n)) / denom;
+        var margin = z * Math.Sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denom;
+
+        return (Math.Clamp(center - margin, 0.0, 1.0), Math.Clamp(center + margin, 0.0, 1.0));
+    }
+
+    /// <summary>Builds one column's co-occurrence figure. Lift is the ratio of this rate to the
+    /// control's rate for the same column, and is null -- not a divide-by-zero -- both when
+    /// building the control's own entries (no lift applies to itself) and when the control
+    /// observed zero base rate for the column, which is a real case for a rare column.</summary>
+    private static FieldCoOccurrence BuildCoOccurrence(
+        string column, long shared, long sampleSize, double? controlRateForLift)
+    {
+        var rate = sampleSize > 0 ? (double)shared / sampleSize : 0.0;
+        var (low, high) = WilsonInterval(shared, sampleSize);
+        double? lift = controlRateForLift is > 0 ? rate / controlRateForLift.Value : null;
+        return new FieldCoOccurrence(column, shared, sampleSize, rate, low, high, lift);
+    }
 
     /// <summary>True when the pair's organization-name field(s) share a RAW token (kept-suffix
     /// canonical form) that the fully-stripped canonical form no longer shares -- i.e. suffix
