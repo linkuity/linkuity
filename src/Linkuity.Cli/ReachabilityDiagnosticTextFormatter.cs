@@ -27,9 +27,11 @@ public static class ReachabilityDiagnosticTextFormatter
                 sb.AppendLine(CultureInfo.InvariantCulture, $"  {d.Strategy}: block size {d.BlockSize} -> {d.PairCount:N0} pair(s)");
         }
 
+        // No "legal-suffix-only" sub-count: it was definitionally always 100% (see
+        // NormalizationTally). The "loss side only" qualifier is on the line because the count is
+        // routinely misread as recoverable recall, which it is not.
         sb.AppendLine(CultureInfo.InvariantCulture,
-            $"Normalization implicated: {result.NormalizationImplicated.PairCount:N0} pair(s), " +
-            $"{result.NormalizationImplicated.LegalSuffixOnlyPairCount:N0} legal-suffix-only");
+            $"Normalization implicated: {result.NormalizationImplicated.PairCount:N0} pair(s) (loss side only; does not check whether the un-stripped key would be active)");
 
         sb.AppendLine(CultureInfo.InvariantCulture,
             $"Field co-occurrence, unreachable pairs (sampled {result.Unreachable.SampledPairCount:N0}):");

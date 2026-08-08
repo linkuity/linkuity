@@ -334,7 +334,57 @@ public class ReachabilityDiagnosticTests
         // Raw names share the token "LIMITED"; suffix stripping removes it; no active shared key.
         var result = Diagnose(SuffixOnlySharedTokenFixture(), maxBlockSize: null);
         Assert.True(result.NormalizationImplicated.PairCount >= 1);
-        Assert.True(result.NormalizationImplicated.LegalSuffixOnlyPairCount >= 1);
+    }
+
+    [Fact]
+    public void EveryTokenLostToSuffixStrippingIsALegalSuffixByConstruction()
+    {
+        // WHY THIS TEST EXISTS: NormalizationTally used to carry a LegalSuffixOnlyPairCount, and
+        // the full-corpus run reported it at 100.00% (117,053/117,053) as if that were a finding.
+        // It is a definition. OrganizationNameCanonicalizer.Core runs the SAME pipeline in both
+        // modes and differs only by StripTrailingSuffixes, which pops only members of
+        // LegalSuffixes -- so the difference between CanonicalizeKeepingSuffixes and Canonicalize
+        // can contain nothing else. This test pins that invariant on the canonicalizer directly,
+        // so if someone re-adds the sub-count they must first make this test fail.
+        string[] names =
+        [
+            "ALPHA LIMITED", "BETA LIMITED", "ACME TRADING LIMITED", "ACME TRADING LTD",
+            "THE BOREAL HOLDINGS SA", "ZENITH PLC", "GLOBEX SAB DE CV", "WAL-MART STORES INC",
+            "AT & T CORP", "BANCO DE CHILE", "PROJECT 2000 GMBH", "SOLOWORD",
+        ];
+        var canonicalizer = new Linkuity.Matching.Canonicalization.OrganizationNameCanonicalizer();
+
+        foreach (var name in names)
+        {
+            var kept = canonicalizer.CanonicalizeKeepingSuffixes(name).ToHashSet(StringComparer.Ordinal);
+            var stripped = canonicalizer.Canonicalize(name).ToHashSet(StringComparer.Ordinal);
+            var lost = kept.Except(stripped, StringComparer.Ordinal).ToList();
+
+            Assert.All(lost, token => Assert.True(
+                Linkuity.Matching.Canonicalization.OrganizationNameCanonicalizer.IsLegalSuffix(token),
+                $"'{name}' lost non-suffix token '{token}' -- the two canonicalization modes now " +
+                "differ by more than StripTrailingSuffixes, so a legal-suffix-only sub-count " +
+                "would no longer be vacuous"));
+        }
+    }
+
+    [Fact]
+    public void DuplicateSourceRecordIdsFailTheRunRatherThanSilentlyDroppingARecord()
+    {
+        // bySource used to be `bySource[id] = i` -- last-wins, which drops the earlier record from
+        // the pair walk with no counter moving. Every other skip in this service is counted or
+        // asserted; this one was not.
+        var records = new List<EntityRecord>
+        {
+            Org("dup", "ALPHA LIMITED"),
+            Org("dup", "BETA LIMITED"),
+        };
+        var groundTruth = new Dictionary<string, string> { ["dup"] = "alpha-beta" };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new ReachabilityDiagnosticService(MatchingDefaults.CreateRegistry())
+                .Diagnose(records, NameOnlyProfile(), groundTruth, maxBlockSize: null));
+        Assert.Contains("duplicate SourceRecordId 'dup'", ex.Message);
     }
 
     [Fact]

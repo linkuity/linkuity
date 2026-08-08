@@ -15,9 +15,13 @@ public static class BlockingAuditTextFormatter
         {
             sb.AppendLine(CultureInfo.InvariantCulture,
                 $"Recall ceiling: {r.Recall:P1} ({r.ReachablePairs}/{r.TrueMatchPairs} true-match pairs reachable)");
-            if (r.MissedPairs.Count > 0)
+            if (r.MissedPairCount > 0)
             {
-                sb.AppendLine($"Missed pairs (no shared blocking key): {r.MissedPairs.Count}");
+                // MissedPairCount, NOT MissedPairs.Count: the list is a sample capped at
+                // BlockingAuditService.MissedPairSampleCap (500). Printing the list's length as
+                // "missed pairs" reported 500 on a corpus with 12,314 of them.
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"Missed pairs (no shared blocking key): {r.MissedPairCount}{SampleNote(r.MissedPairs.Count, r.MissedPairCount)}");
                 foreach (var m in r.MissedPairs)
                     sb.AppendLine(CultureInfo.InvariantCulture,
                         $"  [{m.CanonicalKey}] {m.LeftSourceRecordId} vs {m.RightSourceRecordId} | " +
@@ -59,9 +63,13 @@ public static class BlockingAuditTextFormatter
             }
             if (sup.EffectiveReachability is { } er && result.Reachability is { } raw)
             {
+                // The COUNT comes from the exact totals, not from differencing two 500-item
+                // samples (which would report at most 500 and, once both are capped, an
+                // essentially arbitrary number). The LIST is still a sample and is labelled so.
+                var lostCount = LostToSuppressionCount(raw, er);
                 var lost = LostToSuppression(raw, er);
                 sb.AppendLine(CultureInfo.InvariantCulture,
-                    $"Effective recall ceiling: {er.Recall:P1} ({er.ReachablePairs}/{er.TrueMatchPairs}) - pairs lost to suppression: {lost.Count}");
+                    $"Effective recall ceiling: {er.Recall:P1} ({er.ReachablePairs}/{er.TrueMatchPairs}) - pairs lost to suppression: {lostCount}{SampleNote(lost.Count, lostCount)}");
                 foreach (var m in lost)
                     sb.AppendLine(CultureInfo.InvariantCulture,
                         $"  [{m.CanonicalKey}] {m.LeftSourceRecordId} vs {m.RightSourceRecordId} | " +
@@ -72,7 +80,27 @@ public static class BlockingAuditTextFormatter
         return sb.ToString();
     }
 
-    /// <summary>Pairs missed under suppression that the raw key sets reached: suppression's recall cost.</summary>
+    /// <summary>" (showing a deterministic sample of N)" when the rendered list is shorter than the
+    /// population it is drawn from, empty otherwise. Without it a reader sees 500 rows under a
+    /// header saying 12,314 and cannot tell whether the file is truncated or the count is wrong.</summary>
+    private static string SampleNote(int shown, int total)
+        => shown < total ? $" (showing a deterministic sample of {shown})" : string.Empty;
+
+    /// <summary>
+    /// EXACT number of true pairs suppression cost: the difference of the two exact totals, not of
+    /// the two capped samples. Well-defined because suppression only ever REMOVES keys, so a pair
+    /// that shares no raw key shares no active key either -- raw-missed is a subset of
+    /// effective-missed and the difference is never negative.
+    /// </summary>
+    public static int LostToSuppressionCount(BlockingReachabilityReport raw, BlockingReachabilityReport effective)
+        => effective.MissedPairCount - raw.MissedPairCount;
+
+    /// <summary>
+    /// A SAMPLE of the pairs missed under suppression that the raw key sets reached. Both inputs
+    /// carry capped samples (<see cref="BlockingAuditService.MissedPairSampleCap"/>), so the
+    /// returned set is a valid subset of suppression's recall cost but its COUNT is not that cost
+    /// -- use <see cref="LostToSuppressionCount"/> for the figure.
+    /// </summary>
     public static IReadOnlyList<MissedPair> LostToSuppression(BlockingReachabilityReport raw, BlockingReachabilityReport effective)
     {
         var rawMissed = raw.MissedPairs

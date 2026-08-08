@@ -23,9 +23,26 @@ public sealed record CauseTally(
     IReadOnlyDictionary<string, long> ByColumn,
     IReadOnlyList<SampledPair> Sample);
 
+/// <summary>Pairs whose organization-name fields shared a raw token that canonicalization removed
+/// before blocking saw it.
+///
+/// There used to be a <c>LegalSuffixOnlyPairCount</c> here. It was DELETED as vacuous, and this
+/// note exists so it is not re-added. Its definition was "every token lost between
+/// CanonicalizeKeepingSuffixes and Canonicalize is a recognised legal suffix" -- but those two
+/// modes of <c>OrganizationNameCanonicalizer.Core</c> differ ONLY by
+/// <c>StripTrailingSuffixes</c>, which removes only members of <c>LegalSuffixes</c>. Every lost
+/// token is therefore a legal suffix BY CONSTRUCTION: the sub-count could never differ from
+/// <see cref="PairCount"/>, and it never did (4,219/4,219 at 200k, 20,089/20,089 at 800k,
+/// 117,053/117,053 and 72,267/72,267 at full scale). Reporting a definition as a 100% measurement
+/// is worse than reporting nothing. <c>ReachabilityDiagnosticTests
+/// .EveryTokenLostToSuffixStrippingIsALegalSuffixByConstruction</c> pins the invariant directly.
+///
+/// <see cref="PairCount"/> is a real measurement and stays. It is NOT a recoverable-recall figure:
+/// nothing here checks whether the un-stripped token would produce an ACTIVE key, and on this
+/// corpus it mostly would not (keeping LIMITED yields <c>token:limited</c>, whose block is
+/// enormous and instantly suppressed).</summary>
 public sealed record NormalizationTally(
     long PairCount,
-    long LegalSuffixOnlyPairCount,
     IReadOnlyList<SampledPair> Sample);
 
 /// <summary>Cause A detail: which strategy owned the suppressed key, and how big the block was.

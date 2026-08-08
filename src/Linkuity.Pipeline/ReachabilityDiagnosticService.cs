@@ -43,8 +43,17 @@ public sealed class ReachabilityDiagnosticService
         var index = BlockingKeyIndex.Build(records, profile, _registry, ct);
         var suppressed = BlockingKeyIndex.SuppressedKeys(index, maxBlockSize);
 
+        // TryAdd, not `bySource[id] = i`: last-wins would drop the earlier record from the true-pair
+        // walk entirely, with no counter moving and no assertion tripping -- the exact silent skip
+        // AssertReconciles exists to make impossible everywhere else in this service. A duplicate
+        // SourceRecordId means the ground-truth join is ambiguous, so it fails the run loudly.
         var bySource = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var i = 0; i < records.Count; i++) bySource[records[i].SourceRecordId] = i;
+        for (var i = 0; i < records.Count; i++)
+            if (!bySource.TryAdd(records[i].SourceRecordId, i))
+                throw new InvalidOperationException(
+                    $"duplicate SourceRecordId '{records[i].SourceRecordId}' at record index {i} " +
+                    $"(first seen at {bySource[records[i].SourceRecordId]}): the reachability diagnostic " +
+                    "cannot attribute a ground-truth pair to two different records with the same id");
 
         var declaredFieldNames = profile.Fields.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
         var undeclaredColumns = records
@@ -71,7 +80,7 @@ public sealed class ReachabilityDiagnosticService
 
         long truePairs = 0, reachablePairs = 0;
         long aCount = 0, b1Count = 0, b2Count = 0, b3Count = 0;
-        long normImplicatedCount = 0, legalSuffixOnlyCount = 0;
+        long normImplicatedCount = 0;
 
         var b1ByColumn = new Dictionary<string, long>(StringComparer.Ordinal);
         var b2ByColumn = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -183,10 +192,9 @@ public sealed class ReachabilityDiagnosticService
                         // legal suffix) that canonicalization removed before any blocking
                         // strategy saw it. It can apply to a B pair (nothing else shared either)
                         // or, in principle, alongside cause A.
-                        if (IsNormalizationImplicated(left, right, profile, out var legalSuffixOnly))
+                        if (IsNormalizationImplicated(left, right, profile))
                         {
                             normImplicatedCount++;
-                            if (legalSuffixOnly) legalSuffixOnlyCount++;
                             normSampler.Offer(members[i], members[j], canonical);
                         }
                     }
@@ -207,7 +215,7 @@ public sealed class ReachabilityDiagnosticService
         var causeB1 = new CauseTally(b1Count, SortedColumns(b1ByColumn), b1Sampler.ToSortedList());
         var causeB2 = new CauseTally(b2Count, SortedColumns(b2ByColumn), b2Sampler.ToSortedList());
         var causeB3 = new CauseTally(b3Count, new Dictionary<string, long>(), b3Sampler.ToSortedList());
-        var normalization = new NormalizationTally(normImplicatedCount, legalSuffixOnlyCount, normSampler.ToSortedList());
+        var normalization = new NormalizationTally(normImplicatedCount, normSampler.ToSortedList());
 
         var blocks = BuildBlockHistogram(index, records, profile, _registry, owningStrategyCache);
 
@@ -483,13 +491,20 @@ public sealed class ReachabilityDiagnosticService
 
     /// <summary>True when the pair's organization-name field(s) share a RAW token (kept-suffix
     /// canonical form) that the fully-stripped canonical form no longer shares -- i.e. suffix
-    /// stripping is why the tokens diverged. legalSuffixOnly is set when every such lost token is
-    /// a recognised legal suffix (ORGANIZATIONNAMECANONICALIZER.IsLegalSuffix), isolating "the
-    /// suffix list cost a match" from "the suffix list is fine, something else differed".</summary>
+    /// stripping is why the tokens diverged.
+    ///
+    /// This USED TO also emit a `legalSuffixOnly` flag ("every lost token is a recognised legal
+    /// suffix"). That flag was a tautology and has been removed: <c>Canonicalize</c> and
+    /// <c>CanonicalizeKeepingSuffixes</c> are the same <c>Core</c> pipeline differing only by
+    /// <c>StripTrailingSuffixes</c>, which pops only members of <c>LegalSuffixes</c>, so a token
+    /// present in both raw forms and absent from either canonical form is necessarily a legal
+    /// suffix. See <see cref="NormalizationTally"/> for the full note and the pinning test.
+    ///
+    /// What this DOES measure is the loss side only: it never asks whether the un-stripped token
+    /// would have produced an ACTIVE key, so the count is not "recoverable recall".</summary>
     private static bool IsNormalizationImplicated(
-        EntityRecord left, EntityRecord right, MatchingProfile profile, out bool legalSuffixOnly)
+        EntityRecord left, EntityRecord right, MatchingProfile profile)
     {
-        legalSuffixOnly = false;
         var implicatedAny = false;
 
         foreach (var field in profile.Fields)
@@ -512,8 +527,6 @@ public sealed class ReachabilityDiagnosticService
             if (lostToStripping.Count == 0) continue;
 
             implicatedAny = true;
-            if (lostToStripping.All(OrganizationNameCanonicalizer.IsLegalSuffix))
-                legalSuffixOnly = true;
         }
 
         return implicatedAny;
