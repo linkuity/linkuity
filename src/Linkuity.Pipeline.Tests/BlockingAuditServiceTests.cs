@@ -342,4 +342,46 @@ public class BlockingAuditServiceTests
 
         Assert.Equal(result.Structural.TotalBlocks, result.Structural.SizeHistogram.Sum(b => b.BlockCount));
     }
+
+    // Pins MissedPairSampler.Rank's hash function to known values, process-independent by
+    // construction: unlike MissedPairSampleIsDeterministicAcrossRuns (which calls Audit twice in
+    // ONE process and therefore cannot fail if Rank were reverted to a runtime-seeded hash such as
+    // string.GetHashCode()/HashCode.Combine -- a single process uses one fixed hash seed either
+    // way), a hardcoded expected value can only match if the SAME algorithm runs, on any machine,
+    // in any process. Values obtained by printing BlockingAuditService.MissedPairSampler
+    // .StableHash(...) for each input with a temporary test and pasting the results (see
+    // task-2-fix-report.md); regenerate ONLY if the hash function changes deliberately.
+    [Fact]
+    public void StableHashIsPinnedToKnownValues()
+    {
+        Assert.Equal(2166136261u, BlockingAuditService.MissedPairSampler.StableHash(""));
+        Assert.Equal(4020513234u, BlockingAuditService.MissedPairSampler.StableHash("gleif-ACME-0"));
+        Assert.Equal(572659711u, BlockingAuditService.MissedPairSampler.StableHash("ent0-l"));
+        Assert.Equal(941767329u, BlockingAuditService.MissedPairSampler.StableHash("ent0-r"));
+    }
+
+    [Fact]
+    public void EqualRankTiesAreBrokenByRecordIdRegardlessOfInsertionOrder()
+    {
+        // With 384,573 missed pairs and a 32-bit rank, a collision at the cap boundary is
+        // near-certain by the birthday bound. Simulate one directly (both keys given the SAME
+        // rank explicitly) rather than searching for a real collision, so the sampler's ordinal
+        // tie-break -- not arrival order -- is what decides which pair a cap of 1 retains.
+        var pairA = new MissedPair("a-left", "a-right", "canonical", [], []);
+        var pairB = new MissedPair("b-left", "b-right", "canonical", [], []);
+        var keyA = new BlockingAuditService.MissedPairSampler.SampleKey(42u, pairA.LeftSourceRecordId, pairA.RightSourceRecordId);
+        var keyB = new BlockingAuditService.MissedPairSampler.SampleKey(42u, pairB.LeftSourceRecordId, pairB.RightSourceRecordId);
+
+        var offeredAThenB = new BlockingAuditService.MissedPairSampler(cap: 1);
+        if (offeredAThenB.WouldKeep(keyA)) offeredAThenB.Offer(pairA, keyA);
+        if (offeredAThenB.WouldKeep(keyB)) offeredAThenB.Offer(pairB, keyB);
+
+        var offeredBThenA = new BlockingAuditService.MissedPairSampler(cap: 1);
+        if (offeredBThenA.WouldKeep(keyB)) offeredBThenA.Offer(pairB, keyB);
+        if (offeredBThenA.WouldKeep(keyA)) offeredBThenA.Offer(pairA, keyA);
+
+        // "a-left" < "b-left" ordinally, so pairA's key is smaller and must win regardless of order.
+        Assert.Equal("a-left", Assert.Single(offeredAThenB.ToSortedList()).LeftSourceRecordId);
+        Assert.Equal("a-left", Assert.Single(offeredBThenA.ToSortedList()).LeftSourceRecordId);
+    }
 }

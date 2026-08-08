@@ -195,10 +195,13 @@ public sealed class BlockingAuditService
                         missedCount++;
                         // Construct the MissedPair (it carries BOTH records' full key lists) only
                         // when the sampler will actually retain it -- building one per unreachable
-                        // pair and discarding it would defeat the point of capping the sample.
-                        var rank = MissedPairSampler.Rank(members[i], members[j]);
-                        if (sampler.WouldKeep(rank))
-                            sampler.Offer(new MissedPair(members[i], members[j], canonical, left.AllKeys, right.AllKeys));
+                        // pair and discarding it would defeat the point of capping the sample. The
+                        // key (rank + ids) is computed once here and threaded through both calls,
+                        // rather than recomputed inside Offer.
+                        var key = new MissedPairSampler.SampleKey(
+                            MissedPairSampler.Rank(members[i], members[j]), members[i], members[j]);
+                        if (sampler.WouldKeep(key))
+                            sampler.Offer(new MissedPair(members[i], members[j], canonical, left.AllKeys, right.AllKeys), key);
                         continue;
                     }
                     reachablePairs++;
@@ -264,16 +267,46 @@ public sealed class BlockingAuditService
     }
 
     /// <summary>
-    /// Deterministic bounded sample of missed pairs: retains the MissedPairSampleCap pairs with
-    /// the smallest stable hash of their record-id pair. Ranked by hash rather than "the first N
-    /// encountered", because encounter order follows Dictionary iteration and is not stable across
-    /// runtimes -- the same corpus would yield a different sample on a different machine, which is
-    /// not a sample, it is noise. Retains exactly min(cap, total) pairs and holds at most cap+1
-    /// entries at any moment.
+    /// Deterministic bounded sample of missed pairs: retains the (at most) MissedPairSampleCap
+    /// pairs with the smallest <see cref="SampleKey"/>. Ranked by a TOTAL order over (hash, left
+    /// id, right id) rather than "the first N encountered", for two independent reasons:
+    /// <list type="bullet">
+    /// <item>encounter order follows Dictionary iteration, which is not stable across runtimes --
+    /// the same corpus would yield a different sample on a different machine, which is not a
+    /// sample, it is noise;</item>
+    /// <item>rank ALONE is only a 32-bit hash: with hundreds of thousands of missed pairs a
+    /// collision at the cap boundary is near-certain by the birthday bound, and without an ordinal
+    /// tie-break, which of two equally-ranked pairs survives would once again depend on arrival
+    /// order into <see cref="Offer"/> -- the exact instability removed from ranking, reintroduced
+    /// one level up.</item>
+    /// </list>
+    /// Ordinal comparison of the ids makes the ordering total (record-id pairs are unique within
+    /// one run, so no two SampleKeys can tie), so the retained set is fully determined by content,
+    /// independent of both the process's hash seed and Dictionary iteration order. Internal (not
+    /// private) so BlockingAuditServiceTests can pin the hash function directly and exercise
+    /// tie-breaking without needing 500+ pairs.
     /// </summary>
-    private sealed class MissedPairSampler
+    internal sealed class MissedPairSampler(int cap = MissedPairSampleCap)
     {
-        private readonly PriorityQueue<MissedPair, uint> _worstFirst = new();   // max-heap by negated key
+        private readonly int _cap = cap;
+        private readonly PriorityQueue<MissedPair, SampleKey> _worstFirst = new(WorstFirstComparer);
+
+        private static readonly IComparer<SampleKey> WorstFirstComparer =
+            Comparer<SampleKey>.Create((a, b) => b.CompareTo(a));   // reversed: largest key dequeues first
+
+        /// <summary>Total order a pair is sampled by: rank first, then an ordinal tie-break over
+        /// the record ids. Record-id pairs are unique within one run, so this ordering never ties
+        /// -- which pair is retained can never depend on the order pairs were offered in.</summary>
+        internal readonly record struct SampleKey(uint Rank, string Left, string Right) : IComparable<SampleKey>
+        {
+            public int CompareTo(SampleKey other)
+            {
+                var cmp = Rank.CompareTo(other.Rank);
+                if (cmp != 0) return cmp;
+                cmp = StringComparer.Ordinal.Compare(Left, other.Left);
+                return cmp != 0 ? cmp : StringComparer.Ordinal.Compare(Right, other.Right);
+            }
+        }
 
         // NOT string.GetHashCode()/HashCode.Combine: .NET randomizes the default string hash with
         // a per-process seed (DoS mitigation), so it is stable within one process run but differs
@@ -284,7 +317,7 @@ public sealed class BlockingAuditService
         internal static uint Rank(string left, string right)
             => unchecked(StableHash(left) * 31 + StableHash(right));
 
-        private static uint StableHash(string value)
+        internal static uint StableHash(string value)
         {
             var hash = 2166136261u;
             foreach (var c in value)
@@ -296,21 +329,21 @@ public sealed class BlockingAuditService
             return hash;
         }
 
-        /// <summary>Whether offering a pair ranked this way would actually be retained, checked
+        /// <summary>Whether offering a pair with this key would actually be retained, checked
         /// BEFORE the (expensive) MissedPair is constructed.</summary>
-        internal bool WouldKeep(uint rank)
+        internal bool WouldKeep(SampleKey key)
         {
-            if (_worstFirst.Count < MissedPairSampleCap) return true;
-            _worstFirst.TryPeek(out _, out var worstPriority);
-            var currentWorstRank = uint.MaxValue - worstPriority;
-            return rank < currentWorstRank;
+            if (_worstFirst.Count < _cap) return true;
+            _worstFirst.TryPeek(out _, out var worst);
+            return key.CompareTo(worst) < 0;
         }
 
-        internal void Offer(MissedPair pair)
+        /// <summary>Takes the SampleKey the caller already computed for WouldKeep, rather than
+        /// recomputing the rank from the pair's ids here.</summary>
+        internal void Offer(MissedPair pair, SampleKey key)
         {
-            var rank = Rank(pair.LeftSourceRecordId, pair.RightSourceRecordId);
-            _worstFirst.Enqueue(pair, uint.MaxValue - rank);   // largest rank dequeues first
-            if (_worstFirst.Count > MissedPairSampleCap) _worstFirst.Dequeue();
+            _worstFirst.Enqueue(pair, key);
+            if (_worstFirst.Count > _cap) _worstFirst.Dequeue();
         }
 
         internal IReadOnlyList<MissedPair> ToSortedList()
