@@ -215,7 +215,7 @@ public sealed class ReachabilityDiagnosticService
         // column (country, jurisdiction) is unfalsifiable evidence -- see the class doc. Compute
         // it BEFORE the unreachable-side figures so each column's Lift can reference the
         // control's rate for that same column.
-        var (controlSampledPairCount, truePairsAccidentallyIncluded, controlAcc) =
+        var (controlSampledPairCount, truePairsAccidentallyIncluded, selfPairsSkipped, controlAcc) =
             BuildControlAccumulation(records, groundTruth, allColumns, ct);
 
         var controlByColumn = allColumns.ToDictionary(
@@ -248,7 +248,7 @@ public sealed class ReachabilityDiagnosticService
             normalization,
             causeADetail,
             Unreachable: new FieldCoOccurrenceSet(unreachablePairs, unreachableByColumn),
-            Control: new ControlSet(controlSampledPairCount, truePairsAccidentallyIncluded, controlByColumn),
+            Control: new ControlSet(controlSampledPairCount, truePairsAccidentallyIncluded, selfPairsSkipped, controlByColumn),
             Blocks: blocks);
     }
 
@@ -363,36 +363,76 @@ public sealed class ReachabilityDiagnosticService
         }
     }
 
-    /// <summary>The non-pair control. Walks record indices at a fixed stride derived from the
-    /// corpus size -- floor(sqrt(recordCount)), floor 1 -- pairing each record with the one
-    /// `stride` ahead, rather than adjacent indices: ground-truth pairs for the same entity are
-    /// typically adjacent in source order (this is true of every fixture in this file and, per
-    /// the corpus build, of the GLEIF source too), so a stride of only 1 would make the control
-    /// sample mostly true pairs instead of non-pairs. sqrt(n) clears that adjacency while still
-    /// yielding an O(n) sample at full corpus scale (n - stride pairs, no dedup structure, no
-    /// per-pair retention -- only the running column counters survive the walk).
+    /// <summary>The non-pair control.
     ///
-    /// Any stride pair that DOES turn out to share a ground-truth canonical id is a true pair,
-    /// not a control sample. It is excluded from the aggregate and the exclusion is counted into
-    /// TruePairsAccidentallyIncluded rather than silently dropped -- a silent skip here would
-    /// bias every base rate downward, making non-name fields look MORE discriminative than they
-    /// are, which is the opposite of what a control is for.</summary>
-    private static (long SampledPairCount, long TruePairsAccidentallyIncluded, Dictionary<string, (long Shared, long Sample)> Accumulator)
+    /// An earlier version of this method walked record INDICES at a fixed stride
+    /// (floor(sqrt(recordCount))) and paired each record with the one `stride` ahead. That was
+    /// wrong for this corpus specifically, not just in theory: `records.csv` is sorted by
+    /// (LEI, ordinal), an LEI's first four characters are the issuing LOU's prefix, so the sort
+    /// groups every LOU into one contiguous run -- and LOUs are largely national or regional
+    /// registries, so "same LOU" implies "same country/jurisdiction" for a large share of
+    /// records. Many LOU runs are far longer than a sqrt(n) stride (~1,986 at 3.9M records), so
+    /// most stride-selected pairs landed INSIDE the same LOU run, and the control silently
+    /// inherited the corpus's own sort-order correlation with the very columns (country,
+    /// jurisdiction, and anything else correlated with the issuer, e.g. legal form) it exists to
+    /// give an unbiased base rate for. This is not a new risk to this project: the corpus build
+    /// hit the identical failure mode measuring `Region` -- a head-of-file sample read 76.0%
+    /// populated against 65.9% populated corpus-wide, a 10.1-point bias -- and every sampling
+    /// decision in that work was moved off file position onto blake2b(LEI) hashing as a result.
+    /// A file-position stride for this control reintroduced exactly the method that measurement
+    /// rejected. At n ~ 3.9M the Wilson interval is narrow enough that a biased rate reads as
+    /// PRECISE, which is worse than an obviously wide, honest one.
+    ///
+    /// The fix: derive each record's control partner from a hash of its OWN identity
+    /// (StableHash(SourceRecordId) % recordCount), not its file position. Hashing the id
+    /// destroys any relationship to sort order -- an LEI's issuing-LOU prefix has no bearing on
+    /// where its hash lands mod n -- which is exactly why the corpus build adopted blake2b(LEI)
+    /// for the same reason. Reuses BlockingAuditService.MissedPairSampler.StableHash: an FNV-1a
+    /// hash with no per-process seed (unlike string.GetHashCode()), already `internal`, already
+    /// pinned by a golden-value test, and used elsewhere in this very service (CappedPairSampler)
+    /// -- a second, potentially-divergent hash implementation is exactly the kind of thing this
+    /// codebase has already paid for once.
+    ///
+    /// Sample size stays comparable to the old stride walk: every one of the n records
+    /// contributes at most one partner lookup, so this is still O(n) with no dedup structure and
+    /// no per-pair retention -- only the running column counters and three long counters survive
+    /// the walk. Three outcomes per index, all counted, none silent:
+    ///   - the hashed partner IS the record itself (recordCount is small or unlucky) -- skipped
+    ///     and counted into SelfPairsSkipped, not just `continue`d;
+    ///   - the hashed partner shares a ground-truth canonical id -- a true pair, not a control
+    ///     sample; skipped and counted into TruePairsAccidentallyIncluded (unchanged from before);
+    ///   - otherwise, a legitimate non-pair; its columns are folded into the aggregate.
+    /// SampledPairCount + TruePairsAccidentallyIncluded + SelfPairsSkipped == records.Count always.
+    ///
+    /// On deduplication: the SAME unordered pair can arise from two different indices (record A's
+    /// hash points to record B, and independently record B's hash points to record A). This
+    /// implementation does NOT deduplicate that case -- each index is walked once, independently,
+    /// and its outcome (sampled, excluded, or self-paired) is counted on its own terms. Dedup
+    /// would require an extra O(n) "already emitted" structure to buy a rare, non-biasing
+    /// correction (a reciprocal pair contributes its own true value to the aggregate twice, which
+    /// does not shift the RATE for that pair, only its weight); accepting it is the simpler and
+    /// (per review) equally defensible choice, so it is what this method does.</summary>
+    private static (long SampledPairCount, long TruePairsAccidentallyIncluded, long SelfPairsSkipped, Dictionary<string, (long Shared, long Sample)> Accumulator)
         BuildControlAccumulation(
             IReadOnlyList<EntityRecord> records,
             IReadOnlyDictionary<string, string> groundTruth,
             IReadOnlyList<string> columns,
             CancellationToken ct)
     {
-        var stride = Math.Max(1, (int)Math.Sqrt(records.Count));
         var acc = new Dictionary<string, (long Shared, long Sample)>(StringComparer.Ordinal);
-        long sampled = 0, accidentallyIncluded = 0;
+        long sampled = 0, accidentallyIncluded = 0, selfPairsSkipped = 0;
+        var n = records.Count;
+        if (n == 0) return (0, 0, 0, acc);
 
-        for (var i = 0; i + stride < records.Count; i++)
+        for (var i = 0; i < n; i++)
         {
             ct.ThrowIfCancellationRequested();
             var left = records[i];
-            var right = records[i + stride];
+            var partner = (int)(BlockingAuditService.MissedPairSampler.StableHash(left.SourceRecordId) % (uint)n);
+
+            if (partner == i) { selfPairsSkipped++; continue; }
+
+            var right = records[partner];
 
             var isTruePair =
                 groundTruth.TryGetValue(left.SourceRecordId, out var leftCanonical) &&
@@ -405,7 +445,7 @@ public sealed class ReachabilityDiagnosticService
             AccumulateColumnStats(left, right, columns, acc);
         }
 
-        return (sampled, accidentallyIncluded, acc);
+        return (sampled, accidentallyIncluded, selfPairsSkipped, acc);
     }
 
     /// <summary>95% Wilson score interval. Unlike the normal approximation, it does not extend

@@ -173,64 +173,83 @@ public class ReachabilityDiagnosticTests
     /// without changing their classification -- cause A short-circuits before any column
     /// equality check runs, and B1/B2 only need Count &gt; 0 on their OWN qualifying column, which
     /// is already true regardless of what else matches. v0/v1 must stay unequal, since an equal
-    /// undeclared column there would reclassify the pair from B3 to B2.</summary>
+    /// undeclared column there would reclassify the pair from B3 to B2.
+    ///
+    /// Record ids carry a "-17" suffix (chosen by brute-force search, not significant on its
+    /// own) so that the control's StableHash(id)%n partner selection produces zero self-pairs and
+    /// zero accidental true-pair collisions for this specific 12-record fixture -- i.e. the
+    /// "typical" case the control walk is meant to hit most of the time. The dedicated
+    /// AccidentalControlCollisionFixture below exercises the collision-counting path instead;
+    /// this fixture stays clean so ControlSampleContainsNoTruePairs asserts something real rather
+    /// than being satisfied by an accident of ordering.</summary>
     private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) MixedCausesFixture()
     {
         var records = new List<EntityRecord>
         {
-            Org("r0", "ACME TRADING LIMITED", ("country", "US")),
-            Org("r1", "ACME TRADING LIMITED", ("country", "US")),
-            Org("r2", "ACME TRADING LIMITED", ("country", "US")),
-            Org("r3", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r0-17", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r1-17", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r2-17", "ACME TRADING LIMITED", ("country", "US")),
+            Org("r3-17", "ACME TRADING LIMITED", ("country", "US")),
 
-            Org("g0", "GLOBEX UNIQUE CORP", ("country", "US")),
-            Org("g1", "GLOBEX UNIQUE CORP", ("country", "US")),
+            Org("g0-17", "GLOBEX UNIQUE CORP", ("country", "US")),
+            Org("g1-17", "GLOBEX UNIQUE CORP", ("country", "US")),
 
-            Org("d0", "KAPPA VENTURES", ("address_line", "500 ELM ST"), ("country", "US")),
-            Org("d1", "LYNX ENTERPRISES", ("address_line", "500 ELM ST"), ("country", "US")),
+            Org("d0-17", "KAPPA VENTURES", ("address_line", "500 ELM ST"), ("country", "US")),
+            Org("d1-17", "LYNX ENTERPRISES", ("address_line", "500 ELM ST"), ("country", "US")),
 
-            Org("q0", "ORCHID METRICS", ("postal_code", "30003"), ("country", "US")),
-            Org("q1", "TUNDRA ANALYTICS", ("postal_code", "30003"), ("country", "US")),
+            Org("q0-17", "ORCHID METRICS", ("postal_code", "30003"), ("country", "US")),
+            Org("q1-17", "TUNDRA ANALYTICS", ("postal_code", "30003"), ("country", "US")),
 
-            Org("v0", "VELVET FOUNDRY", ("country", "US")),
-            Org("v1", "CASCADE ORBIT", ("country", "DE")),
+            Org("v0-17", "VELVET FOUNDRY", ("country", "US")),
+            Org("v1-17", "CASCADE ORBIT", ("country", "DE")),
         };
         var groundTruth = new Dictionary<string, string>
         {
-            ["r0"] = "acme", ["r1"] = "acme",
-            ["g0"] = "globex", ["g1"] = "globex",
-            ["d0"] = "kappa-lynx", ["d1"] = "kappa-lynx",
-            ["q0"] = "orchid-tundra", ["q1"] = "orchid-tundra",
-            ["v0"] = "velvet-cascade", ["v1"] = "velvet-cascade",
+            ["r0-17"] = "acme", ["r1-17"] = "acme",
+            ["g0-17"] = "globex", ["g1-17"] = "globex",
+            ["d0-17"] = "kappa-lynx", ["d1-17"] = "kappa-lynx",
+            ["q0-17"] = "orchid-tundra", ["q1-17"] = "orchid-tundra",
+            ["v0-17"] = "velvet-cascade", ["v1-17"] = "velvet-cascade",
         };
         return (records, NameAndAddressProfile(), groundTruth);
     }
 
-    /// <summary>Task 4: exercises the control walk's exclusion path directly. stride =
-    /// floor(sqrt(4)) = 2, so the only two candidate control pairs are (idx0,idx2) and
-    /// (idx1,idx3). idx0/idx2 ("x0"/"x2") are a ground-truthed true pair AND coincidentally
-    /// share postal_code "11111" -- if the exclusion silently dropped rather than counted, or
-    /// leaked their postal_code into the aggregate, this test catches it. idx1/idx3 are not a
-    /// true pair and have distinct postal codes, so they contribute one clean sample with no
-    /// match.</summary>
+    /// <summary>Task 4: exercises the control walk's exclusion path directly, under hash-based
+    /// partner selection. Record ids carry a "-11" suffix (found by brute-force search) so that
+    /// StableHash(id) % 4 produces the permutation idx0-&gt;idx2, idx1-&gt;idx3, idx2-&gt;idx0,
+    /// idx3-&gt;idx1 -- i.e. BOTH directions of the reciprocal pair (x0,x2) resolve to each other.
+    /// x0/x2 are a ground-truthed true pair AND coincidentally share postal_code "11111"; because
+    /// the hash pairing is reciprocal here, the collision is detected from BOTH x0's traversal
+    /// and x2's traversal, so TruePairsAccidentallyIncluded is 2, not 1 -- this fixture also pins
+    /// the documented "accept, don't dedupe" behaviour for reciprocal hits. x1/x3 are likewise a
+    /// reciprocal pair, are NOT a true pair, and have distinct postal codes, so they contribute
+    /// two clean (duplicate, by the same accept-not-dedupe rule) samples with no match. If the
+    /// exclusion silently dropped rather than counted, or leaked x0/x2's postal_code into the
+    /// aggregate, this test catches it.</summary>
     private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) AccidentalControlCollisionFixture()
     {
         var records = new List<EntityRecord>
         {
-            Org("x0", "SAME NAME ONE", ("postal_code", "11111")),
-            Org("x1", "OTHER A", ("postal_code", "22222")),
-            Org("x2", "SAME NAME ONE", ("postal_code", "11111")),
-            Org("x3", "OTHER B", ("postal_code", "33333")),
+            Org("x0-11", "SAME NAME ONE", ("postal_code", "11111")),
+            Org("x1-11", "OTHER A", ("postal_code", "22222")),
+            Org("x2-11", "SAME NAME ONE", ("postal_code", "11111")),
+            Org("x3-11", "OTHER B", ("postal_code", "33333")),
         };
-        var groundTruth = new Dictionary<string, string> { ["x0"] = "g1", ["x2"] = "g1" };
+        var groundTruth = new Dictionary<string, string> { ["x0-11"] = "g1", ["x2-11"] = "g1" };
         return (records, NameOnlyProfile(), groundTruth);
     }
 
-    /// <summary>Task 4: a column ("special_code") that co-occurs on the one unreachable true
-    /// pair (m0/m2, equal "S1") but on NEITHER of the two control pairs the stride walk visits
-    /// (m0/m1 = S1 vs S2, m2/m3 = S1 vs S3) -- control rate exactly 0 for that column. Pins that
-    /// Lift is null rather than +Infinity or a divide-by-zero exception in that case. m0's and
-    /// m2's names ("VELVET FOUNDRY" / "CASCADE ORBIT") are the same pair already verified
+    /// <summary>Task 4: a column ("special_code") that co-occurs on the one unreachable true pair
+    /// (m0/m2, equal "S1") but can NEVER co-occur in the control, by construction: m0 and m2 are
+    /// the only two records carrying "S1", and they are exactly the ground-truthed true pair --
+    /// so any control traversal that would land on the (m0,m2) pair is excluded as a true pair
+    /// before it ever reaches the aggregate, regardless of which hash-derived partner each record
+    /// gets. Control rate for special_code is therefore exactly 0, whatever partners m1/m3
+    /// resolve to. Pins that Lift is null rather than +Infinity or a divide-by-zero exception in
+    /// that case. (Incidentally, under StableHash, "m0" hashes to itself mod 4 in this record
+    /// order -- a live self-pair case, also covered by SelfPartnerIsSkippedAndCounted below --
+    /// which this test tolerates since it doesn't depend on m0 contributing a control sample.)
+    /// m0's and m2's names ("VELVET FOUNDRY" / "CASCADE ORBIT") are the same pair already verified
     /// share-nothing in MixedCausesFixture, so this pair is genuinely unreachable (B2, via the
     /// shared undeclared special_code) rather than reachable by blocking.</summary>
     private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) LiftIsNullFixture()
@@ -387,27 +406,34 @@ public class ReachabilityDiagnosticTests
     [Fact]
     public void ControlExcludesAccidentalTruePairsFromAggregatesAndCountsTheExclusion()
     {
-        // stride = floor(sqrt(4)) = 2. The only stride-2 pair (x0,x2) IS a ground-truthed true
-        // pair that also happens to share postal_code "11111". If the implementation silently
-        // dropped it instead of counting it, or forgot to exclude its postal_code from the
-        // aggregate, this test would not catch a count of 0 -- it specifically checks BOTH the
-        // counter AND that the excluded pair's values never reached ByColumn.
+        // Under hash-based partner selection (StableHash(id) % 4), x0/x2 and x1/x3 are BOTH
+        // reciprocal pairs -- each side's traversal independently resolves to the other. x0/x2
+        // is a ground-truthed true pair that also happens to share postal_code "11111", so BOTH
+        // directions (x0's traversal and x2's traversal) detect and exclude it: the exclusion
+        // count is 2, not 1. If the implementation silently dropped it instead of counting it, or
+        // forgot to exclude its postal_code from the aggregate, this test would not catch a count
+        // of 0 -- it specifically checks BOTH the counter AND that the excluded pair's values
+        // never reached ByColumn. x1/x3 is a legitimate (also reciprocal, also double-counted per
+        // the documented accept-don't-dedupe policy) control sample with distinct postal codes.
         var result = Diagnose(AccidentalControlCollisionFixture(), maxBlockSize: null);
 
-        Assert.Equal(1, result.Control.TruePairsAccidentallyIncluded);
-        Assert.Equal(1, result.Control.SampledPairCount);
+        Assert.Equal(2, result.Control.TruePairsAccidentallyIncluded);
+        Assert.Equal(2, result.Control.SampledPairCount);
+        Assert.Equal(0, result.Control.SelfPairsSkipped);
 
         var postalCode = result.Control.ByColumn["postal_code"];
-        Assert.Equal(1, postalCode.SampleSize);
+        Assert.Equal(2, postalCode.SampleSize);
         Assert.Equal(0, postalCode.SharedCount);
     }
 
     [Fact]
     public void LiftIsNullWhenControlRateIsZero()
     {
-        // special_code co-occurs on the one unreachable true pair but on neither control pair
-        // the stride walk visits, so the control's own rate for that column is exactly 0.
-        // Division by the control rate would be a divide-by-zero; Lift must be null instead.
+        // special_code co-occurs on the one unreachable true pair, but m0 and m2 -- the only two
+        // records carrying it -- are exactly the ground-truthed true pair, so no control
+        // traversal can ever land on them without being excluded first. The control's own rate
+        // for that column is exactly 0 by construction. Division by the control rate would be a
+        // divide-by-zero; Lift must be null instead.
         var result = Diagnose(LiftIsNullFixture(), maxBlockSize: null);
 
         var controlSpecialCode = result.Control.ByColumn["special_code"];
@@ -418,6 +444,35 @@ public class ReachabilityDiagnosticTests
         var unreachableSpecialCode = result.Unreachable.ByColumn["special_code"];
         Assert.True(unreachableSpecialCode.SampleSize > 0);
         Assert.False(unreachableSpecialCode.Lift.HasValue);
+    }
+
+    [Fact]
+    public void SelfPartnerIsSkippedAndCounted()
+    {
+        // "m0" is the first record in LiftIsNullFixture's 4-record list, and StableHash("m0") % 4
+        // happens to equal 0 -- its own index. A self-referential partner must be skipped (it is
+        // not a control pair; a record cannot be its own non-pair) AND counted, not silently
+        // `continue`d. This is the same fixture LiftIsNullWhenControlRateIsZero uses, so that
+        // test's "SampleSize > 0 despite one record contributing nothing" is this test's cause.
+        var result = Diagnose(LiftIsNullFixture(), maxBlockSize: null);
+        Assert.True(result.Control.SelfPairsSkipped >= 1);
+    }
+
+    [Fact]
+    public void ControlAccountsForEveryIndexAsSampledExcludedOrSelfPaired()
+    {
+        // Every record index takes exactly one of three paths in the control walk: sampled,
+        // excluded as an accidental true pair, or skipped as a self-partner. If any path
+        // silently dropped a record instead of counting it, this sum would fall short of the
+        // record count. Checked against three different fixtures (with, respectively, zero,
+        // two, and at least one of the three outcomes triggered) so the identity is not merely
+        // true by construction of one fixture's shape.
+        foreach (var fixture in new[] { MixedCausesFixture(), AccidentalControlCollisionFixture(), LiftIsNullFixture() })
+        {
+            var result = Diagnose(fixture, maxBlockSize: null);
+            Assert.Equal(fixture.Records.Count,
+                result.Control.SampledPairCount + result.Control.TruePairsAccidentallyIncluded + result.Control.SelfPairsSkipped);
+        }
     }
 
     [Fact]

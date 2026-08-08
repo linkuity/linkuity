@@ -76,7 +76,12 @@ public sealed record BlockSizeHistogram(
 /// this is how a toxic address or a stop-word name key is identified by NAME, not just counted.</summary>
 public sealed record LargestBlock(string Key, string Strategy, int Size);
 
+/// <summary>The non-pair control (see <see cref="ReachabilityDiagnosticService"/> for how partners
+/// are selected). Every record index resolves to exactly one of three outcomes, so
+/// <c>SampledPairCount + TruePairsAccidentallyIncluded + SelfPairsSkipped</c> always equals the
+/// record count -- no outcome is dropped silently.</summary>
 public sealed record ControlSet(
     long SampledPairCount,
     long TruePairsAccidentallyIncluded,
+    long SelfPairsSkipped,
     IReadOnlyDictionary<string, FieldCoOccurrence> ByColumn);
