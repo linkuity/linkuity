@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+
 namespace Linkuity.Cli.Tests;
 
 public class BlockingSuppressionCliTests
@@ -106,6 +109,87 @@ public class BlockingSuppressionCliTests
         Assert.Equal(0, exit);
         Assert.Contains("suppressed,name:inc,6,token-name", output);
         Assert.Contains("suppression_missed,acme-a,acme-b,acme,", output);
+    }
+
+    // 600 entities x 2 records, every name a single globally-unique token, so no two records in
+    // the fixture share a token-name key: all 600 entity pairs are unreachable. 600 is STRICTLY
+    // MORE than BlockingAuditService.MissedPairSampleCap (500) -- same property as the Pipeline
+    // suite's ManyMissedPairsFixture, which is private to that assembly. If it were not more than
+    // the cap, the assertion below would pass while proving nothing.
+    private static (string Csv, string Profile, string GroundTruth) WriteManyMissedPairsFixture()
+    {
+        var dir = Directory.CreateTempSubdirectory("lk-missed-cli").FullName;
+
+        var records = new StringBuilder("id,organization_name\n");
+        var truth = new StringBuilder("record_id,canonical_key\n");
+        for (var i = 0; i < 600; i++)
+        {
+            records.Append(CultureInfo.InvariantCulture, $"\"ent{i}-l\",\"LEFTUNIQTOKEN{i}\"\n");
+            records.Append(CultureInfo.InvariantCulture, $"\"ent{i}-r\",\"RIGHTUNIQTOKEN{i}\"\n");
+            truth.Append(CultureInfo.InvariantCulture, $"\"ent{i}-l\",\"ent{i}\"\n");
+            truth.Append(CultureInfo.InvariantCulture, $"\"ent{i}-r\",\"ent{i}\"\n");
+        }
+
+        var csv = Path.Combine(dir, "orgs.csv");
+        File.WriteAllText(csv, records.ToString());
+        var gt = Path.Combine(dir, "gt.csv");
+        File.WriteAllText(gt, truth.ToString());
+
+        var profile = Path.Combine(dir, "org.profile.json");
+        File.WriteAllText(profile, """
+            {
+              "contentType": "org-missed-count-test",
+              "fields": [
+                { "name": "organization_name", "semanticType": "OrganizationName", "roles": ["Matchable","Blocking"], "similarityEvaluator": "jaccard", "weight": 4.0 }
+              ],
+              "normalizationStrategy": "identity",
+              "blockingStrategies": ["token-name"],
+              "candidateRetrievalStrategy": "blocking-linear",
+              "similarityStrategy": "field-weighted",
+              "scoringStrategy": "identifier-weighted",
+              "decisionStrategy": "threshold",
+              "clusteringStrategy": "union-find",
+              "autoMatchThreshold": 0.41,
+              "reviewThreshold": 0.31
+            }
+            """);
+
+        return (csv, profile, gt);
+    }
+
+    [Fact]
+    public async Task Audit_MoreMissedPairsThanTheSampleCap_ReportsTheTrueCountNotTheCap()
+    {
+        // REGRESSION: the formatter printed r.MissedPairs.Count -- the length of a list capped at
+        // 500 -- so `match blocking audit` reported "500" on a corpus with 12,314 missed pairs.
+        var (csv, profile, gt) = WriteManyMissedPairsFixture();
+        var (exit, output, _) = await RunAsync(
+            "match", "blocking", "audit", "--input", csv, "--profile", profile, "--ground-truth", gt);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Missed pairs (no shared blocking key): 600", output);
+        Assert.DoesNotContain("Missed pairs (no shared blocking key): 500", output);
+        // and the truncation is declared, so 500 rows under a header of 600 cannot be misread
+        Assert.Contains("showing a deterministic sample of 500", output);
+
+        var rendered = output.Split('\n').Count(line => line.StartsWith("  [ent", StringComparison.Ordinal));
+        Assert.Equal(500, rendered);
+    }
+
+    [Fact]
+    public async Task Audit_CsvFormat_MissedRowsCarryThePopulationCount()
+    {
+        // The CSV emitted 500 silently-truncated rows with nothing on them to say so.
+        var (csv, profile, gt) = WriteManyMissedPairsFixture();
+        var (exit, output, _) = await RunAsync(
+            "match", "blocking", "audit", "--input", csv, "--profile", profile,
+            "--ground-truth", gt, "--format", "csv");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("section,left,right,canonical,left_keys,right_keys,population_count,sampled_count", output);
+        var missedRows = output.Split('\n').Where(l => l.StartsWith("missed,", StringComparison.Ordinal)).ToList();
+        Assert.Equal(500, missedRows.Count);
+        Assert.All(missedRows, row => Assert.EndsWith(",600,500", row.TrimEnd('\r')));
     }
 
     [Fact]

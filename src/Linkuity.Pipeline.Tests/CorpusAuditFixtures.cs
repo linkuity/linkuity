@@ -109,7 +109,7 @@ internal static class CorpusAuditFixtures
     /// ownership tests use this instead of real names, so they test the ALGORITHM rather than
     /// which key a strategy happens to emit. Real-strategy fidelity is Task 3's job.
     /// </summary>
-    internal static CorpusAuditService.KeyIndex SyntheticIndex(params string[][] keysPerRecord)
+    internal static KeyIndex SyntheticIndex(params string[][] keysPerRecord)
     {
         var ids = new Dictionary<string, int>(StringComparer.Ordinal);
         var names = new List<string>();
@@ -141,6 +141,6 @@ internal static class CorpusAuditFixtures
             keyMembers[k] = [.. members[k]];
             keyCount[k] = members[k].Count;
         }
-        return new CorpusAuditService.KeyIndex(recordKeys, keyCount, keyMembers, [.. names]);
+        return new KeyIndex(recordKeys, keyCount, keyMembers, [.. names]);
     }
 }

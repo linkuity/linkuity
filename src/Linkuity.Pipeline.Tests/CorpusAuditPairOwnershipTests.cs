@@ -2,7 +2,7 @@ namespace Linkuity.Pipeline.Tests;
 
 public class CorpusAuditPairOwnershipTests
 {
-    private static List<(int, int)> Collect(CorpusAuditService.KeyIndex index, int? maxBlockSize, out long occurrences)
+    private static List<(int, int)> Collect(KeyIndex index, int? maxBlockSize, out long occurrences)
     {
         var seen = new List<(int, int)>();
         occurrences = CorpusAuditService.ForEachCandidatePair(

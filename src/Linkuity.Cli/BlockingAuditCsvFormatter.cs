@@ -26,16 +26,26 @@ public static class BlockingAuditCsvFormatter
         if (result.Reachability is { } r)
         {
             sb.AppendLine();
-            sb.AppendLine("section,left,right,canonical,left_keys,right_keys");
+            // population_count and sampled_count ride on EVERY row: the pair rows are a
+            // deterministic sample capped at BlockingAuditService.MissedPairSampleCap, and without
+            // the population on the row a reader counting 500 rows would read 500 as the answer.
+            // They are constant down a section by design -- a marker, not a per-row measurement.
+            sb.AppendLine("section,left,right,canonical,left_keys,right_keys,population_count,sampled_count");
             foreach (var m in r.MissedPairs)
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"missed,{Escape(m.LeftSourceRecordId)},{Escape(m.RightSourceRecordId)},{Escape(m.CanonicalKey)}," +
-                    $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}");
+                    $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}," +
+                    $"{r.MissedPairCount},{r.MissedPairs.Count}");
             if (result.Suppression is { EffectiveReachability: { } er })
-                foreach (var m in BlockingAuditTextFormatter.LostToSuppression(r, er))
+            {
+                var lost = BlockingAuditTextFormatter.LostToSuppression(r, er);
+                var lostCount = BlockingAuditTextFormatter.LostToSuppressionCount(r, er);
+                foreach (var m in lost)
                     sb.AppendLine(CultureInfo.InvariantCulture,
                         $"suppression_missed,{Escape(m.LeftSourceRecordId)},{Escape(m.RightSourceRecordId)},{Escape(m.CanonicalKey)}," +
-                        $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}");
+                        $"{Escape(string.Join("|", m.LeftKeys))},{Escape(string.Join("|", m.RightKeys))}," +
+                        $"{lostCount},{lost.Count}");
+            }
         }
         return sb.ToString();
     }

@@ -20,7 +20,7 @@ public static class BlockingAuditCommands
     {
         if (args.Length < 3)
         {
-            await Console.Error.WriteLineAsync("Usage: match blocking <audit|explain> [options].");
+            await Console.Error.WriteLineAsync("Usage: match blocking <audit|explain|reachability> [options].");
             return 2;
         }
 
@@ -55,13 +55,14 @@ public static class BlockingAuditCommands
         {
             "audit" => await AuditAsync(service, records, profile, options, ct),
             "explain" => Explain(service, records, profile, options),
+            "reachability" => await ReachabilityDiagnosticCommands.RunAsync(records, profile, options, ct),
             _ => await UnknownVerbAsync(verb)
         };
     }
 
     private static async Task<int> UnknownVerbAsync(string verb)
     {
-        await Console.Error.WriteLineAsync($"Unknown blocking verb '{verb}'. Expected 'audit' or 'explain'.");
+        await Console.Error.WriteLineAsync($"Unknown blocking verb '{verb}'. Expected 'audit', 'explain', or 'reachability'.");
         return 2;
     }
 
