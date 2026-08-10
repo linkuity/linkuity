@@ -69,7 +69,27 @@ public static class FieldNormalizer
                 => StripHonorific(value),
             SemanticFieldType.AddressLine or SemanticFieldType.PostalCode or SemanticFieldType.OrganizationName
                 => value.Trim(),
-            _ => value
+            // ISO 3166 (Country, Jurisdiction), ISO 3166-2 (Region) and ELF (LegalForm) are all
+            // conventionally upper-case codes; City is free text but the corpora that carry it
+            // alongside these already arrive upper-cased, so folding it the same way keeps one
+            // rule for the group instead of a special case. No alias/lookup translation here —
+            // that is a separate concern.
+            SemanticFieldType.City or SemanticFieldType.Region or SemanticFieldType.Country or
+                SemanticFieldType.Jurisdiction or SemanticFieldType.LegalForm
+                => value.Trim().ToUpperInvariant(),
+            // No normalization rule of its own (yet): passed through unchanged, same as before
+            // this switch's catch-all was removed, so behaviour is unchanged but now explicit.
+            SemanticFieldType.SourceIdentifier or SemanticFieldType.Sku or SemanticFieldType.Gtin or
+                SemanticFieldType.ProductName
+                => value,
+            // C# still requires a discard arm to cover values outside the declared enum (an
+            // arbitrary int cast to SemanticFieldType), even once every named member above has an
+            // explicit case. Unlike the catch-all this replaces, it does not silently pass the
+            // value through: it throws, so a semantic type reaching here — whether an out-of-range
+            // cast or, deliberately, a newly declared enum member nobody gave a case yet — fails
+            // loudly instead of being read as normalized when it never was.
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(type), type, $"FieldNormalizer.Normalize has no case for {type}.")
         };
     }
 

@@ -86,4 +86,35 @@ public class FieldNormalizerTests
         Assert.Equal("00012345600012", FieldNormalizer.Normalize("00012345600012", SemanticFieldType.Gtin));
         Assert.Equal("Widget Alpha", FieldNormalizer.Normalize("Widget Alpha", SemanticFieldType.ProductName));
     }
+
+    [Fact]
+    public void Normalize_SourceIdentifier_PassesThroughUnchanged()
+        => Assert.Equal("crm-1", FieldNormalizer.Normalize("crm-1", SemanticFieldType.SourceIdentifier));
+
+    [Theory]
+    [InlineData("  London  ", "LONDON", SemanticFieldType.City)]
+    [InlineData("  gb-lnd  ", "GB-LND", SemanticFieldType.Region)]
+    [InlineData("  gb  ", "GB", SemanticFieldType.Country)]
+    [InlineData("  gb  ", "GB", SemanticFieldType.Jurisdiction)]
+    [InlineData("  8888  ", "8888", SemanticFieldType.LegalForm)]
+    public void Normalize_TrimAndUpperCaseTypes_TrimsAndFolds(string input, string expected, SemanticFieldType type)
+        => Assert.Equal(expected, FieldNormalizer.Normalize(input, type));
+
+    /// <summary>
+    /// The point of this task: <see cref="FieldNormalizer.Normalize"/> has no catch-all case, so
+    /// a <see cref="SemanticFieldType"/> added without a matching normalization rule fails loudly
+    /// (an unmatched switch expression throws at runtime) instead of silently passing through
+    /// unnormalized. This enumerates every declared value and calls each one, so deleting a case
+    /// fails this test.
+    /// </summary>
+    [Fact]
+    public void Normalize_EveryDeclaredSemanticFieldType_HasAnExplicitCase()
+    {
+        foreach (var type in Enum.GetValues<SemanticFieldType>())
+        {
+            var exception = Record.Exception(() => FieldNormalizer.Normalize("value", type));
+            Assert.True(exception is null,
+                $"{type} has no explicit case in FieldNormalizer.Normalize (threw {exception?.GetType().Name}).");
+        }
+    }
 }
