@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching.Phonetics;
+using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
 
@@ -8,6 +9,13 @@ namespace Linkuity.Matching.Tests;
 public class PhoneticBlockingTests
 {
     private static readonly IBlockingStrategy Strategy = new PhoneticBlockingStrategy();
+
+    private static MatchingProfile PersonWithLastNameSentinel(params string[] sentinels) => TestProfiles.Person with
+    {
+        Fields = TestProfiles.Person.Fields
+            .Select(f => f.Name == "last_name" ? f with { NullEquivalents = sentinels } : f)
+            .ToList()
+    };
 
     [Fact]
     public void Phonetic_LastNameVariants_ShareAKey()
@@ -72,6 +80,22 @@ public class PhoneticBlockingTests
     public void Phonetic_IgnoresIdentifierFields()
     {
         var keys = Strategy.GenerateKeys(TestRecords.Person("r", new Dictionary<string, string> { ["email"] = "alice@example.com" }), TestProfiles.Person);
+        Assert.Empty(keys);
+    }
+
+    /// <summary>
+    /// This strategy reads record.Fields directly rather than through BlockingFields.Select, so
+    /// its own blank check has to honour NullEquivalents independently -- otherwise a sentinel
+    /// last_name would phonetically encode as a real name and collapse every record carrying it
+    /// into one block.
+    /// </summary>
+    [Fact]
+    public void Phonetic_DeclaredSentinelValue_NoKeys()
+    {
+        var keys = Strategy.GenerateKeys(
+            TestRecords.Person("r", new Dictionary<string, string> { ["last_name"] = "UNKNOWN" }),
+            PersonWithLastNameSentinel("UNKNOWN"));
+
         Assert.Empty(keys);
     }
 }

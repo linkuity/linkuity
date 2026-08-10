@@ -36,6 +36,7 @@ public sealed class MatchingProfileFieldDocument
     public Dictionary<string, string>? EvaluatorOptions { get; init; }
     public FieldEvidenceDocument? Evidence { get; init; }
     public string? AliasGroup { get; init; }
+    public List<string>? NullEquivalents { get; init; }
 }
 
 public sealed class FieldEvidenceDocument

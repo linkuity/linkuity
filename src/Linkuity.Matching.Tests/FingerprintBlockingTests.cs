@@ -1,3 +1,4 @@
+using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
 
@@ -11,6 +12,13 @@ public class FingerprintBlockingTests
         => Strategy.GenerateKeys(
             TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = organizationName }),
             TestProfiles.Person);
+
+    private static MatchingProfile PersonWithOrgNameSentinel(params string[] sentinels) => TestProfiles.Person with
+    {
+        Fields = TestProfiles.Person.Fields
+            .Select(f => f.Name == "organization_name" ? f with { NullEquivalents = sentinels } : f)
+            .ToList()
+    };
 
     [Fact]
     public void Fingerprint_SuffixAndArticleVariants_ShareKey()
@@ -60,4 +68,20 @@ public class FingerprintBlockingTests
     [Fact]
     public void Fingerprint_NonHyphenName_StillSingleKey()
         => Assert.Equal(["fp:disney walt"], Keys("THE WALT DISNEY COMPANY"));
+
+    /// <summary>
+    /// This strategy reads record.Fields directly rather than through BlockingFields.Select, so
+    /// its own blank check has to honour NullEquivalents independently -- otherwise a sentinel
+    /// organization_name would fingerprint as real name content and collapse every record
+    /// carrying it into one block.
+    /// </summary>
+    [Fact]
+    public void Fingerprint_DeclaredSentinelValue_NoKey()
+    {
+        var keys = Strategy.GenerateKeys(
+            TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "UNKNOWN" }),
+            PersonWithOrgNameSentinel("UNKNOWN"));
+
+        Assert.Empty(keys);
+    }
 }

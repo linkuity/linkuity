@@ -326,7 +326,8 @@ public sealed class MatchingProfileConfigLoader
             Weight = weight,
             EvaluatorOptions = field.EvaluatorOptions,
             Evidence = evidence,
-            AliasGroup = field.AliasGroup
+            AliasGroup = field.AliasGroup,
+            NullEquivalents = field.NullEquivalents
         };
     }
 

@@ -165,6 +165,36 @@ public class ProfileFingerprintTests
     }
 
     [Fact]
+    public void NullEquivalentsChange_ChangesFingerprint()
+    {
+        // A sentinel list changes which pairs are ever Compared vs Missing*, exactly like
+        // blocking or normalization do -- the fingerprint must catch it.
+        var profile = Base();
+        var withSentinel = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["8888", "UNKNOWN"] } : f).ToList()
+        };
+
+        Assert.NotEqual(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(withSentinel));
+    }
+
+    [Fact]
+    public void NullEquivalentsOrder_DoesNotChangeFingerprint()
+    {
+        var profile = Base();
+        var a = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["8888", "UNKNOWN"] } : f).ToList()
+        };
+        var b = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["UNKNOWN", "8888"] } : f).ToList()
+        };
+
+        Assert.Equal(ProfileFingerprint.Of(a), ProfileFingerprint.Of(b));
+    }
+
+    [Fact]
     public void FieldEvidenceChange_ChangesFingerprint()
     {
         var profile = Base();

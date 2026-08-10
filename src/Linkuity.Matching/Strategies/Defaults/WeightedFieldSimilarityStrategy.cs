@@ -37,8 +37,8 @@ public sealed class WeightedFieldSimilarityStrategy : ISimilarityStrategy
             if (!field.Roles.HasFlag(FieldRole.Matchable))
                 continue;
 
-            var hasLeft = left.Fields.TryGetValue(field.Name, out var leftValue) && !string.IsNullOrWhiteSpace(leftValue);
-            var hasRight = right.Fields.TryGetValue(field.Name, out var rightValue) && !string.IsNullOrWhiteSpace(rightValue);
+            var hasLeft = left.Fields.TryGetValue(field.Name, out var leftValue) && !field.IsAbsent(leftValue);
+            var hasRight = right.Fields.TryGetValue(field.Name, out var rightValue) && !field.IsAbsent(rightValue);
 
             if (!hasLeft || !hasRight)
             {

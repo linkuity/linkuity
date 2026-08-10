@@ -7,7 +7,10 @@ namespace Linkuity.Matching.Strategies.Defaults;
 /// Selects the fields a blocking strategy operates on from profile + semantic
 /// metadata rather than literal field names: a field participates when it has the
 /// <see cref="FieldRole.Blocking"/> role, its semantic type satisfies the
-/// strategy's predicate, and the record carries a non-empty value for it.
+/// strategy's predicate, and the record carries a value for it that is not blank
+/// and not one of the field's declared <see cref="ProfileField.NullEquivalents"/>
+/// sentinels (see <see cref="ProfileField.IsAbsent"/>) — otherwise every record sharing a
+/// sentinel would collapse into one blocking key.
 /// </summary>
 internal static class BlockingFields
 {
@@ -20,7 +23,7 @@ internal static class BlockingFields
                 continue;
             if (!applies(field.SemanticType))
                 continue;
-            if (record.Fields.TryGetValue(field.Name, out var value) && !string.IsNullOrWhiteSpace(value))
+            if (record.Fields.TryGetValue(field.Name, out var value) && !field.IsAbsent(value))
                 yield return (field.Name, value);
         }
     }
@@ -39,7 +42,7 @@ internal static class BlockingFields
                 continue;
             if (!applies(field))
                 continue;
-            if (record.Fields.TryGetValue(field.Name, out var value) && !string.IsNullOrWhiteSpace(value))
+            if (record.Fields.TryGetValue(field.Name, out var value) && !field.IsAbsent(value))
                 yield return (field.Name, value);
         }
     }

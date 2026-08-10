@@ -41,4 +41,39 @@ public sealed record ProfileField
     /// additive model would count twice.
     /// </summary>
     public string? AliasGroup { get; init; }
+
+    /// <summary>
+    /// Values that mean "absent" for this field even though the string itself is non-blank —
+    /// GLEIF's legal-form code "8888" ("not provided") sitting on 10% of records, a national-ID
+    /// placeholder like "000-00-0000", "UNKNOWN", "N/A". Declared per field because the same
+    /// literal can be a real value on one field and a sentinel on another; nothing in the engine
+    /// hard-codes any of these values, they are profile data. Compared case- and trim-insensitively
+    /// via <see cref="IsAbsent"/>. Null or empty (the default) changes nothing: every existing
+    /// profile that does not declare this behaves exactly as it did before the property existed.
+    /// </summary>
+    public IReadOnlyList<string>? NullEquivalents { get; init; }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is blank, or matches a declared
+    /// <see cref="NullEquivalents"/> entry case- and trim-insensitively. The single predicate every
+    /// "does this record actually carry a value for this field" check in the engine must use, so a
+    /// sentinel cannot slip past one caller (similarity comparison) while still being read as a real
+    /// value by another (blocking-key generation) — either gap would let a sentinel be scored, or
+    /// worse, would collapse every record sharing it into one blocking key.
+    /// </summary>
+    public bool IsAbsent(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        if (NullEquivalents is not { Count: > 0 })
+            return false;
+
+        var trimmed = value.Trim();
+        foreach (var sentinel in NullEquivalents)
+            if (string.Equals(sentinel.Trim(), trimmed, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        return false;
+    }
 }

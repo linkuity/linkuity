@@ -105,6 +105,16 @@ public static class ProfileFingerprint
                     .Append(evidence.MaxAgreementBits?.ToString("R", inv) ?? "none");
             }
 
+            // Same non-null/non-empty-only rule, for the same reason: a sentinel list changes
+            // which pairs are ever compared as MissingOneSide/MissingBoth versus Compared, which
+            // changes evidence exactly like blocking or normalization do. Sorted because
+            // declaration order does not change which values are treated as absent.
+            if (field.NullEquivalents is { Count: > 0 })
+            {
+                canonical.Append('|').Append("nullEquivalents=")
+                    .Append(string.Join(",", field.NullEquivalents.OrderBy(v => v, StringComparer.Ordinal)));
+            }
+
             canonical.Append('\n');
         }
 
