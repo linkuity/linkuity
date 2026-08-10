@@ -56,6 +56,13 @@ public sealed class ReachabilityDiagnosticService
                     "cannot attribute a ground-truth pair to two different records with the same id");
 
         var declaredFieldNames = profile.Fields.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+        // Name -> declared field, so presence checks below can route through
+        // ProfileField.IsAbsent (sentinel-aware) instead of a raw blank check, for every column
+        // that IS a declared profile field. Undeclared corpus columns have no ProfileField and
+        // therefore no sentinel meaning -- they keep the plain blank check. Uniqueness of field
+        // names is enforced at profile-load time (MatchingProfileConfigLoader), so this cannot
+        // throw on a duplicate key.
+        var declaredFields = profile.Fields.ToDictionary(f => f.Name, f => f, StringComparer.Ordinal);
         var undeclaredColumns = records
             .SelectMany(r => r.Fields.Keys)
             .Where(c => !declaredFieldNames.Contains(c))
@@ -128,7 +135,7 @@ public sealed class ReachabilityDiagnosticService
                         // Field co-occurrence is orthogonal to the A/B1/B2/B3 classification below
                         // and runs for EVERY unreachable pair regardless of cause -- it answers "do
                         // they share anything else", not "why can't the engine compare them".
-                        AccumulateColumnStats(left, right, allColumns, unreachableAcc);
+                        AccumulateColumnStats(left, right, allColumns, declaredFields, unreachableAcc);
 
                         var sharedIgnoringSuppression = BlockingKeyIndex.SharedKeysIgnoringSuppression(leftKeys, rightKeys);
                         if (sharedIgnoringSuppression.Count > 0)
@@ -224,7 +231,7 @@ public sealed class ReachabilityDiagnosticService
         // it BEFORE the unreachable-side figures so each column's Lift can reference the
         // control's rate for that same column.
         var (controlSampledPairCount, truePairsAccidentallyIncluded, selfPairsSkipped, controlAcc) =
-            BuildControlAccumulation(records, groundTruth, allColumns, ct);
+            BuildControlAccumulation(records, groundTruth, allColumns, declaredFields, ct);
 
         var controlByColumn = allColumns.ToDictionary(
             column => column,
@@ -306,9 +313,10 @@ public sealed class ReachabilityDiagnosticService
     };
 
     /// <summary>Every profile-declared Blocking field that is capability-unusable AND has an
-    /// equal, non-empty value on both records. Returns every matching column (not just the
-    /// first) so CauseB1.ByColumn reflects all of them; classification only needs Count > 0.
-    /// </summary>
+    /// equal, non-absent value on both records -- "absent" per <see cref="ProfileField.IsAbsent"/>,
+    /// so a declared sentinel (e.g. legal_form "8888") is never counted as a shared value here.
+    /// Returns every matching column (not just the first) so CauseB1.ByColumn reflects all of
+    /// them; classification only needs Count > 0.</summary>
     private static List<string> FindUnusableBlockingFieldMatches(
         EntityRecord left, EntityRecord right, MatchingProfile profile, IReadOnlySet<string> unusableBlockingFields)
     {
@@ -317,14 +325,19 @@ public sealed class ReachabilityDiagnosticService
         {
             if (!field.Roles.HasFlag(FieldRole.Blocking)) continue;
             if (!unusableBlockingFields.Contains(field.Name)) continue;
-            if (ValuesEqual(left.Fields.GetValueOrDefault(field.Name), right.Fields.GetValueOrDefault(field.Name)))
+
+            var leftValue = left.Fields.GetValueOrDefault(field.Name);
+            var rightValue = right.Fields.GetValueOrDefault(field.Name);
+            if (field.IsAbsent(leftValue) || field.IsAbsent(rightValue)) continue;
+            if (string.Equals(leftValue!.Trim(), rightValue!.Trim(), StringComparison.OrdinalIgnoreCase))
                 matches.Add(field.Name);
         }
         return matches;
     }
 
     /// <summary>Every corpus column the profile does NOT declare that has an equal, non-empty
-    /// value on both records.</summary>
+    /// value on both records. An undeclared column has no <see cref="ProfileField"/> and
+    /// therefore no declared sentinel to honour -- "absent" here can only mean blank.</summary>
     private static List<string> FindUndeclaredColumnMatches(
         EntityRecord left, EntityRecord right, IReadOnlyList<string> undeclaredColumns)
     {
@@ -350,23 +363,41 @@ public sealed class ReachabilityDiagnosticService
             .OrderBy(c => c, StringComparer.Ordinal)
             .ToList();
 
-    /// <summary>Accumulates, per column, how many pairs had a non-empty value on BOTH sides
+    /// <summary>Accumulates, per column, how many pairs had a present value on BOTH sides
     /// (Sample) and how many of those were equal (Shared). Never retains a per-pair record --
     /// only these two running counters per column, bounded by column count, not corpus size.
-    /// </summary>
+    /// "Present" is asked of <see cref="ProfileField.IsAbsent"/> when <paramref name="column"/>
+    /// is a declared profile field (so a declared sentinel is excluded here exactly as the
+    /// matcher excludes it) and falls back to a plain blank check for undeclared corpus columns,
+    /// which have no <see cref="ProfileField"/> and therefore no sentinel meaning. A dictionary
+    /// lookup per column per pair, no allocation, so this stays safe at multi-million-record
+    /// scale.</summary>
     private static void AccumulateColumnStats(
         EntityRecord left, EntityRecord right, IReadOnlyList<string> columns,
+        IReadOnlyDictionary<string, ProfileField> declaredFields,
         Dictionary<string, (long Shared, long Sample)> acc)
     {
         foreach (var column in columns)
         {
             var leftValue = left.Fields.GetValueOrDefault(column);
             var rightValue = right.Fields.GetValueOrDefault(column);
-            if (string.IsNullOrWhiteSpace(leftValue) || string.IsNullOrWhiteSpace(rightValue)) continue;
+
+            bool leftAbsent, rightAbsent;
+            if (declaredFields.TryGetValue(column, out var field))
+            {
+                leftAbsent = field.IsAbsent(leftValue);
+                rightAbsent = field.IsAbsent(rightValue);
+            }
+            else
+            {
+                leftAbsent = string.IsNullOrWhiteSpace(leftValue);
+                rightAbsent = string.IsNullOrWhiteSpace(rightValue);
+            }
+            if (leftAbsent || rightAbsent) continue;
 
             var (shared, sample) = acc.TryGetValue(column, out var v) ? v : (0L, 0L);
             sample++;
-            if (string.Equals(leftValue.Trim(), rightValue.Trim(), StringComparison.OrdinalIgnoreCase)) shared++;
+            if (string.Equals(leftValue!.Trim(), rightValue!.Trim(), StringComparison.OrdinalIgnoreCase)) shared++;
             acc[column] = (shared, sample);
         }
     }
@@ -425,6 +456,7 @@ public sealed class ReachabilityDiagnosticService
             IReadOnlyList<EntityRecord> records,
             IReadOnlyDictionary<string, string> groundTruth,
             IReadOnlyList<string> columns,
+            IReadOnlyDictionary<string, ProfileField> declaredFields,
             CancellationToken ct)
     {
         var acc = new Dictionary<string, (long Shared, long Sample)>(StringComparer.Ordinal);
@@ -450,7 +482,7 @@ public sealed class ReachabilityDiagnosticService
             if (isTruePair) { accidentallyIncluded++; continue; }
 
             sampled++;
-            AccumulateColumnStats(left, right, columns, acc);
+            AccumulateColumnStats(left, right, columns, declaredFields, acc);
         }
 
         return (sampled, accidentallyIncluded, selfPairsSkipped, acc);
@@ -510,8 +542,8 @@ public sealed class ReachabilityDiagnosticService
         foreach (var field in profile.Fields)
         {
             if (field.SemanticType != SemanticFieldType.OrganizationName) continue;
-            if (!left.Fields.TryGetValue(field.Name, out var leftValue) || string.IsNullOrWhiteSpace(leftValue)) continue;
-            if (!right.Fields.TryGetValue(field.Name, out var rightValue) || string.IsNullOrWhiteSpace(rightValue)) continue;
+            if (!left.Fields.TryGetValue(field.Name, out var leftValue) || field.IsAbsent(leftValue)) continue;
+            if (!right.Fields.TryGetValue(field.Name, out var rightValue) || field.IsAbsent(rightValue)) continue;
 
             var rawLeft = OrgCanonicalizer.CanonicalizeKeepingSuffixes(leftValue).ToHashSet(StringComparer.Ordinal);
             var rawRight = OrgCanonicalizer.CanonicalizeKeepingSuffixes(rightValue).ToHashSet(StringComparer.Ordinal);

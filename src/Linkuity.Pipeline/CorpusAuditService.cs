@@ -226,11 +226,15 @@ public sealed class CorpusAuditService
 
         // Field coverage over TRUE pairs: how often each matchable field was populated on both
         // sides, so the report shows the real denominator distribution rather than a scalar.
+        // "Populated" is asked of ProfileField.IsAbsent, not a raw blank check, so a declared
+        // sentinel (e.g. GLEIF legal_form "8888") is reported as absent here exactly as it is to
+        // the matcher -- otherwise this coverage figure and the engine's own comparability
+        // decision would silently disagree on the same field.
         var coverage = profile.Fields
             .Where(f => f.Roles.HasFlag(FieldRole.Matchable))
             .Select(f => new FieldCoverageRow(f.Name, f.Weight, all.Count(x =>
-                normalized[x.Left].Fields.TryGetValue(f.Name, out var lv) && !string.IsNullOrWhiteSpace(lv) &&
-                normalized[x.Right].Fields.TryGetValue(f.Name, out var rv) && !string.IsNullOrWhiteSpace(rv))))
+                normalized[x.Left].Fields.TryGetValue(f.Name, out var lv) && !f.IsAbsent(lv) &&
+                normalized[x.Right].Fields.TryGetValue(f.Name, out var rv) && !f.IsAbsent(rv))))
             .ToList();
 
         long unlabeledEndpointPairs = 0;

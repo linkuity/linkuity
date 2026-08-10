@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Matching;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Pipeline.Tests;
 
@@ -57,5 +58,88 @@ public class CorpusAuditCoverageTests
         // merge, since with only one unlabeled record (orphan) in a singleton cluster of its own,
         // no cluster ever has both a labeled and an unlabeled member.
         Assert.Equal(0, result.Counts.UnlabeledEndpointPairs);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Task 5: field coverage must honour ProfileField.NullEquivalents, not a raw blank check --
+    // otherwise a declared sentinel (e.g. GLEIF legal_form "8888") is reported as a populated,
+    // shared value here while the matcher correctly treats it as absent.
+    // ------------------------------------------------------------------------------------
+
+    private static MatchingProfile ProfileWithSentinelLegalForm() => new()
+    {
+        ContentType = "organization",
+        Fields =
+        [
+            new ProfileField
+            {
+                Name = "organization_name",
+                SemanticType = SemanticFieldType.OrganizationName,
+                Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking,
+                SimilarityEvaluator = "canonical-jaccard",
+                Weight = 4.0
+            },
+            new ProfileField
+            {
+                Name = "legal_form",
+                SemanticType = SemanticFieldType.LegalForm,
+                Roles = FieldRole.Matchable,
+                SimilarityEvaluator = "exact",
+                Weight = 1.0,
+                NullEquivalents = ["8888"]
+            }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["fingerprint", "token", "acronym"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.41,
+        ReviewThreshold = 0.31,
+        MaxBlockSize = 50
+    };
+
+    private static EntityRecord OrgWithLegalForm(string id, string name, string legalForm) => new()
+    {
+        Id = Guid.NewGuid(), ProjectId = Guid.Empty, SourceId = Guid.Empty, IngestBatchId = Guid.Empty,
+        SourceRecordId = id,
+        Fields = new Dictionary<string, string> { ["organization_name"] = name, ["legal_form"] = legalForm },
+        CreatedAt = DateTimeOffset.UnixEpoch
+    };
+
+    [Fact]
+    public void DeclaredSentinelOnlySharedValue_FieldCoverageReportsAbsent()
+    {
+        var records = new[]
+        {
+            OrgWithLegalForm("a", "ACME WIDGETS INC", "8888"),
+            OrgWithLegalForm("b", "ACME WIDGETS", "8888"),
+        };
+        var truth = new Dictionary<string, string> { ["a"] = "acme", ["b"] = "acme" };
+
+        var result = NewService().Audit(records, ProfileWithSentinelLegalForm(), truth);
+
+        var legalFormCoverage = result.Inputs.FieldCoverage.Single(f => f.FieldName == "legal_form");
+        Assert.Equal(0, legalFormCoverage.PairsPopulatedBothSides);
+    }
+
+    [Fact]
+    public void GenuineSharedValue_StillCountsAsFieldCoverage()
+    {
+        // Control: a real (non-sentinel) shared value on the same field must still count, so the
+        // sentinel fix above is not achieved by breaking coverage counting generally.
+        var records = new[]
+        {
+            OrgWithLegalForm("a", "ACME WIDGETS INC", "LLC"),
+            OrgWithLegalForm("b", "ACME WIDGETS", "LLC"),
+        };
+        var truth = new Dictionary<string, string> { ["a"] = "acme", ["b"] = "acme" };
+
+        var result = NewService().Audit(records, ProfileWithSentinelLegalForm(), truth);
+
+        var legalFormCoverage = result.Inputs.FieldCoverage.Single(f => f.FieldName == "legal_form");
+        Assert.Equal(1, legalFormCoverage.PairsPopulatedBothSides);
     }
 }
