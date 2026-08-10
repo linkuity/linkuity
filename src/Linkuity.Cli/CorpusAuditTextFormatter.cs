@@ -67,6 +67,21 @@ public static class CorpusAuditTextFormatter
             $"largest cluster {result.ClusterSummary.LargestClusterSize:N0}");
         sb.AppendLine();
 
+        // Over-merge oracle: the largest true entity size FOUND IN THIS RUN'S OWN GROUND TRUTH,
+        // never a hardcoded number. RecordsInClustersOverOracle is the headline figure later
+        // measurements compare a baseline against, so it is named explicitly rather than folded
+        // into the cluster-summary line above.
+        var om = result.OverMerge;
+        sb.AppendLine(CultureInfo.InvariantCulture,
+            $"over-merge oracle (largest true entity in ground truth): {om.Oracle:N0}");
+        sb.AppendLine(CultureInfo.InvariantCulture,
+            $"  largest cluster {om.LargestClusterSize:N0}   " +
+            $"clusters over oracle {om.ClustersOverOracle:N0}   " +
+            $"records in clusters over oracle {om.RecordsInClustersOverOracle:N0}   " +
+            $"clusters over 1,000 {om.ClustersOverOneThousand:N0}");
+        sb.AppendLine(om.Passed ? "over-merge gate: PASS" : $"over-merge gate: FAIL -- {om.FailureMessage}");
+        sb.AppendLine();
+
         sb.AppendLine("stratum          true    reach     auto   review  nomatch  noncomp   recall");
         foreach (var s in result.Strata.OrderBy(s => s.Id))
         {

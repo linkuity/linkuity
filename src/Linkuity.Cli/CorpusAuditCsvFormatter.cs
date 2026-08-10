@@ -35,6 +35,14 @@ public static class CorpusAuditCsvFormatter
         Row("count", "singletons", result.ClusterSummary.SingletonCount);
         Row("count", "largest_cluster", result.ClusterSummary.LargestClusterSize);
 
+        var om = result.OverMerge;
+        Row("over_merge", "oracle", om.Oracle);
+        Row("over_merge", "largest_cluster", om.LargestClusterSize);
+        Row("over_merge", "clusters_over_oracle", om.ClustersOverOracle);
+        Row("over_merge", "records_in_clusters_over_oracle", om.RecordsInClustersOverOracle);
+        Row("over_merge", "clusters_over_1000", om.ClustersOverOneThousand);
+        Row("over_merge", "passed", om.Passed);
+
         var m = result.Metrics;
         Row("metric", "reachability", m.Reachability.ToString("F6", CultureInfo.InvariantCulture));
         Row("metric", "direct_auto_recall", m.DirectAutoRecall.ToString("F6", CultureInfo.InvariantCulture));

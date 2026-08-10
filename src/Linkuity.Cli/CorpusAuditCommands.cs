@@ -231,6 +231,14 @@ public static class CorpusAuditCommands
         await Console.Error.WriteLineAsync(
             $"{Environment.NewLine}Baseline written to " +
             $"{Path.Combine(directory, CorpusAuditBaseline.BaselineFileName)}");
+
+        // Deliberately does NOT return 1/abort on an over-merge FAIL: a baseline write is how a
+        // known-bad run's numbers get RECORDED so a later --compare-baseline run can be held to
+        // them (and it is --compare-baseline, above, that actually enforces the oracle). Aborting
+        // here would make it impossible to ever establish that reference point.
+        await Console.Error.WriteLineAsync(result.OverMerge.Passed
+            ? $"{Environment.NewLine}OVER-MERGE GATE: PASS."
+            : $"{Environment.NewLine}OVER-MERGE GATE: FAIL: {result.OverMerge.FailureMessage}");
         return 0;
     }
 
@@ -327,10 +335,19 @@ public static class CorpusAuditCommands
             await Console.Error.WriteLineAsync($"{Environment.NewLine}GATE REFUSED. {comparison.RefusalReason}");
             return 2;
         }
-        if (comparison.Failures.Count > 0)
+
+        // The over-merge oracle is an ABSOLUTE invariant on THIS run alone (no cluster may exceed
+        // the largest true entity its own ground truth names) — unlike the three baseline.Compare
+        // rules above, it needs no prior baseline to violate. Folded into the SAME failures list so
+        // the existing GATE FAILED/PASSED verdict — the one mechanism this CLI already uses to
+        // signal pass/fail — simply cannot pass while a cluster this large exists, exactly as spec'd.
+        var failures = comparison.Failures.ToList();
+        if (result.OverMerge.FailureMessage is { } overMergeFailure) failures.Add(overMergeFailure);
+
+        if (failures.Count > 0)
         {
             await Console.Error.WriteLineAsync($"{Environment.NewLine}GATE FAILED:");
-            foreach (var failure in comparison.Failures)
+            foreach (var failure in failures)
                 await Console.Error.WriteLineAsync($"  - {failure}");
             await Console.Error.WriteLineAsync(
                 $"{Environment.NewLine}Gate failure means stop and escalate, not adjust-until-green.");
