@@ -65,6 +65,53 @@ RECORD_COLUMNS = (["id", "organization_name"]
                   + [c for c, _ in ADDRESS_COLUMNS]
                   + ["alias_type", "script_relation"])
 
+# --- address observation extraction ----------------------------------------------
+# Phase 0.2 read Entity.LegalAddress.* only and copied it onto every alias row, which
+# made seven of eight corpus fields invariant within an entity by construction (see
+# 2026-08-10-phase-0.4-two-observation-corpus.md). This extracts the addresses that
+# defect ignored: legal, headquarters, and OtherAddress.N.
+def _address_field_columns(prefix):
+    """(corpus field name, GLEIF column) for the five address fields under `prefix`.
+
+    Field order is address_line, city, region, postal_code, country -- the same order
+    ADDRESS_COLUMNS already uses, so LEGAL_ADDRESS_COLUMNS below is exactly its first
+    five entries. This is NOT the order the plan's prose lists them in (it writes
+    country before postal_code); nothing depends on that prose order, only on all five
+    fields being present and compared as one tuple.
+    """
+    return [
+        ("address_line", f"{prefix}.FirstAddressLine"),
+        ("city", f"{prefix}.City"),
+        ("region", f"{prefix}.Region"),
+        ("postal_code", f"{prefix}.PostalCode"),
+        ("country", f"{prefix}.Country"),
+    ]
+
+
+LEGAL_ADDRESS_COLUMNS = ADDRESS_COLUMNS[:5]
+HEADQUARTERS_ADDRESS_COLUMNS = _address_field_columns("Entity.HeadquartersAddress")
+
+_OTHER_ADDRESS_PREFIX = "Entity.OtherAddresses.OtherAddress."
+_OTHER_ADDRESS_SUFFIX = ".FirstAddressLine"
+
+
+def other_address_slot_numbers(header):
+    """Ascending N for every 'Entity.OtherAddresses.OtherAddress.N.*' group in `header`.
+
+    Discovered from the header rather than hard-coded like OTHER_NAME_SLOTS: GLEIF's pad
+    width is a snapshot fact, not a constant this module should assume. One column per
+    slot (FirstAddressLine) is enough to detect the slot; GLEIF pads every field of a
+    slot together, so the other four are assumed present alongside it.
+    """
+    numbers = []
+    for name in header:
+        if name.startswith(_OTHER_ADDRESS_PREFIX) and name.endswith(_OTHER_ADDRESS_SUFFIX):
+            middle = name[len(_OTHER_ADDRESS_PREFIX):-len(_OTHER_ADDRESS_SUFFIX)]
+            if middle.isdigit():
+                numbers.append(int(middle))
+    return sorted(numbers)
+
+
 REQUIRED_GLEIF_COLUMNS = (
     ["LEI", "Entity.LegalName",
      "Entity.RegistrationAuthority.RegistrationAuthorityID",
@@ -211,6 +258,46 @@ def entity_records(row, ix):
         record["_gated"] = is_gated(alias_type, relation)
         records.append(record)
     return records, drops
+
+
+def entity_addresses(row, ix, other_slot_numbers):
+    """(distinct address tuples for this entity, drops), legal first, then headquarters,
+    then OtherAddress slots in ascending N.
+
+    An address is (address_line, city, region, postal_code, country), trimmed.
+    Distinctness is by the WHOLE tuple, case-folded: first occurrence in source order
+    wins its original casing, exactly as entity_aliases keeps the first-seen name's
+    casing. Source order is fixed and is what Task 3's pairing depends on staying
+    stable across builds.
+
+    Returns (addresses, drops) with drops == {"blankAddress": n, "dedupedCaseFold": n}.
+    A group whose five fields are ALL blank is an unused OtherAddress slot -- GLEIF pads
+    a fixed number of slots per entity and the overwhelming majority go unused -- or, in
+    principle, an absent headquarters address. A group that repeats an address already
+    seen (legal == headquarters is the common case, ~68% of entities per the plan) is a
+    duplicate. Neither is an address this function emits, and both get a NAMED counter
+    rather than a bare `continue` -- the module's Global Constraint (see entity_aliases).
+    The function is PURE: no I/O, callable once per source row.
+    """
+    groups = [LEGAL_ADDRESS_COLUMNS, HEADQUARTERS_ADDRESS_COLUMNS]
+    groups += [_address_field_columns(f"Entity.OtherAddresses.OtherAddress.{n}")
+               for n in other_slot_numbers]
+
+    out = []
+    seen = set()
+    drops = {"blankAddress": 0, "dedupedCaseFold": 0}
+    for columns in groups:
+        address = tuple(row[ix[gleif_col]].strip() for _, gleif_col in columns)
+        if not any(address):
+            drops["blankAddress"] += 1
+            continue
+        key = tuple(field.casefold() for field in address)
+        if key in seen:
+            drops["dedupedCaseFold"] += 1
+            continue
+        seen.add(key)
+        out.append(address)
+    return out, drops
 
 
 def record_id(lei, ordinal):

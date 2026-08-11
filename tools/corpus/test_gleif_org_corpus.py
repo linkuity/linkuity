@@ -220,6 +220,119 @@ class TestEntityRecords(unittest.TestCase):
         self.assertEqual(g.lei_from_record_id(rid), "LEI0000000000000011")
 
 
+class TestOtherAddressSlotNumbers(unittest.TestCase):
+    def test_discovers_present_slots_in_ascending_order(self):
+        header = ["Entity.OtherAddresses.OtherAddress.2.FirstAddressLine",
+                  "Entity.OtherAddresses.OtherAddress.1.FirstAddressLine",
+                  "Entity.OtherAddresses.OtherAddress.5.FirstAddressLine",
+                  "Entity.LegalAddress.FirstAddressLine"]
+        self.assertEqual(g.other_address_slot_numbers(header), [1, 2, 5])
+
+    def test_no_slots_present_is_empty(self):
+        self.assertEqual(g.other_address_slot_numbers(["LEI", "Entity.LegalName"]), [])
+
+    def test_other_columns_in_a_slot_do_not_cause_double_counting(self):
+        header = ["Entity.OtherAddresses.OtherAddress.1.City",
+                  "Entity.OtherAddresses.OtherAddress.1.FirstAddressLine",
+                  "Entity.OtherAddresses.OtherAddress.1.PostalCode"]
+        self.assertEqual(g.other_address_slot_numbers(header), [1])
+
+
+ADDRESS_HEADER = (
+    ["LEI", "Entity.LegalName"]
+    + [c for _, c in g.LEGAL_ADDRESS_COLUMNS]
+    + [c for _, c in g.HEADQUARTERS_ADDRESS_COLUMNS]
+    + [c for n in (1, 2, 3)
+       for _, c in g._address_field_columns(f"Entity.OtherAddresses.OtherAddress.{n}")]
+)
+ADDRESS_IX = g.column_index(ADDRESS_HEADER, required=["LEI", "Entity.LegalName"])
+
+
+def address_row(lei="LEI0000000000000000", legal="ACME LTD",
+                legal_addr=None, hq_addr=None, others=None):
+    """A row exercising ADDRESS_HEADER. `others` maps slot N -> address dict."""
+    row = [""] * len(ADDRESS_HEADER)
+    row[ADDRESS_IX["LEI"]] = lei
+    row[ADDRESS_IX["Entity.LegalName"]] = legal
+    for corpus_col, gleif_col in g.LEGAL_ADDRESS_COLUMNS:
+        row[ADDRESS_IX[gleif_col]] = (legal_addr or {}).get(corpus_col, "")
+    for corpus_col, gleif_col in g.HEADQUARTERS_ADDRESS_COLUMNS:
+        row[ADDRESS_IX[gleif_col]] = (hq_addr or {}).get(corpus_col, "")
+    for n, addr in (others or {}).items():
+        for corpus_col, gleif_col in g._address_field_columns(
+                f"Entity.OtherAddresses.OtherAddress.{n}"):
+            row[ADDRESS_IX[gleif_col]] = addr.get(corpus_col, "")
+    return row
+
+
+ADDRESS_A = {"address_line": "1 Main St", "city": "Dublin", "region": "Leinster",
+            "postal_code": "D01", "country": "IE"}
+ADDRESS_B = {"address_line": "2 Rue Neuve", "city": "Paris", "region": "",
+            "postal_code": "75001", "country": "FR"}
+ADDRESS_C = {"address_line": "3 Hlavna", "city": "Bratislava", "region": "",
+            "postal_code": "81109", "country": "SK"}
+
+
+def tup(address):
+    return tuple(address.get(c, "") for c, _ in g.LEGAL_ADDRESS_COLUMNS)
+
+
+class TestEntityAddresses(unittest.TestCase):
+    def test_identical_legal_and_hq_collapse_to_one(self):
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=ADDRESS_A)
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [])
+        self.assertEqual(addresses, [tup(ADDRESS_A)])
+        self.assertEqual(drops, {"blankAddress": 0, "dedupedCaseFold": 1})
+
+    def test_differing_legal_and_hq_give_two_legal_first(self):
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=ADDRESS_B)
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [])
+        self.assertEqual(addresses, [tup(ADDRESS_A), tup(ADDRESS_B)])
+        self.assertEqual(drops, {"blankAddress": 0, "dedupedCaseFold": 0})
+
+    def test_case_and_whitespace_differences_collapse(self):
+        hq_variant = {"address_line": " 1 MAIN ST ", "city": " dublin", "region": "LEINSTER ",
+                     "postal_code": " d01", "country": "ie "}
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=hq_variant)
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [])
+        # One distinct address, keeping the FIRST occurrence's original casing.
+        self.assertEqual(addresses, [tup(ADDRESS_A)])
+        self.assertEqual(drops, {"blankAddress": 0, "dedupedCaseFold": 1})
+
+    def test_missing_headquarters_yields_one_address_and_is_counted(self):
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=None)
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [])
+        self.assertEqual(addresses, [tup(ADDRESS_A)])
+        self.assertEqual(drops, {"blankAddress": 1, "dedupedCaseFold": 0})
+
+    def test_other_address_entries_are_included(self):
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=ADDRESS_B, others={1: ADDRESS_C})
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [1])
+        self.assertEqual(addresses, [tup(ADDRESS_A), tup(ADDRESS_B), tup(ADDRESS_C)])
+        self.assertEqual(drops, {"blankAddress": 0, "dedupedCaseFold": 0})
+
+    def test_unpopulated_other_address_slot_is_dropped_not_counted_as_distinct(self):
+        # Slot 2 is discovered (present in other_slot_numbers) but unpopulated for this
+        # entity -- measured ~1.48% of rows carry OtherAddress.1 at all, so the
+        # overwhelming majority of discovered slots are blank for any given entity. HQ
+        # repeats the legal address here, so this also exercises both drop reasons at once.
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=ADDRESS_A, others={1: ADDRESS_C})
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [1, 2])
+        self.assertEqual(addresses, [tup(ADDRESS_A), tup(ADDRESS_C)])
+        self.assertEqual(drops, {"blankAddress": 1, "dedupedCaseFold": 1})
+
+    def test_deterministic_order_legal_then_hq_then_other_by_slot_number(self):
+        row = address_row(legal_addr=ADDRESS_A, hq_addr=ADDRESS_B,
+                          others={2: ADDRESS_C, 1: {"address_line": "9 Ninth Ave",
+                                                     "city": "Cork", "region": "",
+                                                     "postal_code": "T12", "country": "IE"}})
+        addresses, _ = g.entity_addresses(row, ADDRESS_IX, [1, 2])
+        self.assertEqual(addresses[0], tup(ADDRESS_A))
+        self.assertEqual(addresses[1], tup(ADDRESS_B))
+        self.assertEqual(addresses[2][0], "9 Ninth Ave")   # slot 1 before slot 2
+        self.assertEqual(addresses[3], tup(ADDRESS_C))
+
+
 class TestTruePairs(unittest.TestCase):
     def test_singletons_contribute_nothing(self):
         self.assertEqual(g.true_pairs_from_sizes([1, 1, 1]), 0)
