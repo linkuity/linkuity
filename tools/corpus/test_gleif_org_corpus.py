@@ -58,22 +58,36 @@ class TestScriptRelation(unittest.TestCase):
         self.assertEqual(g.script_relation("123", "ACME LTD"), "same")
 
 
+# Task 3 wires entity_addresses into entity_records, so every fixture row must now carry
+# Headquarters and OtherAddress columns too, not just LegalAddress -- entity_addresses
+# does ix[gleif_col] lookups against them unconditionally. Two OtherAddress slots are
+# enough to exercise 3- and 4-address entities; GLEIF_OTHER_SLOT_NUMBERS is DISCOVERED
+# from the header via other_address_slot_numbers, exactly as run_parse discovers it from
+# the real 338-column file, rather than hard-coded here.
+GLEIF_OTHER_ADDRESS_SLOTS_FOR_TESTS = (1, 2)
+
 GLEIF_HEADER = (
     ["LEI", "Entity.LegalName"]
     + [c for pair in g.OTHER_NAME_SLOTS for c in pair]
     + [c for pair in g.TRANSLITERATED_SLOTS for c in pair]
     + [c for _, c in g.ADDRESS_COLUMNS]
+    + [c for _, c in g.HEADQUARTERS_ADDRESS_COLUMNS]
+    + [c for n in GLEIF_OTHER_ADDRESS_SLOTS_FOR_TESTS
+       for _, c in g._address_field_columns(f"Entity.OtherAddresses.OtherAddress.{n}")]
     + ["Entity.RegistrationAuthority.RegistrationAuthorityID",
        "Entity.RegistrationAuthority.RegistrationAuthorityEntityID"]
 )
 IX = g.column_index(GLEIF_HEADER)
+GLEIF_OTHER_SLOT_NUMBERS = g.other_address_slot_numbers(GLEIF_HEADER)
 
 
-def gleif_row(lei, legal, others=(), translits=(), address=None, ra=("", "")):
+def gleif_row(lei, legal, others=(), translits=(), address=None, hq_address=None,
+             other_addresses=None, ra=("", "")):
     """Build one GLEIF-shaped row.
 
-    others/translits are sequences of (name, type); address is a dict keyed by corpus
-    column name.
+    others/translits are sequences of (name, type); address/hq_address are dicts keyed
+    by corpus column name for LegalAddress/HeadquartersAddress; other_addresses maps
+    OtherAddress slot number -> address dict.
     """
     row = [""] * len(GLEIF_HEADER)
     row[IX["LEI"]] = lei
@@ -84,6 +98,12 @@ def gleif_row(lei, legal, others=(), translits=(), address=None, ra=("", "")):
         row[IX[slot[0]]], row[IX[slot[1]]] = name, typ
     for corpus_col, gleif_col in g.ADDRESS_COLUMNS:
         row[IX[gleif_col]] = (address or {}).get(corpus_col, "")
+    for corpus_col, gleif_col in g.HEADQUARTERS_ADDRESS_COLUMNS:
+        row[IX[gleif_col]] = (hq_address or {}).get(corpus_col, "")
+    for n, addr in (other_addresses or {}).items():
+        for corpus_col, gleif_col in g._address_field_columns(
+                f"Entity.OtherAddresses.OtherAddress.{n}"):
+            row[IX[gleif_col]] = addr.get(corpus_col, "")
     row[IX["Entity.RegistrationAuthority.RegistrationAuthorityID"]] = ra[0]
     row[IX["Entity.RegistrationAuthority.RegistrationAuthorityEntityID"]] = ra[1]
     return row
@@ -187,15 +207,20 @@ class TestEntityAliases(unittest.TestCase):
 
 class TestEntityRecords(unittest.TestCase):
     def test_every_record_carries_the_entity_payload(self):
+        # Single legal address, no headquarters/other data -- address_count == 1, so this
+        # is the "today's situation, unchanged" case: one address paired with every name.
         row = gleif_row("LEI0000000000000009", "ACME LTD",
                         others=[("OLD ACME LTD", "PREVIOUS_LEGAL_NAME")],
                         address={"address_line": "1 Main St", "city": "Dublin",
                                  "region": "", "postal_code": "D01",
                                  "country": "IE", "jurisdiction": "IE",
                                  "legal_form": "H8VW"})
-        records, drops = g.entity_records(row, IX)
+        records, alias_drops, address_drops, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
         self.assertEqual(len(records), 2)
-        self.assertEqual(drops, {"blankName": 0, "dedupedCaseFold": 0})
+        self.assertEqual(alias_drops, {"blankName": 0, "dedupedCaseFold": 0})
+        self.assertEqual(name_count, 2)
+        self.assertEqual(address_count, 1)
         for r in records:
             self.assertEqual(r["city"], "Dublin")
             self.assertEqual(r["legal_form"], "H8VW")
@@ -204,11 +229,15 @@ class TestEntityRecords(unittest.TestCase):
     def test_ordinals_are_assigned_over_the_full_list_not_the_gated_subset(self):
         # The excluded alias sits BETWEEN two gated ones. If ordinals were assigned after
         # filtering, the gated record IDs would differ between records.csv and
-        # records-full.csv and spec check 1 could never pass.
+        # records-full.csv and spec check 1 could never pass. A single address, so this
+        # exercises ordinal assignment over the ALIAS list exactly as before Task 3.
         row = gleif_row("LEI0000000000000010", "ACME LTD",
                         others=[("ACME SA", "ALTERNATIVE_LANGUAGE_LEGAL_NAME"),
-                                ("OLD ACME LTD", "PREVIOUS_LEGAL_NAME")])
-        records, _ = g.entity_records(row, IX)
+                                ("OLD ACME LTD", "PREVIOUS_LEGAL_NAME")],
+                        address={"address_line": "1 Main St", "city": "Dublin", "region": "",
+                                 "postal_code": "D01", "country": "IE",
+                                 "jurisdiction": "IE", "legal_form": "H8VW"})
+        records, *_ = g.entity_records(row, IX, GLEIF_OTHER_SLOT_NUMBERS)
         self.assertEqual([r["_ordinal"] for r in records], [0, 1, 2])
         self.assertEqual([r["_gated"] for r in records], [True, False, True])
         gated = [r["_ordinal"] for r in records if r["_gated"]]
@@ -218,6 +247,147 @@ class TestEntityRecords(unittest.TestCase):
         rid = g.record_id("LEI0000000000000011", 3)
         self.assertEqual(rid, "gleif-LEI0000000000000011-3")
         self.assertEqual(g.lei_from_record_id(rid), "LEI0000000000000011")
+
+    def test_raises_when_entity_has_no_address_observations(self):
+        # No legal, headquarters or OtherAddress data at all. Task 2's full-file
+        # measurement shows this never happens for a real entity (the four distinct-
+        # address-count buckets sum to exactly the total entity count), so this must
+        # abort loudly -- the same posture entity_aliases takes on a blank legal name --
+        # rather than silently emit a blank-address record.
+        row = gleif_row("LEI0000000000000099", "NO ADDRESS INC")
+        with self.assertRaises(ValueError) as ctx:
+            g.entity_records(row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertIn("LEI0000000000000099", str(ctx.exception))
+
+
+LEGAL_ADDR = {"address_line": "1 Main St", "city": "Dublin", "region": "Leinster",
+             "postal_code": "D01", "country": "IE", "jurisdiction": "IE", "legal_form": "H8VW"}
+HQ_ADDR = {"address_line": "2 Rue Neuve", "city": "Paris", "region": "",
+          "postal_code": "75001", "country": "FR"}
+OTHER_ADDR = {"address_line": "3 Hlavna", "city": "Bratislava", "region": "",
+             "postal_code": "81109", "country": "SK"}
+
+
+def _addr_tuple(address_dict):
+    return tuple(address_dict.get(f, "")
+                for f in ("address_line", "city", "region", "postal_code", "country"))
+
+
+def _pairs(records):
+    return [(r["organization_name"], _addr_tuple(r)) for r in records]
+
+
+class TestEntityRecordsPairing(unittest.TestCase):
+    """The cycling rule itself: `max(len(names), len(addresses))` records, each list
+    indexed by `ordinal % len(list)`. This is the decision the whole plan turns on
+    ("Record definition" in 2026-08-10-phase-0.4-two-observation-corpus.md) -- never the
+    cross product.
+    """
+
+    def test_single_name_single_address_pairs_once(self):
+        # Today's situation, unchanged: the common case (~80% of entities per Task 2).
+        row = gleif_row("LEI0000000000000020", "SOLO LTD", address=LEGAL_ADDR)
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (1, 1))
+        self.assertEqual(_pairs(records), [("SOLO LTD", _addr_tuple(LEGAL_ADDR))])
+        self.assertFalse(g.is_address_only_multi_record(name_count, address_count))
+
+    def test_more_names_than_addresses_cycles_the_address_list(self):
+        # 3 names (LEGAL + 2 TRADING), 1 address -> every record pairs with it.
+        row = gleif_row("LEI0000000000000021", "ACME LTD",
+                        others=[("ACME TRADING A", "TRADING_OR_OPERATING_NAME"),
+                                ("ACME TRADING B", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR)
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (3, 1))
+        a = _addr_tuple(LEGAL_ADDR)
+        self.assertEqual(_pairs(records),
+                         [("ACME LTD", a), ("ACME TRADING A", a), ("ACME TRADING B", a)])
+
+    def test_more_addresses_than_names_cycles_the_name_list(self):
+        # 1 name, 2 addresses (legal + hq) -- the pair shape the alias-only corpus could
+        # never produce: the SAME name paired with two DIFFERENT addresses.
+        row = gleif_row("LEI0000000000000022", "SOLO LTD",
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (1, 2))
+        self.assertEqual(_pairs(records),
+                         [("SOLO LTD", _addr_tuple(LEGAL_ADDR)),
+                          ("SOLO LTD", _addr_tuple(HQ_ADDR))])
+        self.assertTrue(g.is_address_only_multi_record(name_count, address_count))
+
+    def test_equal_counts_pair_index_for_index_with_no_repeats(self):
+        row = gleif_row("LEI0000000000000023", "ACME LTD",
+                        others=[("ACME TRADING", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (2, 2))
+        self.assertEqual(_pairs(records),
+                         [("ACME LTD", _addr_tuple(LEGAL_ADDR)),
+                          ("ACME TRADING", _addr_tuple(HQ_ADDR))])
+
+    def test_three_names_two_addresses_wraps_around_exactly_as_the_plan_specifies(self):
+        # The plan's own worked example: (n1,a1) (n2,a2) (n3,a1).
+        row = gleif_row("LEI0000000000000024", "ACME LTD",
+                        others=[("ACME TRADING A", "TRADING_OR_OPERATING_NAME"),
+                                ("ACME TRADING B", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (3, 2))
+        a, b = _addr_tuple(LEGAL_ADDR), _addr_tuple(HQ_ADDR)
+        self.assertEqual(_pairs(records),
+                         [("ACME LTD", a), ("ACME TRADING A", b), ("ACME TRADING B", a)])
+
+    def test_never_emits_the_cross_product(self):
+        # 3 names x 2 addresses must stay 3 records, never 6.
+        row = gleif_row("LEI0000000000000025", "ACME LTD",
+                        others=[("ACME TRADING A", "TRADING_OR_OPERATING_NAME"),
+                                ("ACME TRADING B", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, *_ = g.entity_records(row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual(len(records), 3)
+
+    def test_three_distinct_addresses_via_an_other_slot(self):
+        row = gleif_row("LEI0000000000000026", "ACME LTD",
+                        others=[("ACME TRADING", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR,
+                        other_addresses={1: OTHER_ADDR})
+        records, _, _, name_count, address_count = g.entity_records(
+            row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual((name_count, address_count), (2, 3))
+        a, b, c = _addr_tuple(LEGAL_ADDR), _addr_tuple(HQ_ADDR), _addr_tuple(OTHER_ADDR)
+        self.assertEqual(_pairs(records),
+                         [("ACME LTD", a), ("ACME TRADING", b), ("ACME LTD", c)])
+
+    def test_ids_are_deterministic_and_ordinal_ordered(self):
+        row = gleif_row("LEI0000000000000027", "ACME LTD",
+                        others=[("ACME TRADING", "TRADING_OR_OPERATING_NAME")],
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, *_ = g.entity_records(row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual([r["id"] for r in records],
+                         ["gleif-LEI0000000000000027-0", "gleif-LEI0000000000000027-1"])
+
+    def test_jurisdiction_and_legal_form_stay_constant_across_records(self):
+        # They are entity-level attributes, not address fields -- GLEIF records one of
+        # each per entity, not one per address.
+        row = gleif_row("LEI0000000000000028", "ACME LTD",
+                        address=LEGAL_ADDR, hq_address=HQ_ADDR)
+        records, *_ = g.entity_records(row, IX, GLEIF_OTHER_SLOT_NUMBERS)
+        self.assertEqual(len(records), 2)
+        self.assertTrue(all(r["jurisdiction"] == "IE" for r in records))
+        self.assertTrue(all(r["legal_form"] == "H8VW" for r in records))
+
+    def test_is_address_only_multi_record_predicate(self):
+        self.assertTrue(g.is_address_only_multi_record(1, 2))
+        self.assertTrue(g.is_address_only_multi_record(1, 4))
+        self.assertFalse(g.is_address_only_multi_record(1, 1))
+        self.assertFalse(g.is_address_only_multi_record(2, 1))
+        self.assertFalse(g.is_address_only_multi_record(2, 2))
 
 
 class TestOtherAddressSlotNumbers(unittest.TestCase):
@@ -331,6 +501,21 @@ class TestEntityAddresses(unittest.TestCase):
         self.assertEqual(addresses[1], tup(ADDRESS_B))
         self.assertEqual(addresses[2][0], "9 Ninth Ave")   # slot 1 before slot 2
         self.assertEqual(addresses[3], tup(ADDRESS_C))
+
+    def test_does_not_fold_sharp_s_like_casefold_would(self):
+        # The engine compares with .NET StringComparison.OrdinalIgnoreCase, which never
+        # expands one character into several. str.casefold() would turn "Straße" into
+        # "strasse", falsely equating it with a plain "Strasse" address that the engine
+        # would treat as different -- str.lower() must not do that expansion. Same
+        # reasoning corpus_variation.py's normalize() already applies (commit 1993e25).
+        legal = {"address_line": "Straße 1", "city": "Berlin", "region": "",
+                "postal_code": "10115", "country": "DE"}
+        hq = {"address_line": "Strasse 1", "city": "Berlin", "region": "",
+             "postal_code": "10115", "country": "DE"}
+        row = address_row(legal_addr=legal, hq_addr=hq)
+        addresses, drops = g.entity_addresses(row, ADDRESS_IX, [])
+        self.assertEqual(addresses, [tup(legal), tup(hq)])
+        self.assertEqual(drops, {"blankAddress": 0, "dedupedCaseFold": 0})
 
 
 class TestTruePairs(unittest.TestCase):
@@ -717,6 +902,110 @@ class TestCikCollisionCounting(unittest.TestCase):
                 candidates = json.load(fh)
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates["0000000042"]["lei"], "LEI0000000000000101")
+
+
+class TestAddressPairingEndToEnd(unittest.TestCase):
+    """Task 3's cycling rule through the real run_parse pipeline, on a small
+    self-contained fixture -- deliberately NOT the shared ParseFixture, so this does not
+    perturb any of its already-pinned counts (see TestCikCollisionCounting above).
+    """
+
+    def _fixture_rows(self):
+        return [
+            # 3 names, 2 addresses: the plan's own worked example, gated end to end.
+            gleif_row("LEI0000000000000201", "ACME LTD",
+                      others=[("ACME TRADING A", "TRADING_OR_OPERATING_NAME"),
+                              ("ACME TRADING B", "TRADING_OR_OPERATING_NAME")],
+                      address={"address_line": "1 Main St", "city": "Dublin",
+                               "region": "Leinster", "postal_code": "D01", "country": "IE",
+                               "jurisdiction": "IE", "legal_form": "H8VW"},
+                      hq_address={"address_line": "2 Rue Neuve", "city": "Paris",
+                                  "region": "", "postal_code": "75001", "country": "FR"}),
+            # 1 name, 2 addresses: the pair shape that could not exist before Task 3 --
+            # the SAME name paired with two DIFFERENT addresses.
+            gleif_row("LEI0000000000000202", "SOLO LTD",
+                      address={"address_line": "3 Hlavna", "city": "Bratislava",
+                               "region": "", "postal_code": "81109", "country": "SK",
+                               "jurisdiction": "SK", "legal_form": "8Z6G"},
+                      hq_address={"address_line": "4 Long Rd", "city": "Bratislava",
+                                  "region": "", "postal_code": "81109", "country": "SK"}),
+            # 1 name, 1 address: today's situation, unchanged.
+            gleif_row("LEI0000000000000203", "SINGLETON PLC",
+                      address={"address_line": "5 King St", "city": "London",
+                               "region": "England", "postal_code": "EC1", "country": "GB",
+                               "jurisdiction": "GB", "legal_form": "B6ES"}),
+        ]
+
+    def _write_gleif(self, path):
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh)
+            w.writerow(GLEIF_HEADER)
+            w.writerows(self._fixture_rows())
+
+    def _run_parse(self, tmp):
+        gleif = os.path.join(tmp, "gleif.csv")
+        self._write_gleif(gleif)
+        out = os.path.join(tmp, "out")
+        config = g.BuildConfig(gleif_path=gleif, sec_path="", out_dir=out, expected={})
+        observed = g.run_parse(config)
+        return config, observed
+
+    def test_record_counts_follow_the_cycling_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, observed = self._run_parse(tmp)
+        # ACME: max(3,2)=3, SOLO: max(1,2)=2, SINGLETON: max(1,1)=1 -> 6 full records.
+        self.assertEqual(observed["entities"], 3)
+        self.assertEqual(observed["fullRecords"], 6)
+        self.assertEqual(observed["gatedRecords"], 6)   # every alias here is gated
+
+    def test_one_entity_becomes_multi_record_on_address_alone(self):
+        # PROVISIONAL count: it inherits entity_addresses' current dedup rule (`.lower()`
+        # as of this task) for free, and will move if that rule changes -- Task 3 never
+        # reimplements it. Only SOLO LTD (1 name, 2 addresses) qualifies here.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, observed = self._run_parse(tmp)
+        self.assertEqual(observed["addressOnlyMultiRecordEntities"], 1)
+
+    def test_solo_ltd_pairs_the_same_name_with_both_addresses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config, _ = self._run_parse(tmp)
+            with open(os.path.join(g.tmp_dir(config), "records-full.csv"),
+                      encoding="utf-8", newline="") as fh:
+                rows = list(_csv.DictReader(fh))
+        solo = [r for r in rows if r["organization_name"] == "SOLO LTD"]
+        self.assertEqual(len(solo), 2)
+        self.assertEqual({r["city"] for r in solo}, {"Bratislava"})
+        self.assertEqual({r["address_line"] for r in solo}, {"3 Hlavna", "4 Long Rd"})
+
+    def test_acme_wraps_the_address_list_around_the_third_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config, _ = self._run_parse(tmp)
+            with open(os.path.join(g.tmp_dir(config), "records-full.csv"),
+                      encoding="utf-8", newline="") as fh:
+                rows = list(_csv.DictReader(fh))
+        acme = [r for r in rows if r["id"].startswith("gleif-LEI0000000000000201-")]
+        self.assertEqual([(r["organization_name"], r["city"]) for r in acme],
+                         [("ACME LTD", "Dublin"), ("ACME TRADING A", "Paris"),
+                          ("ACME TRADING B", "Dublin")])
+
+    def test_address_drops_are_accounted_for(self):
+        # 4 groups per entity (legal, hq, other-1, other-2). ACME and SOLO populate legal
+        # and hq (2 blank other-slot drops each); SINGLETON populates only legal (1 blank
+        # hq + 2 blank other-slot drops). No two addresses in the fixture collide.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, observed = self._run_parse(tmp)
+        self.assertEqual(observed["addressDrops"], {"blankAddress": 7, "dedupedCaseFold": 0})
+
+    def test_two_independent_builds_are_byte_identical(self):
+        with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:
+            config1, _ = self._run_parse(tmp1)
+            config2, _ = self._run_parse(tmp2)
+            with open(os.path.join(g.tmp_dir(config1), "records-full.csv"), "rb") as fh:
+                bytes1 = fh.read()
+            with open(os.path.join(g.tmp_dir(config2), "records-full.csv"), "rb") as fh:
+                bytes2 = fh.read()
+        self.assertGreater(len(bytes1), 0)
+        self.assertEqual(bytes1, bytes2)
 
 
 def _read_all_ids(path):
