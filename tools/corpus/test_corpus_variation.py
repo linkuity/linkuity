@@ -35,6 +35,13 @@ class TestNormalize(unittest.TestCase):
     def test_blank_stays_blank(self):
         self.assertEqual(v.normalize("   "), "")
 
+    def test_does_not_fold_sharp_s_like_casefold_would(self):
+        # The engine compares with .NET StringComparison.OrdinalIgnoreCase, which
+        # never expands one character into several. str.casefold() would turn
+        # "straße" into "strasse", falsely equating it with a plain "strasse" --
+        # str.lower() must not do that expansion.
+        self.assertNotEqual(v.normalize("Straße"), v.normalize("Strasse"))
+
 
 class TestEntitySizes(unittest.TestCase):
     def test_counts_records_per_key(self):
@@ -91,6 +98,39 @@ class TestAccumulateVariation(unittest.TestCase):
         self.assertEqual(varies, {"region": 0})
         self.assertEqual(blanks, {"region": 2})   # both blank -- "no variation" for a
         self.assertEqual(considered, 2)           # different reason than agreement
+
+    def test_one_blank_one_populated_is_not_variation(self):
+        # A blank contributes neither agreement nor disagreement -- it must not be
+        # compared against the populated value at all, matching
+        # WeightedFieldSimilarityStrategy.Evaluate, which emits MissingOneSide and
+        # never Compared when one side is blank.
+        columns = ["region"]
+        index = {"r1": "A", "r2": "A"}
+        rows = [("r1", [""]), ("r2", ["Leinster"])]
+        varies, blanks, considered = v.accumulate_variation(rows, columns, index)
+        self.assertEqual(varies, {"region": 0})
+        self.assertEqual(blanks, {"region": 1})
+        self.assertEqual(considered, 2)
+
+    def test_blank_plus_two_different_populated_values_still_counts(self):
+        # The blank is skipped; the two POPULATED values alone are what disagree.
+        columns = ["region"]
+        index = {"r1": "A", "r2": "A", "r3": "A"}
+        rows = [("r1", [""]), ("r2", ["Leinster"]), ("r3", ["Munster"])]
+        varies, blanks, considered = v.accumulate_variation(rows, columns, index)
+        self.assertEqual(varies, {"region": 1})
+        self.assertEqual(blanks, {"region": 1})
+        self.assertEqual(considered, 3)
+
+    def test_blank_then_same_populated_value_twice_is_not_variation(self):
+        # Order shouldn't matter: a blank followed by two AGREEING populated values
+        # is still zero variation, not one (there is no comparison to trigger on).
+        columns = ["region"]
+        index = {"r1": "A", "r2": "A", "r3": "A"}
+        rows = [("r1", [""]), ("r2", ["Leinster"]), ("r3", ["Leinster"])]
+        varies, blanks, considered = v.accumulate_variation(rows, columns, index)
+        self.assertEqual(varies, {"region": 0})
+        self.assertEqual(blanks, {"region": 1})
 
     def test_comparison_is_trimmed_and_case_insensitive(self):
         columns = ["name"]

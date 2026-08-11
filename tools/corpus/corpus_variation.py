@@ -38,8 +38,17 @@ VARIES = object()
 
 
 def normalize(value):
-    """Trimmed, case-folded comparison key -- matches how the engine decides equality."""
-    return value.strip().casefold()
+    """Trimmed, ordinal-case-insensitive comparison key.
+
+    `.lower()`, not `.casefold()`: the engine compares with .NET's
+    StringComparison.OrdinalIgnoreCase (ReachabilityDiagnosticService.cs:340,369),
+    which maps each character to its invariant lowercase form one-to-one and never
+    expands one character into several. Python's `str.casefold()` is a broader,
+    caseless-matching fold that DOES expand -- "straße".casefold() == "strasse" --
+    which would treat two strings as equal that the engine treats as different.
+    `str.lower()` does not perform that expansion and tracks Ordinal semantics.
+    """
+    return value.strip().lower()
 
 
 def read_truth_pairs(truth_path):
@@ -109,11 +118,21 @@ def accumulate_variation(rows, columns, index):
         this function never needs to know an entity's size, only its membership.
 
     Peak memory is one dict entry per (entity, column) still awaiting its second
-    distinct value; a column resolves to the VARIES sentinel the moment a second
-    distinct value appears and is never grown again after that.
+    distinct POPULATED value; a column resolves to the VARIES sentinel the moment a
+    second distinct value appears and is never grown again after that.
+
+    A blank value is counted in `blank_counts` but otherwise SKIPPED -- it is never
+    stored as a pending value and never compared against one. This mirrors the
+    engine: WeightedFieldSimilarityStrategy.Evaluate
+    (src/Linkuity.Matching/Strategies/Defaults/WeightedFieldSimilarityStrategy.cs:40-48)
+    emits MissingOneSide/MissingBoth and never Compared when either side is blank, so
+    a blank contributes neither agreement nor disagreement there. Treating blank as a
+    value here would let a corpus with heavy missingness but no genuine within-entity
+    disagreement read as "varies" -- the same defect class this tool exists to catch,
+    one level up.
 
     Returns (varies_counts, blank_counts, records_considered):
-        varies_counts[col]  -- entities where `col` has 2+ distinct values
+        varies_counts[col]  -- entities where `col` has 2+ distinct POPULATED values
         blank_counts[col]   -- records (not entities) where `col` is blank
         records_considered  -- total records seen that belong to a multi-record entity
     """
@@ -132,6 +151,7 @@ def accumulate_variation(rows, columns, index):
             val = normalize(raw)
             if not val:
                 blank_counts[col] += 1
+                continue   # neither agreement nor disagreement -- not a comparison
             if col not in state:
                 state[col] = val
             elif state[col] is not VARIES and state[col] != val:
