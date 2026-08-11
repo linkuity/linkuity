@@ -76,3 +76,27 @@ organization_name: 100.0000% of 483,841 multi-record entities.
 address_line, city, region, postal_code, country, jurisdiction, legal_form: 0.0000%.
 (Reproduced by Task 1; see commit d7862b1 and progress.md. Not re-run here because the
 old corpus at C:\dev\datasets\gleif-org\ is untouched by this task.)
+
+====================================================================================
+Job 3 note -- the nameAddressJoint reconciliation is CARDINALITY-only (2026-08-10 review)
+====================================================================================
+`corpus.manifest.json` -> `counts.nameAddressJoint` publishes the (distinct name count,
+distinct address count) joint distribution over every entity, and `run_verify` asserts
+fullRecords == full_records_from_joint(nameAddressJoint) on every build (see
+tools/corpus/gleif_org_corpus.py). Stated precisely: this is a CARDINALITY check, not a
+pairing-CONTENT check. Both sides are aggregations of the same per-entity
+max(len(aliases), len(addresses)), computed in the same pass over the same values, so the
+identity holds by construction under the current code.
+  - Catches: a future edit that desyncs the write loop's real record count from the
+    max(n,a) formula (e.g. a changed loop bound, or a conditional skip, without updating
+    full_records_from_joint to match).
+  - Does NOT catch: a miscount inside entity_aliases/entity_addresses (an error there
+    flows into both sides identically and cancels out), or anything about what got PAIRED
+    with what -- a scrambled cycling rule that always emits (aliases[0], addresses[0])
+    regardless of ordinal would still satisfy this identity, because len(records) would
+    still equal max(n,a).
+Pairing-content correctness is verified elsewhere: fieldSliceSha256 (a hash over a
+deterministic slice of the real emitted rows) and TestAddressPairingEndToEnd in
+tools/corpus/test_gleif_org_corpus.py (asserts the cycling rule's actual row-by-row
+output, including the three-name/two-address wrap-around case). Point there for pairing
+evidence, not to this reconciliation.

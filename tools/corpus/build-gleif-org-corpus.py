@@ -105,10 +105,18 @@ EXPECTED = {
     # this plan: one distinct name, 2+ distinct addresses (Task 3's headline consequence).
     "addressOnlyMultiRecordEntities": 540_734,
     # New under Phase 0.4, job 3 of Task 4: the (distinct name count, distinct address
-    # count) joint distribution over every entity. This is what makes fullRecords
-    # ARITHMETICALLY REPRODUCIBLE without re-parsing the 4.9 GB source -- run_verify
-    # asserts fullRecords == full_records_from_joint(nameAddressJoint) on every build, and
-    # a reader can redo that same sum by hand from the numbers below.
+    # count) joint distribution over every entity. This makes fullRecords'
+    # CARDINALITY arithmetically reproducible without re-parsing the 4.9 GB source -- a
+    # reader can redo the sum by hand from the numbers below -- and run_verify asserts
+    # fullRecords == full_records_from_joint(nameAddressJoint) on every build as a
+    # regression tripwire on that formula. CARDINALITY ONLY, per 2026-08-10 review: both
+    # sides are aggregations of the same max(n,a) computed in the same pass, so this is
+    # true by construction and cannot catch a pairing-CONTENT bug (e.g. cycling always
+    # emitting the first name against the first address regardless of ordinal) -- only a
+    # future desync between the write loop's record count and this formula. See
+    # gleif_org_corpus.py's module comment above name_address_joint_key for the full
+    # scope statement and where pairing-content correctness IS actually covered
+    # (fieldSliceSha256, TestAddressPairingEndToEnd).
     "nameAddressJoint": {
         "01x01": 2_302_430, "01x02": 539_510, "01x03": 817, "01x04": 407,
         "02x01": 350_368, "02x02": 113_106, "02x03": 1_434, "02x04": 2_696,

@@ -1027,6 +1027,12 @@ class TestAddressPairingEndToEnd(unittest.TestCase):
                          {"01x01": 1, "01x02": 1, "03x02": 1})
 
     def test_full_records_reproducible_from_name_address_joint_alone(self):
+        # CARDINALITY-only: this proves the record COUNT is reproducible from the
+        # joint table, not that the pairing CONTENT is correct -- both sides sum the
+        # same max(n,a) computed in the same pass, so this is true by construction
+        # under the current code. Pairing content is covered by
+        # test_acme_wraps_the_address_list_around_the_third_name and
+        # test_solo_ltd_pairs_the_same_name_with_both_addresses above, not this test.
         with tempfile.TemporaryDirectory() as tmp:
             _, observed = self._run_parse(tmp)
         self.assertEqual(g.full_records_from_joint(observed["nameAddressJoint"]),

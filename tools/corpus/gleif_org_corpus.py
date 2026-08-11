@@ -377,15 +377,37 @@ def true_pairs_from_sizes(sizes):
 
 # --- name/address joint distribution ----------------------------------------------
 # entity_records emits max(name_count, address_count) records per entity (Task 3's
-# cycling rule). fullRecords is therefore ARITHMETICALLY reproducible from nothing
-# more than the joint distribution of (distinct name count, distinct address count)
-# across entities -- one small 2-D table, published in the manifest so a reader never
-# has to trust fullRecords as an unverifiable single integer (2026-08-10 review,
-# Task 4). Keys are zero-padded 2-digit strings ("NNxAA") rather than a tuple, both
-# because JSON object keys must be strings and so that alphabetic sort (which is what
+# cycling rule). fullRecords is therefore ARITHMETICALLY reproducible -- as a COUNT --
+# from nothing more than the joint distribution of (distinct name count, distinct
+# address count) across entities: one small 2-D table, published in the manifest so a
+# reader can re-derive the total record count by hand instead of trusting a bare
+# integer (2026-08-10 Task 4).
+#
+# SCOPE, precisely (2026-08-10 review): this is a CARDINALITY check, not a pairing-
+# content check, and the two are not the same claim. Both `fullRecords` and this joint
+# table are aggregations of the same per-entity `max(len(aliases), len(addresses))`,
+# computed in the same pass over the same values -- so the identity below is true BY
+# CONSTRUCTION under the current code, not an independent measurement of it.
+#   - It DOES catch a future edit that desyncs the write loop's real record count from
+#     the max(n,a) formula -- e.g. someone changing entity_records' loop bound, or
+#     adding a conditional skip in the write loop, without updating this helper too.
+#   - It does NOT catch a miscount inside entity_aliases or entity_addresses (an error
+#     there flows into both sides identically and cancels out), and it does NOT catch
+#     anything about what gets PAIRED with what. If cycling were scrambled -- say,
+#     always emitting (aliases[0], addresses[0]) regardless of ordinal, silently
+#     defeating the whole point of this plan -- len(records) would still equal
+#     max(n,a) and this identity would still pass.
+# Pairing-content correctness is covered elsewhere: `fieldSliceSha256` hashes a
+# deterministic slice of actual emitted rows (would catch a swapped/constant mapping
+# within that slice), and `TestAddressPairingEndToEnd` in test_gleif_org_corpus.py
+# asserts the cycling rule's actual output row-by-row, including the wrap-around case.
+# Anyone relying on "the pairing is correct" should point to those, not to this.
+#
+# Keys are zero-padded 2-digit strings ("NNxAA") rather than a tuple, both because JSON
+# object keys must be strings and so that alphabetic sort (which is what
 # `json.dump(..., sort_keys=True)` applies to every nested dict, including this one)
-# coincides with numeric sort for any count under 100 -- comfortably above the
-# largest observed name or address count in this corpus.
+# coincides with numeric sort for any count under 100 -- comfortably above the largest
+# observed name or address count in this corpus.
 def name_address_joint_key(name_count, address_count):
     return f"{name_count:02d}x{address_count:02d}"
 
@@ -396,12 +418,16 @@ def parse_name_address_joint_key(key):
 
 
 def full_records_from_joint(joint):
-    """fullRecords, reproducible from the joint distribution ALONE.
+    """fullRecords' CARDINALITY, reproducible from the joint distribution alone.
 
     Each entity contributes max(name_count, address_count) records (entity_records'
     cycling rule), so summing that maximum, weighted by how many entities share that
-    (name_count, address_count) pair, reconstructs fullRecords without re-parsing the
-    4.9 GB source. run_verify asserts this identity on every build.
+    (name_count, address_count) pair, reconstructs the RECORD COUNT without re-parsing
+    the 4.9 GB source. This is a cardinality identity, not a content one: it is true by
+    construction against the current code (see the module comment above), so it can
+    only ever catch a loop/formula desync, never a pairing-content bug. run_verify
+    asserts this identity on every build as exactly that -- a regression tripwire on
+    the record-count formula, not proof the pairing itself is correct.
     """
     return sum(count * max(*parse_name_address_joint_key(key))
                for key, count in joint.items())
