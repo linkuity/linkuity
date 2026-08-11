@@ -530,6 +530,27 @@ class TestTruePairs(unittest.TestCase):
         self.assertEqual(g.true_pairs_from_sizes([5]), 10)
 
 
+class TestNameAddressJoint(unittest.TestCase):
+    def test_key_is_zero_padded_two_digits(self):
+        self.assertEqual(g.name_address_joint_key(3, 2), "03x02")
+        self.assertEqual(g.name_address_joint_key(1, 1), "01x01")
+
+    def test_parse_key_round_trips(self):
+        self.assertEqual(g.parse_name_address_joint_key(
+            g.name_address_joint_key(11, 4)), (11, 4))
+
+    def test_full_records_from_joint_sums_the_max_per_pair(self):
+        # 2 entities at (3 names, 2 addresses) -> 3 records each; 1 entity at
+        # (1 name, 1 address) -> 1 record. 2*3 + 1*1 = 7.
+        joint = {g.name_address_joint_key(3, 2): 2, g.name_address_joint_key(1, 1): 1}
+        self.assertEqual(g.full_records_from_joint(joint), 7)
+
+    def test_full_records_from_joint_picks_the_larger_side(self):
+        # (1 name, 3 addresses) still yields max(1,3)=3 records per entity, not 1.
+        joint = {g.name_address_joint_key(1, 3): 5}
+        self.assertEqual(g.full_records_from_joint(joint), 15)
+
+
 class TestIndependentRecount(unittest.TestCase):
     def test_recount_agrees_with_the_emitting_formula(self):
         rows = [("gleif-AAA-0",), ("gleif-AAA-1",), ("gleif-AAA-3",),
@@ -996,6 +1017,21 @@ class TestAddressPairingEndToEnd(unittest.TestCase):
             _, observed = self._run_parse(tmp)
         self.assertEqual(observed["addressDrops"], {"blankAddress": 7, "dedupedCaseFold": 0})
 
+    def test_name_address_joint_distribution(self):
+        # ACME: 3 names, 2 addresses. SOLO: 1 name, 2 addresses. SINGLETON: 1 name,
+        # 1 address -- exactly the three (name_count, address_count) pairs this
+        # fixture is built to exercise.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, observed = self._run_parse(tmp)
+        self.assertEqual(observed["nameAddressJoint"],
+                         {"01x01": 1, "01x02": 1, "03x02": 1})
+
+    def test_full_records_reproducible_from_name_address_joint_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, observed = self._run_parse(tmp)
+        self.assertEqual(g.full_records_from_joint(observed["nameAddressJoint"]),
+                         observed["fullRecords"])
+
     def test_two_independent_builds_are_byte_identical(self):
         with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:
             config1, _ = self._run_parse(tmp1)
@@ -1326,6 +1362,13 @@ class TestVerifyAndPublish(unittest.TestCase):
         observed["aliasTypes"]["LEGAL"] += 1
         problems = g.run_verify(config, observed)
         self.assertTrue(any("sum(aliasTypes)" in p for p in problems), problems)
+
+    def test_verify_asserts_name_address_joint_reconciles_with_full_records(self):
+        config = self.config({})
+        observed = self._consistent_observed(config)
+        observed["fullRecords"] += 1
+        problems = g.run_verify(config, observed)
+        self.assertTrue(any("nameAddressJoint" in p for p in problems), problems)
 
     def test_verify_catches_a_corrupted_gate_corpus(self):
         # Stop before publish: run_publish removes the temp directory, so corrupting it

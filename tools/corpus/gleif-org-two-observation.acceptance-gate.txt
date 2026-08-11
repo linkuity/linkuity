@@ -1,0 +1,78 @@
+Task 4 acceptance-gate output -- verbatim `corpus_variation.py` runs against the
+published two-observation corpus at C:\dev\datasets\gleif-org-two-observation\.
+
+Tool: tools/corpus/corpus_variation.py (Task 1). Gate: every one of the eight
+matchable fields (organization_name, address_line, city, region, postal_code,
+country, jurisdiction, legal_form) must show non-zero within-entity variation, or be
+documented as unusable. See the new corpus's README.md, section "Acceptance gate
+result", for the reason jurisdiction and legal_form read 0.0000% and why that is
+expected, not a defect.
+
+====================================================================================
+Run 1 -- the GATE corpus (records.csv / ground-truth.csv), the primary artifact
+====================================================================================
+$ python tools\corpus\corpus_variation.py C:\dev\datasets\gleif-org-two-observation\records.csv C:\dev\datasets\gleif-org-two-observation\ground-truth.csv
+
+Corpus variation report
+  records:                C:\dev\datasets\gleif-org-two-observation\records.csv
+  ground truth:           C:\dev\datasets\gleif-org-two-observation\ground-truth.csv
+  multi-record entities:  1,028,411
+  records among them:     2,136,110
+
+field                                    varies                         blank
+-----------------------------------------------------------------------------
+organization_name  483,841/1,028,411 (47.0474%)         0/2,136,110 (0.0000%)
+address_line       623,976/1,028,411 (60.6738%)         0/2,136,110 (0.0000%)
+city               327,607/1,028,411 (31.8556%)         0/2,136,110 (0.0000%)
+region             197,823/1,028,411 (19.2358%)  452,978/2,136,110 (21.2057%)
+postal_code        369,592/1,028,411 (35.9382%)    24,192/2,136,110 (1.1325%)
+country              65,117/1,028,411 (6.3318%)         0/2,136,110 (0.0000%)
+jurisdiction              0/1,028,411 (0.0000%)         6/2,136,110 (0.0003%)
+legal_form                0/1,028,411 (0.0000%)         0/2,136,110 (0.0000%)
+alias_type         483,841/1,028,411 (47.0474%)         0/2,136,110 (0.0000%)
+script_relation       5,693/1,028,411 (0.5536%)         0/2,136,110 (0.0000%)
+
+PASS: 6 of 8 matchable columns (organization_name, address_line, city, region,
+postal_code, country). Every one of the seven columns that read 0.0000% under the
+alias-only corpus now varies except two.
+FAIL / documented unusable: jurisdiction (0.0000%), legal_form (0.0000%) -- GLEIF
+records exactly one jurisdiction and one legal form per ENTITY, never per address, so
+there is no independent per-address observation to vary across an entity's records.
+This is a structural property of the source data, not a build defect; see
+entity_records' own docstring in tools/corpus/gleif_org_corpus.py.
+
+====================================================================================
+Run 2 -- the FULL corpus (records-full.csv / ground-truth-full.csv), for completeness
+====================================================================================
+$ python tools\corpus\corpus_variation.py C:\dev\datasets\gleif-org-two-observation\records-full.csv C:\dev\datasets\gleif-org-two-observation\ground-truth-full.csv
+
+Corpus variation report
+  records:                C:\dev\datasets\gleif-org-two-observation\records-full.csv
+  ground truth:           C:\dev\datasets\gleif-org-two-observation\ground-truth-full.csv
+  multi-record entities:  1,082,843
+  records among them:     2,267,663
+
+field                                    varies                         blank
+-----------------------------------------------------------------------------
+organization_name  542,109/1,082,843 (50.0635%)         0/2,267,663 (0.0000%)
+address_line       658,846/1,082,843 (60.8441%)         0/2,267,663 (0.0000%)
+city               359,956/1,082,843 (33.2418%)         0/2,267,663 (0.0000%)
+region             198,449/1,082,843 (18.3267%)  504,604/2,267,663 (22.2522%)
+postal_code        371,585/1,082,843 (34.3157%)    34,651/2,267,663 (1.5280%)
+country              65,916/1,082,843 (6.0873%)         0/2,267,663 (0.0000%)
+jurisdiction              0/1,082,843 (0.0000%)         6/2,267,663 (0.0003%)
+legal_form                0/1,082,843 (0.0000%)         0/2,267,663 (0.0000%)
+alias_type         542,109/1,082,843 (50.0635%)         0/2,267,663 (0.0000%)
+script_relation      65,498/1,082,843 (6.0487%)         0/2,267,663 (0.0000%)
+
+Same pattern as Run 1: 6 of 8 matchable columns vary; jurisdiction and legal_form do
+not, for the same structural reason.
+
+====================================================================================
+Reference -- the SAME tool against the OLD alias-only corpus (unchanged, Task 1's
+own acceptance criterion), showing the defect this plan exists to fix
+====================================================================================
+organization_name: 100.0000% of 483,841 multi-record entities.
+address_line, city, region, postal_code, country, jurisdiction, legal_form: 0.0000%.
+(Reproduced by Task 1; see commit d7862b1 and progress.md. Not re-run here because the
+old corpus at C:\dev\datasets\gleif-org\ is untouched by this task.)

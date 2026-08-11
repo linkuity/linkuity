@@ -375,6 +375,38 @@ def true_pairs_from_sizes(sizes):
     return sum(n * (n - 1) // 2 for n in sizes)
 
 
+# --- name/address joint distribution ----------------------------------------------
+# entity_records emits max(name_count, address_count) records per entity (Task 3's
+# cycling rule). fullRecords is therefore ARITHMETICALLY reproducible from nothing
+# more than the joint distribution of (distinct name count, distinct address count)
+# across entities -- one small 2-D table, published in the manifest so a reader never
+# has to trust fullRecords as an unverifiable single integer (2026-08-10 review,
+# Task 4). Keys are zero-padded 2-digit strings ("NNxAA") rather than a tuple, both
+# because JSON object keys must be strings and so that alphabetic sort (which is what
+# `json.dump(..., sort_keys=True)` applies to every nested dict, including this one)
+# coincides with numeric sort for any count under 100 -- comfortably above the
+# largest observed name or address count in this corpus.
+def name_address_joint_key(name_count, address_count):
+    return f"{name_count:02d}x{address_count:02d}"
+
+
+def parse_name_address_joint_key(key):
+    n, a = key.split("x")
+    return int(n), int(a)
+
+
+def full_records_from_joint(joint):
+    """fullRecords, reproducible from the joint distribution ALONE.
+
+    Each entity contributes max(name_count, address_count) records (entity_records'
+    cycling rule), so summing that maximum, weighted by how many entities share that
+    (name_count, address_count) pair, reconstructs fullRecords without re-parsing the
+    4.9 GB source. run_verify asserts this identity on every build.
+    """
+    return sum(count * max(*parse_name_address_joint_key(key))
+               for key, count in joint.items())
+
+
 def recount_true_pairs(records_csv_path):
     """Recount true pairs from records.csv ALONE, deriving membership from record ids.
 
@@ -607,6 +639,9 @@ def run_parse(config):
     # Entities whose ONLY source of multi-record-ness is address variation: one name, more
     # than one distinct address. Task 3's headline consequence, per is_address_only_multi_record.
     address_only_multi_record_entities = 0
+    # (distinct name count, distinct address count) -> entity count. Publishes the joint
+    # distribution `full_records_from_joint` reconciles fullRecords against (Task 4).
+    name_address_joint = {}
     entities = gated_records = full_records = 0
     gated_pairs = full_pairs = 0
     cik = {"rows": 0, "numeric": 0, "seriesIds": 0, "empty": 0,
@@ -636,6 +671,8 @@ def run_parse(config):
                     address_drops[reason] += count
                 if is_address_only_multi_record(name_count, addr_count):
                     address_only_multi_record_entities += 1
+                joint_key = name_address_joint_key(name_count, addr_count)
+                name_address_joint[joint_key] = name_address_joint.get(joint_key, 0) + 1
 
                 entities += 1
                 lei = row[ix["LEI"]].strip()
@@ -703,6 +740,7 @@ def run_parse(config):
         # function's dedup rule changes this count for free the next time parse runs.
         "addressDrops": dict(sorted(address_drops.items())),
         "addressOnlyMultiRecordEntities": address_only_multi_record_entities,
+        "nameAddressJoint": dict(sorted(name_address_joint.items())),
         "scriptRelations": dict(sorted(script_relations.items())),
         "cik": cik,
     }
@@ -972,6 +1010,9 @@ def run_verify(config, observed):
          cik["numeric"] + cik["seriesIds"] + cik["empty"]),
         ("fullRecords", observed["fullRecords"],
          "sum(aliasTypes)", sum(observed["aliasTypes"].values())),
+        ("fullRecords", observed["fullRecords"],
+         "sum(nameAddressJoint[n,a] * max(n,a))",
+         full_records_from_joint(observed["nameAddressJoint"])),
     ]:
         if left != right:
             problems.append(f"reconciliation failed: {left_name} = {left:,} "
