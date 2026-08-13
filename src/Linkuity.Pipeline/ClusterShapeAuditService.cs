@@ -43,7 +43,7 @@ public sealed class ClusterShapeAuditService
         CorpusAuditService.ValidateSupportedStrategies(profile);
 
         var effectiveMax = maxBlockSize ?? profile.MaxBlockSize;
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
         var scoring = _registry.Scoring[profile.ScoringStrategy];
 

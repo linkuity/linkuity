@@ -43,6 +43,37 @@ public sealed record ProfileField
     public string? AliasGroup { get; init; }
 
     /// <summary>
+    /// The field this one's value is DERIVED from, rather than read from a column of its own.
+    /// Set together with <see cref="Extractor"/>; neither means anything without the other, and
+    /// the loader rejects one without the other.
+    ///
+    /// A derived field exists so a fact carried inside another column can be scored as evidence
+    /// in its own right. The organization legal form is the case this was built for: it lives in
+    /// the name's trailing token, name canonicalization must strip it, and stripping is what lets
+    /// two different companies in one corporate group at one address ("ABB AG", "ABB B.V.")
+    /// compare as identical. Deriving it leaves name comparison untouched and gives the form its
+    /// own measured weight — one fact in one place, scored once, which is the same rule that
+    /// forbids scoring five nested location facets as five independent ones.
+    ///
+    /// Derived FROM the name rather than read from a separate legal-form column on purpose: a
+    /// column can be unpopulated, and a name whose suffix differs always carries the fact. Where a
+    /// profile has both available, it must declare only one of them Matchable, or the same fact is
+    /// counted twice.
+    /// </summary>
+    public string? SourceField { get; init; }
+
+    /// <summary>
+    /// Name of the <see cref="Extraction.IValueExtractor"/> that turns
+    /// <see cref="SourceField"/>'s value into this field's value. Resolved against
+    /// <see cref="Extraction.ValueExtractors.Default"/> at profile load, so an unknown name fails
+    /// when the profile is read rather than silently producing an empty field at match time.
+    /// </summary>
+    public string? Extractor { get; init; }
+
+    /// <summary>True when this field's value is derived from another field rather than ingested.</summary>
+    public bool IsDerived => SourceField is not null && Extractor is not null;
+
+    /// <summary>
     /// Values that mean "absent" for this field even though the string itself is non-blank —
     /// GLEIF's legal-form code "8888" ("not provided") sitting on 10% of records, a national-ID
     /// placeholder like "000-00-0000", "UNKNOWN", "N/A". Declared per field because the same

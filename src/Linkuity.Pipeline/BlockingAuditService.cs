@@ -38,7 +38,7 @@ public sealed class BlockingAuditService
         ArgumentNullException.ThrowIfNull(records);
         ArgumentNullException.ThrowIfNull(profile);
 
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
 
         // 1. Per-record, per-strategy keys, computed on the NORMALIZED record (mirrors the engine).
         var perRecord = new List<RecordBlocking>(records.Count);

@@ -37,6 +37,12 @@ public sealed class MatchingProfileFieldDocument
     public FieldEvidenceDocument? Evidence { get; init; }
     public string? AliasGroup { get; init; }
     public List<string>? NullEquivalents { get; init; }
+
+    /// <summary>Field this one's value is derived from. Declared with <see cref="Extractor"/>.</summary>
+    public string? SourceField { get; init; }
+
+    /// <summary>Named value extractor applied to <see cref="SourceField"/>. Declared with it.</summary>
+    public string? Extractor { get; init; }
 }
 
 public sealed class FieldEvidenceDocument

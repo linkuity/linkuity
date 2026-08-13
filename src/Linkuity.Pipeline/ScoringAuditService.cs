@@ -84,7 +84,7 @@ public sealed class ScoringAuditService
         // 'identity' normalization enforced above, the two behaviors are identical
         // (pinned by the batch-parity test). Non-identity profiles are rejected by
         // the guard above rather than silently diverging here.
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
         var bySource = records
             .Select(r => normalization.Normalize(r, profile))
             .ToDictionary(r => r.SourceRecordId, StringComparer.Ordinal);

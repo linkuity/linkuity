@@ -396,7 +396,7 @@ public sealed class FieldEvidenceCalibrationService
             else evalCount++;
         }
 
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
 
         var normalized = fit.Select(r => normalization.Normalize(r, profile)).ToArray();

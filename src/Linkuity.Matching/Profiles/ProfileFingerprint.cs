@@ -115,6 +115,12 @@ public static class ProfileFingerprint
                     .Append(string.Join(",", field.NullEquivalents.OrderBy(v => v, StringComparer.Ordinal)));
             }
 
+            // Same non-null-only rule again. Derivation decides what value this field even holds,
+            // so two profiles differing only in it score differently and must not fingerprint
+            // alike — while a profile declaring no derived field keeps its pre-existing bytes.
+            if (field.IsDerived)
+                canonical.Append('|').Append("derived=").Append(field.SourceField).Append(':').Append(field.Extractor);
+
             canonical.Append('\n');
         }
 

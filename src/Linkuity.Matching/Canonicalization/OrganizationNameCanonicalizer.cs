@@ -19,16 +19,35 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
     // GLOBAL are deliberately absent: semantic, not legal. DE participates only via
     // trailing repetition (SAB DE CV); BANCO DE CHILE is safe because stripping stops
     // at CHILE before ever seeing DE.
-    private static readonly HashSet<string> LegalSuffixes = new(StringComparer.Ordinal)
+    //
+    // The value is the suffix's EQUIVALENCE CLASS: tokens that are alternative spellings of
+    // ONE legal form share a class (CO/COMPANY/COMPANIES, INC/INCORPORATED, LTD/LIMITED),
+    // while genuinely different forms keep their own. That distinction is what
+    // OrganizationLegalFormExtractor recovers after stripping has discarded the token, so
+    // "ABB AG" and "ABB B.V." stay distinguishable while "BOEING CO" and "THE BOEING COMPANY"
+    // do not become so. Forms that are easily mistaken for spelling variants but are separate
+    // registrations are deliberately NOT merged: LP/LLP/LLLP, OY/OYJ (Finnish private vs
+    // public), SA/SAS, KG/KGAA, LLC/PLLC.
+    //
+    // HOLDING(S) is a member for historical reasons and is semantic rather than legal; it is
+    // left in place because removing it changes blocking reach, which is a separate,
+    // separately-measured decision.
+    private static readonly Dictionary<string, string> LegalSuffixClasses = new(StringComparer.Ordinal)
     {
-        "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "COMPANIES",
-        "LLC", "LC", "LP", "LLP", "LLLP", "LTD", "LIMITED", "PLC", "PC", "PLLC", "ULC",
-        "HOLDINGS", "HOLDING",
-        "GMBH", "MBH", "AG", "KG", "KGAA",
-        "SA", "SAS", "SE", "SRL", "SPA",
-        "NV", "BV", "CV", "SAB", "DE",
-        "AB", "ASA", "AS", "OY", "OYJ",
-        "KK", "PTY", "PTE", "BHD", "SDN"
+        ["INC"] = "INC", ["INCORPORATED"] = "INC",
+        ["CORP"] = "CORP", ["CORPORATION"] = "CORP",
+        ["CO"] = "CO", ["COMPANY"] = "CO", ["COMPANIES"] = "CO",
+        ["LTD"] = "LTD", ["LIMITED"] = "LTD",
+        ["LLC"] = "LLC", ["LC"] = "LLC",
+        ["GMBH"] = "GMBH", ["MBH"] = "GMBH",
+        ["HOLDINGS"] = "HOLDINGS", ["HOLDING"] = "HOLDINGS",
+        ["LP"] = "LP", ["LLP"] = "LLP", ["LLLP"] = "LLLP",
+        ["PLC"] = "PLC", ["PC"] = "PC", ["PLLC"] = "PLLC", ["ULC"] = "ULC",
+        ["AG"] = "AG", ["KG"] = "KG", ["KGAA"] = "KGAA",
+        ["SA"] = "SA", ["SAS"] = "SAS", ["SE"] = "SE", ["SRL"] = "SRL", ["SPA"] = "SPA",
+        ["NV"] = "NV", ["BV"] = "BV", ["CV"] = "CV", ["SAB"] = "SAB", ["DE"] = "DE",
+        ["AB"] = "AB", ["ASA"] = "ASA", ["AS"] = "AS", ["OY"] = "OY", ["OYJ"] = "OYJ",
+        ["KK"] = "KK", ["PTY"] = "PTY", ["PTE"] = "PTE", ["BHD"] = "BHD", ["SDN"] = "SDN"
     };
 
     /// <summary>
@@ -37,7 +56,17 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
     /// without handing out a mutable set. Additive: canonicalization behaviour is unchanged.
     /// </summary>
     public static bool IsLegalSuffix(string token)
-        => !string.IsNullOrEmpty(token) && LegalSuffixes.Contains(token.ToUpperInvariant());
+        => !string.IsNullOrEmpty(token) && LegalSuffixClasses.ContainsKey(token.ToUpperInvariant());
+
+    /// <summary>
+    /// The equivalence class of a trailing legal-form suffix, or null when the token is not one.
+    /// Alternative spellings of the same form share a class, so a comparison over classes treats
+    /// CO and COMPANY as agreement and AG and BV as disagreement.
+    /// </summary>
+    public static string? LegalFormClass(string token)
+        => !string.IsNullOrEmpty(token) && LegalSuffixClasses.TryGetValue(token.ToUpperInvariant(), out var cls)
+            ? cls
+            : null;
 
     [GeneratedRegex(@"([A-Z0-9]+) *& *([A-Z0-9]+)")]
     private static partial Regex AmpersandJoin();
@@ -133,7 +162,7 @@ public sealed partial class OrganizationNameCanonicalizer : ITokenCanonicalizer
 
     private static void StripTrailingSuffixes(List<string> tokens)
     {
-        while (tokens.Count > 1 && LegalSuffixes.Contains(tokens[^1]))
+        while (tokens.Count > 1 && LegalSuffixClasses.ContainsKey(tokens[^1]))
             tokens.RemoveAt(tokens.Count - 1);
     }
 }

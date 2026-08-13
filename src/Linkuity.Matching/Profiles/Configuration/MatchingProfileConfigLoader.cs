@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Linkuity.Core.Models;
 using Linkuity.Core.Normalization;
+using Linkuity.Matching.Extraction;
 using Linkuity.Matching.Strategies;
 
 namespace Linkuity.Matching.Profiles.Configuration;
@@ -94,6 +95,45 @@ public sealed class MatchingProfileConfigLoader
             .FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
             throw new MatchingProfileConfigException($"Matching profile '{source}' declares field '{duplicate.Key}' more than once.");
+
+        // Derived fields, validated here rather than in BuildField because every rule below is
+        // about a field's relationship to ANOTHER field, which BuildField cannot see. A bad
+        // reference must fail at load: at match time it would silently produce an empty derived
+        // field, which scores as missing rather than as an error.
+        foreach (var field in fields)
+        {
+            if (field.SourceField is null && field.Extractor is null)
+                continue;
+
+            if (field.SourceField is null || field.Extractor is null)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' declares only one of " +
+                    "'sourceField' and 'extractor'. A derived field needs both: one says where the " +
+                    "value comes from, the other how to read it.");
+
+            if (!ValueExtractors.Default.ContainsKey(field.Extractor))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' names unknown extractor " +
+                    $"'{field.Extractor}'. Registered: {string.Join(", ", ValueExtractors.Default.Keys.OrderBy(k => k, StringComparer.Ordinal))}.");
+
+            var sourceDeclared = fields.FirstOrDefault(
+                f => string.Equals(f.Name, field.SourceField, StringComparison.OrdinalIgnoreCase));
+            if (sourceDeclared is null)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from '{field.SourceField}', " +
+                    "which the profile does not declare.");
+
+            if (ReferenceEquals(sourceDeclared, field))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from itself.");
+
+            // One level only. Chained derivation would make the result depend on the order fields
+            // are processed, and nothing needs it; the rule is a guard, not a limitation felt.
+            if (sourceDeclared.IsDerived)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from " +
+                    $"'{sourceDeclared.Name}', which is itself derived. Derivation is one level deep.");
+        }
 
         // Members of one alias group must be priced identically: they are the same fact, so
         // differing parameters mean the score depends on which spelling a source happened to use.
@@ -327,7 +367,9 @@ public sealed class MatchingProfileConfigLoader
             EvaluatorOptions = field.EvaluatorOptions,
             Evidence = evidence,
             AliasGroup = field.AliasGroup,
-            NullEquivalents = field.NullEquivalents
+            NullEquivalents = field.NullEquivalents,
+            SourceField = field.SourceField,
+            Extractor = field.Extractor
         };
     }
 

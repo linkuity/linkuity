@@ -42,7 +42,7 @@ public sealed class MatchingEngine : IMatchingEngine
         ArgumentNullException.ThrowIfNull(corpus);
         ArgumentNullException.ThrowIfNull(profile);
 
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
         var scoring = _registry.Scoring[profile.ScoringStrategy];
         var decision = _registry.Decision[profile.DecisionStrategy];

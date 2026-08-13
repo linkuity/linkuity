@@ -575,7 +575,7 @@ public sealed class ReachabilityDiagnosticService
     {
         if (cache.TryGetValue(keyId, out var cached)) return cached;
 
-        var normalization = registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(registry, profile);
         var memberRecordIndex = index.KeyMembers[keyId][0];
         var normalized = normalization.Normalize(records[memberRecordIndex], profile);
         var keyName = index.KeyNames[keyId];
