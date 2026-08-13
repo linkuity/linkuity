@@ -81,6 +81,10 @@ public sealed record ProfileField
     /// hard-codes any of these values, they are profile data. Compared case- and trim-insensitively
     /// via <see cref="IsAbsent"/>. Null or empty (the default) changes nothing: every existing
     /// profile that does not declare this behaves exactly as it did before the property existed.
+    ///
+    /// This is the enforced one. Not to be confused with
+    /// <see cref="MatchingProfile.RarityExemptValues"/>, which only waives rarity weighting and
+    /// leaves the value agreeing at full strength.
     /// </summary>
     public IReadOnlyList<string>? NullEquivalents { get; init; }
 

@@ -66,13 +66,13 @@ public static class ProfileFingerprint
         if (profile.MaxAutoClusterSize is { } maxAutoClusterSize)
             canonical.Append("maxAutoClusterSize=").Append(maxAutoClusterSize.ToString(inv)).Append('\n');
 
-        if (profile.PlaceholderValues.Count > 0)
+        if (profile.RarityExemptValues.Count > 0)
         {
             // Sorted for the same reason BlockingStrategies is above: nothing today reads this
             // list order-sensitively (stage 2 reserves it for rarity weighting), so two profiles
             // differing only in declaration order must fingerprint alike.
-            canonical.Append("placeholderValues=")
-                .Append(string.Join(",", profile.PlaceholderValues.OrderBy(v => v, StringComparer.Ordinal)))
+            canonical.Append("rarityExemptValues=")
+                .Append(string.Join(",", profile.RarityExemptValues.OrderBy(v => v, StringComparer.Ordinal)))
                 .Append('\n');
         }
 

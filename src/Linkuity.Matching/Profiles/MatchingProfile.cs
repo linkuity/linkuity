@@ -87,8 +87,19 @@ public sealed record MatchingProfile
     /// <summary>
     /// Values that carry no information despite being rare — "N/A", "UNKNOWN", "TEST". They keep
     /// their ordinary agreement evidence and lose only rarity weighting (stage 2).
+    ///
+    /// NOT the way to declare a sentinel. This says "do not treat this value as rare"; it does not
+    /// say "treat this value as missing". Two records both carrying a value listed here still
+    /// AGREE, at full strength. Nothing consumes this list yet, so declaring a sentinel here
+    /// produces no error, no warning, and no protection whatsoever.
+    ///
+    /// For a value that means the field was never populated — a name recorded as "under
+    /// confirmation", a legal-form code of "8888" — use <see cref="ProfileField.NullEquivalents"/>
+    /// on the field itself. That one is enforced: it suppresses the blocking key and reports the
+    /// comparison as missing rather than as agreement. The two lists were named alike and mean
+    /// opposite things, which is why this one is no longer called "placeholderValues".
     /// </summary>
-    public IReadOnlyList<string> PlaceholderValues { get; init; } = [];
+    public IReadOnlyList<string> RarityExemptValues { get; init; } = [];
 
     /// <summary>
     /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the

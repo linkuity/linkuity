@@ -295,7 +295,7 @@ public sealed class MatchingProfileConfigLoader
             MaxBlockSize = document.MaxBlockSize,
             DefaultPhoneRegion = phoneRegion,
             DefaultDateOrder = dateOrder,
-            PlaceholderValues = document.PlaceholderValues ?? [],
+            RarityExemptValues = document.RarityExemptValues ?? [],
             MinClusterCohesion = document.MinClusterCohesion,
             MaxAutoClusterSize = document.MaxAutoClusterSize
         };
