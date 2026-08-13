@@ -261,20 +261,60 @@ public class LocalBatchRunnerCorpusAuditTests
 
     // ---- over-merge oracle gate ----
 
+    /// <summary>
+    /// Changed deliberately: this used to assert exit 0 on an over-merged corpus, which meant a run
+    /// that merged distinct entities together was indistinguishable from a clean one to anything
+    /// reading exit codes -- CI included. Exit 1 is "it ran and the result is not acceptable",
+    /// still distinct from exit 2's "it could not run".
+    /// </summary>
     [Fact]
-    public async Task ReportOnly_OverMergedCorpus_ReportsFailVerdictButExitsZero()
+    public async Task ReportOnly_OverMergedCorpus_FailsTheRun()
     {
         var f = WriteOverMergedFixture();
 
         var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA));
 
-        Assert.Equal(0, exit);
-        Assert.Equal("", err);   // report-only prints nothing to stderr, ever
+        Assert.Equal(1, exit);
         Assert.Contains("over-merge oracle (largest true entity in ground truth): 2",
             output, StringComparison.Ordinal);
         Assert.Contains("clusters over oracle 1", output, StringComparison.Ordinal);
         Assert.Contains("records in clusters over oracle 3", output, StringComparison.Ordinal);
         Assert.Contains("over-merge gate: FAIL", output, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReportOnly_MergePrecisionFloor_FailsTheRunWhenUnmet()
+    {
+        var f = WriteOverMergedFixture();
+
+        var (exit, output, err) = await RunAsync([.. Audit(f, f.ProfileA), "--min-merge-precision", "0.99"]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("merge-precision gate: FAIL", output, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReportOnly_NoFloorDeclared_ReportsNotGatedRatherThanPass()
+    {
+        var f = WriteFixture();
+
+        var (exit, output, _) = await RunAsync(Audit(f, f.ProfileA));
+
+        Assert.Equal(0, exit);
+        Assert.Contains("merge-precision gate: not gated", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReportOnly_RejectsAnOutOfRangeFloor()
+    {
+        var f = WriteFixture();
+
+        var (exit, _, err) = await RunAsync([.. Audit(f, f.ProfileA), "--min-merge-precision", "1.5"]);
+
+        Assert.Equal(2, exit);   // could not run, distinct from a gate failure
+        Assert.Contains("Invalid --min-merge-precision", err, StringComparison.Ordinal);
     }
 
     [Fact]

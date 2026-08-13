@@ -104,6 +104,46 @@ public sealed record OverMergeAudit(
 }
 
 /// <summary>
+/// An ABSOLUTE ceiling on wrong merges, evaluated against ground truth alone and against no prior
+/// run.
+/// <para>
+/// The baseline gate compares this run's precision to a previous run's, which is the right shape
+/// for catching regressions and the wrong shape for enforcing a standard: a configuration that
+/// merges 610,191 pairs wrongly passes a relative gate comfortably when the run before it merged
+/// 496 million wrongly. "Better than last time" and "good enough to merge on" are different
+/// questions, and only the second one is safe to auto-merge against.
+/// </para>
+/// <para>
+/// <see cref="Floor"/> is null when the caller declared none, and the gate is then reported as not
+/// evaluated rather than as passing — a gate nobody set must never read as a gate that was met.
+/// A run that merged nothing passes vacuously: merging nothing over-merges nothing.
+/// </para>
+/// </summary>
+public sealed record MergePrecisionGate(double? Floor, long PredictedPositive, long TruePositive)
+{
+    /// <summary>Merged pairs that ground truth says are different entities.</summary>
+    public long WrongMerges => PredictedPositive - TruePositive;
+
+    /// <summary>Null when nothing was merged, so precision is undefined rather than zero.</summary>
+    public double? Precision => PredictedPositive == 0 ? null : (double)TruePositive / PredictedPositive;
+
+    /// <summary>False when no floor was declared. Distinct from <see cref="Passed"/> on purpose.</summary>
+    public bool Evaluated => Floor is not null;
+
+    public bool Passed => Floor is not { } floor || Precision is not { } precision || precision >= floor;
+
+    /// <summary>
+    /// Null when the gate passed or was never set. Names the floor, the precision achieved, and
+    /// the raw wrong-merge count — the count matters because a precision of 99% reads as reassuring
+    /// until it is spelled out as tens of thousands of wrongly merged records.
+    /// </summary>
+    public string? FailureMessage => Passed || !Evaluated ? null :
+        $"merge-precision gate failed: {Precision:P4} of merged pairs are correct " +
+        $"({TruePositive}/{PredictedPositive}), below the declared floor of {Floor:P4}. " +
+        $"{WrongMerges} pair(s) were merged that ground truth says are different entities.";
+}
+
+/// <summary>
 /// What cluster-cohesion rejection destroyed, spec §6.4/§9.7: "the re-run must report how often a
 /// failing component contains previously-correct clusters. If that number is large, peel-back is
 /// worth revisiting despite its order-dependence." The design in play is reject-wholesale — a
@@ -131,6 +171,10 @@ public sealed record CorpusAuditResult(
     // every taxonomy unconditionally (no per-taxonomy branch), so there is no "off" state for it to
     // be absent for.
     OverMergeAudit OverMerge,
+    // Always present, like OverMerge: the gate reports itself as not-evaluated when no floor was
+    // declared, which is information a caller needs. Omitting it entirely would make "nobody set a
+    // floor" indistinguishable from "the report predates floors".
+    MergePrecisionGate MergePrecision,
     // Null exactly when the merge policy cannot reject anything under this profile (cohesion off,
     // no size guard) — the same "off means off, not a fabricated zero" shape CorpusAuditService
     // already uses for the `comparisons` list it builds during the walk.

@@ -48,6 +48,7 @@ public sealed class CorpusAuditService
         IReadOnlyDictionary<string, string> groundTruth,
         int? maxBlockSize = null,
         bool gateMode = false,
+        double? minMergePrecision = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(records);
@@ -158,7 +159,8 @@ public sealed class CorpusAuditService
 
         var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
         return BuildResult(records, profile, effectiveMax, normalized, trueLabel, roots,
-            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap, blastRadius, byLabel);
+            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap, blastRadius, byLabel,
+            minMergePrecision);
     }
 
     private static long Pack(int lo, int hi) => ((long)lo << 32) | (uint)hi;
@@ -210,7 +212,7 @@ public sealed class CorpusAuditService
         EntityRecord[] normalized, string?[] trueLabel, int[] roots,
         int unlabeled, long emitted, long occurrences, long floorLifted,
         IEnumerable<TruePairState> states, long tp, long pp, long ap, CohesionBlastRadius? blastRadius,
-        IReadOnlyDictionary<string, List<int>> byLabel)
+        IReadOnlyDictionary<string, List<int>> byLabel, double? minMergePrecision)
     {
         var all = states.ToList();
 
@@ -281,7 +283,9 @@ public sealed class CorpusAuditService
         return new CorpusAuditResult(
             new CorpusAuditInputs(effectiveMax, profile.AutoMatchThreshold, profile.ReviewThreshold,
                 profile.ReviewFloorGate, coverage),
-            counts, metrics, summary, strata, outcomes, overMerge, blastRadius);
+            counts, metrics, summary, strata, outcomes, overMerge,
+            new MergePrecisionGate(minMergePrecision, counts.PredictedPositive, counts.TruePositive),
+            blastRadius);
     }
 
     /// <summary>

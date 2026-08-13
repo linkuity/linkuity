@@ -49,6 +49,12 @@ public static class CorpusAuditCommands
                                           and annotations go to STDERR so CSV stays diffable.
             --top <n>                     Missed true pairs to list (default 20).
             --max-block-size <n>          Overrides the profile's maxBlockSize.
+            --min-merge-precision <0..1>  ABSOLUTE floor on the share of merged pairs that are
+                                          correct. Declared, never derived: a relative gate says
+                                          "better than last time", which a configuration merging
+                                          hundreds of thousands of pairs wrongly can satisfy.
+                                          Omitted means not gated, reported as such, never as
+                                          passing. A failure exits 1.
 
           Baseline gate (mutually exclusive; both require --corpus-source):
             --write-baseline <dir>        Write baseline.json + baseline-strata.csv.
@@ -166,6 +172,20 @@ public static class CorpusAuditCommands
         var (maxBlockSize, maxErr) = AuditCliCommon.ResolveMaxBlockSize(options, profile);
         if (maxErr is not null) { await Console.Error.WriteLineAsync(maxErr); return 2; }
 
+        double? minMergePrecision = null;
+        if (options.TryGetValue("min-merge-precision", out var precisionRaw))
+        {
+            if (!double.TryParse(precisionRaw, NumberStyles.Float, CultureInfo.InvariantCulture,
+                    out var parsed) || parsed <= 0 || parsed > 1)
+            {
+                await Console.Error.WriteLineAsync(
+                    $"Invalid --min-merge-precision value: {precisionRaw}. Expected a number greater " +
+                    "than 0 and at most 1.");
+                return 2;
+            }
+            minMergePrecision = parsed;
+        }
+
         CorpusAuditResult result;
         try
         {
@@ -173,7 +193,7 @@ public static class CorpusAuditCommands
             // one caller that reports on real profiles, so it must never lean on a fallback the
             // audit only carries to keep test call sites from having to thread a policy through.
             result = new CorpusAuditService(MatchingDefaults.CreateRegistry(), new CohesionClusterMergePolicy())
-                .Audit(records, profile, truth, maxBlockSize, gateMode, ct);
+                .Audit(records, profile, truth, maxBlockSize, gateMode, minMergePrecision, ct);
         }
         catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException)
         {
@@ -184,7 +204,21 @@ public static class CorpusAuditCommands
         if (!gateMode)
         {
             Console.Write(Render(result, options, top));
-            return 0;
+
+            // A plain audit run enforces the gates too. It used to report an over-merge failure and
+            // exit 0, which means a run that merged distinct entities together looked identical to
+            // a clean one to anything reading exit codes. Exit 1 is "it ran and the result is not
+            // acceptable", distinct from exit 2's "it could not run" -- the same split the
+            // baseline comparison already uses.
+            var gateFailures = new List<string>();
+            if (result.OverMerge.FailureMessage is { } om) gateFailures.Add(om);
+            if (result.MergePrecision.FailureMessage is { } mp) gateFailures.Add(mp);
+
+            if (gateFailures.Count == 0) return 0;
+
+            foreach (var failure in gateFailures)
+                await Console.Error.WriteLineAsync($"{Environment.NewLine}GATE FAILED: {failure}");
+            return 1;
         }
 
         var frozen = result.AllTruePairs
@@ -343,6 +377,7 @@ public static class CorpusAuditCommands
         // signal pass/fail — simply cannot pass while a cluster this large exists, exactly as spec'd.
         var failures = comparison.Failures.ToList();
         if (result.OverMerge.FailureMessage is { } overMergeFailure) failures.Add(overMergeFailure);
+        if (result.MergePrecision.FailureMessage is { } precisionFailure) failures.Add(precisionFailure);
 
         if (failures.Count > 0)
         {

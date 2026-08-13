@@ -452,7 +452,7 @@ public class ScoringAuditServiceTests
         Assert.NotNull(result.Metrics);
         Assert.Null(result.Metrics!.Precision);
         Assert.Null(result.Metrics.Recall);
-        Assert.Null(result.Metrics.F1);
+        Assert.Null(result.Metrics.RecallIncludingReview);
     }
 
     [Fact]

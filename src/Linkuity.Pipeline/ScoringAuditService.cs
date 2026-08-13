@@ -8,7 +8,7 @@ namespace Linkuity.Pipeline;
 /// <summary>
 /// Analyzes scoring quality for a matching profile over a record set: candidate pairs
 /// under the batch blocking-linear path's engine-parity suppression rule, band
-/// outcomes, and (with ground truth) exact direct-edge P/R/F1, a threshold sweep over
+/// outcomes, and (with ground truth) exact direct-edge precision/recall, a threshold sweep over
 /// distinct observed scores, miss decomposition, and per-field diagnostics. Pure and
 /// I/O-free; the CLI supplies records and ground truth. Fidelity scope is the batch
 /// path ONLY (BatchMatchingService force-rewrites retrieval to blocking-linear);
@@ -246,18 +246,20 @@ public sealed class ScoringAuditService
         var tp = predicted.Count(p => p.IsTrue == true);
         var precision = Ratio(tp, predicted.Count);
         var recall = Ratio(tp, truePairIds.Count);
-        double? f1 = precision is { } pr && recall is { } re && pr + re > 0
-            ? 2 * pr * re / (pr + re) : null;
-
         var trueReachableNotAuto = labeledCandidates
             .Where(p => p.IsTrue == true && p.EngineBand != ScoreBand.Auto).ToList();
         var reviewCapture = Ratio(
             trueReachableNotAuto.Count(p => p.EngineBand == ScoreBand.Review),
             trueReachableNotAuto.Count);
 
+        var reviewPairs = labeledCandidates.Count(p => p.Comparable && p.EngineBand == ScoreBand.Review);
+        var recallIncludingReview = Ratio(
+            tp + labeledCandidates.Count(p => p.IsTrue == true && p.EngineBand == ScoreBand.Review),
+            truePairIds.Count);
+
         var metrics = new ScoringMetrics(
             labeledCandidates.Count, truePairIds.Count, predicted.Count, tp,
-            precision, recall, f1, reviewCapture);
+            precision, recall, reviewCapture, reviewPairs, recallIncludingReview);
 
         // 3. Miss decomposition: every true pair exactly once.
         var trueCandidates = labeledCandidates.Where(p => p.IsTrue == true).ToList();
@@ -280,8 +282,7 @@ public sealed class ScoringAuditService
             var stp = pp.Count(p => p.IsTrue == true);
             var sp = Ratio(stp, pp.Count);
             var sr = Ratio(stp, truePairIds.Count);
-            double? sf = sp is { } a && sr is { } b && a + b > 0 ? 2 * a * b / (a + b) : null;
-            return new ThresholdSweepRow(cut, pp.Count, stp, sp, sr, sf, cut == auto);
+            return new ThresholdSweepRow(cut, pp.Count, stp, sp, sr, cut == auto);
         }).ToList();
 
         // 5. Diagnostics (full ordered lists; the CLI applies --top).

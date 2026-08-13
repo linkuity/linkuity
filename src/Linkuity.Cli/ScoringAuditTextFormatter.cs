@@ -32,11 +32,14 @@ public static class ScoringAuditTextFormatter
             $"Bands: auto={b.Auto} review={b.Review} no-match={b.NoMatch} non-comparable={b.NonComparable}");
         if (result.Metrics is { } met)
         {
+            // Precision first, and no F1: the objective is precision at the auto threshold, with
+            // recall recovered by the review queue rather than traded against it.
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"Direct-edge metrics (labeled pairs): precision {Fmt(met.Precision)}  recall {Fmt(met.Recall)}  " +
-                $"F1 {Fmt(met.F1)}  ({met.TruePositives}/{met.PredictedPositives} predicted true, " +
-                $"{met.TruePairs} true pairs)");
-            sb.AppendLine(CultureInfo.InvariantCulture, $"Review capture: {Fmt(met.ReviewCapture)}");
+                $"At auto threshold: precision {Fmt(met.Precision)}  recall {Fmt(met.Recall)}  " +
+                $"({met.TruePositives}/{met.PredictedPositives} predicted true, {met.TruePairs} true pairs)");
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"Including review:  recall {Fmt(met.RecallIncludingReview)}  " +
+                $"(queue holds {met.ReviewPairs} pair(s); review capture {Fmt(met.ReviewCapture)})");
         }
 
         // 3. Score distribution (0.05 display buckets over candidate pairs)
@@ -58,11 +61,11 @@ public static class ScoringAuditTextFormatter
         // 4. Sweep
         if (result.Sweep.Count > 0)
         {
-            sb.AppendLine("Sweep (cut: predicted / TP / precision / recall / F1):");
+            sb.AppendLine("Sweep (cut: predicted / TP / precision / recall):");
             foreach (var row in result.Sweep)
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"  {row.Cut:F4}{(row.IsEffectiveThreshold ? " *" : "  ")} {row.PredictedPositives} / " +
-                    $"{row.TruePositives} / {Fmt(row.Precision)} / {Fmt(row.Recall)} / {Fmt(row.F1)}");
+                    $"{row.TruePositives} / {Fmt(row.Precision)} / {Fmt(row.Recall)}");
         }
 
         // 5. Miss decomposition
