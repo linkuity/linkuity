@@ -124,6 +124,29 @@ public static class ProfileFingerprint
             canonical.Append('\n');
         }
 
+        // Comparisons, sorted by name for the same reason fields are. Level ORDER is emitted as
+        // written and never sorted: the ladder is resolved first-match-wins, so two profiles with
+        // the same levels in a different order genuinely score differently. Appended only when
+        // present, so a profile declaring none keeps the bytes it had before comparisons existed.
+        foreach (var comparison in profile.Comparisons.OrderBy(c => c.Name, StringComparer.Ordinal))
+        {
+            canonical.Append("comparison=").Append(comparison.Name)
+                .Append('|').Append(string.Join(",", comparison.Fields.OrderBy(f => f, StringComparer.Ordinal)));
+
+            foreach (var level in comparison.Levels)
+            {
+                canonical.Append('|').Append(level.Name).Append('=')
+                    .Append(string.Join("+", level.Requirements.Select(r =>
+                        $"{r.Field}>={r.MinSimilarity.ToString("R", inv)}")))
+                    .Append(':')
+                    .Append(level.Evidence.SameEntityRate.ToString("R", inv)).Append(',')
+                    .Append(level.Evidence.ChanceRate.ToString("R", inv)).Append(',')
+                    .Append(level.Evidence.MaxBits?.ToString("R", inv) ?? "none");
+            }
+
+            canonical.Append('\n');
+        }
+
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return Convert.ToHexString(hash)[..16].ToLowerInvariant();
     }

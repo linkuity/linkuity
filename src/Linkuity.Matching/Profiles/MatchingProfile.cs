@@ -17,6 +17,18 @@ public sealed record MatchingProfile
     public required string ContentType { get; init; }
     public required IReadOnlyList<ProfileField> Fields { get; init; }
 
+    /// <summary>
+    /// Groups of fields that are facets of ONE fact and must therefore contribute once, compared
+    /// as a ladder of ordered levels rather than as independent fields. See
+    /// <see cref="ProfileComparison"/> for why nested attributes (street ⊂ postcode ⊂ city ⊂
+    /// region ⊂ country) cannot be scored independently without inflating them.
+    ///
+    /// Empty by default, and a profile declaring none behaves exactly as it did before this
+    /// existed: the similarity strategy emits one signal per matchable field, as always. A field
+    /// named by a comparison is scored ONLY through that comparison.
+    /// </summary>
+    public IReadOnlyList<ProfileComparison> Comparisons { get; init; } = [];
+
     public required string NormalizationStrategy { get; init; }
     public required IReadOnlyList<string> BlockingStrategies { get; init; }
     public required string CandidateRetrievalStrategy { get; init; }

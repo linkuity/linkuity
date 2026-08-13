@@ -24,6 +24,34 @@ public sealed class MatchingProfileDocument
     public List<string>? RarityExemptValues { get; init; }
     public double? MinClusterCohesion { get; init; }
     public int? MaxAutoClusterSize { get; init; }
+    public List<MatchingProfileComparisonDocument>? Comparisons { get; init; }
+}
+
+public sealed class MatchingProfileComparisonDocument
+{
+    public string? Name { get; init; }
+    public List<string>? Fields { get; init; }
+    public List<MatchingProfileComparisonLevelDocument>? Levels { get; init; }
+}
+
+public sealed class MatchingProfileComparisonLevelDocument
+{
+    public string? Name { get; init; }
+    public List<MatchingProfileLevelRequirementDocument>? Requirements { get; init; }
+    public LevelEvidenceDocument? Evidence { get; init; }
+}
+
+public sealed class MatchingProfileLevelRequirementDocument
+{
+    public string? Field { get; init; }
+    public double? MinSimilarity { get; init; }
+}
+
+public sealed class LevelEvidenceDocument
+{
+    public double? SameEntityRate { get; init; }
+    public double? ChanceRate { get; init; }
+    public double? MaxBits { get; init; }
 }
 
 public sealed class MatchingProfileFieldDocument
