@@ -289,7 +289,9 @@ public class CorpusAuditBaselineTests
             new CorpusAuditMetrics(0.75, 0.7, 0.5, 1.0),
             new CorpusAuditClusterSummary(900, 4, 40, 860),
             [new CorpusStratumRow(Stratum.S1Identical, 200, 150, 100, 20, 25, 5, 100)],
-            []);
+            [],
+            new OverMergeAudit(4, 4, 0, 0, 0),
+            new WrongMergeGate(100, 100));
         var inputs = new BaselineInputs("R", "T", "P", "C", "S", 50, 0.41, 0.31, 0.75);
 
         var baseline = CorpusAuditBaseline.Create(result, inputs, "2026-07-28T00:00:00Z");

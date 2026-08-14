@@ -109,7 +109,7 @@ public class ProfileFingerprintTests
 
     /// <summary>
     /// Locks the built-in profiles' fingerprints to the literal values produced BEFORE
-    /// FieldEvidence/AliasGroup/MinClusterCohesion/MaxAutoClusterSize/PlaceholderValues were added
+    /// FieldEvidence/AliasGroup/MinClusterCohesion/MaxAutoClusterSize/RarityExemptValues were added
     /// to the canonical string (verified by hand against the pre-change code before committing
     /// this test). Neither built-in profile sets any of the five, so if this value ever changes,
     /// either a new key stopped being conditional on non-null/non-empty, or one of the five
@@ -138,16 +138,16 @@ public class ProfileFingerprintTests
             ProfileFingerprint.Of(Base() with { MaxAutoClusterSize = 50 }));
 
     [Fact]
-    public void PlaceholderValuesChange_ChangesFingerprint()
+    public void RarityExemptValuesChange_ChangesFingerprint()
         => Assert.NotEqual(
             ProfileFingerprint.Of(Base()),
-            ProfileFingerprint.Of(Base() with { PlaceholderValues = ["N/A", "UNKNOWN"] }));
+            ProfileFingerprint.Of(Base() with { RarityExemptValues = ["N/A", "UNKNOWN"] }));
 
     [Fact]
-    public void PlaceholderValuesOrder_DoesNotChangeFingerprint()
+    public void RarityExemptValuesOrder_DoesNotChangeFingerprint()
     {
-        var profile = Base() with { PlaceholderValues = ["N/A", "UNKNOWN"] };
-        var reordered = profile with { PlaceholderValues = ["UNKNOWN", "N/A"] };
+        var profile = Base() with { RarityExemptValues = ["N/A", "UNKNOWN"] };
+        var reordered = profile with { RarityExemptValues = ["UNKNOWN", "N/A"] };
 
         Assert.Equal(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(reordered));
     }
@@ -162,6 +162,36 @@ public class ProfileFingerprintTests
         };
 
         Assert.NotEqual(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(aliased));
+    }
+
+    [Fact]
+    public void NullEquivalentsChange_ChangesFingerprint()
+    {
+        // A sentinel list changes which pairs are ever Compared vs Missing*, exactly like
+        // blocking or normalization do -- the fingerprint must catch it.
+        var profile = Base();
+        var withSentinel = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["8888", "UNKNOWN"] } : f).ToList()
+        };
+
+        Assert.NotEqual(ProfileFingerprint.Of(profile), ProfileFingerprint.Of(withSentinel));
+    }
+
+    [Fact]
+    public void NullEquivalentsOrder_DoesNotChangeFingerprint()
+    {
+        var profile = Base();
+        var a = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["8888", "UNKNOWN"] } : f).ToList()
+        };
+        var b = profile with
+        {
+            Fields = profile.Fields.Select((f, i) => i == 0 ? f with { NullEquivalents = ["UNKNOWN", "8888"] } : f).ToList()
+        };
+
+        Assert.Equal(ProfileFingerprint.Of(a), ProfileFingerprint.Of(b));
     }
 
     [Fact]

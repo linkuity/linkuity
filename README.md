@@ -169,6 +169,7 @@ For a full end-to-end demo on real public data, see [showcases/company-resolutio
 
 ## Documentation
 
+- [Choosing which fields to match on](docs/choosing-match-fields.md) — measure what your columns are actually worth, instead of guessing
 - [Configuration reference](docs/configuration.md) — matching profile and merge-policy schema, taxonomies
 - [How matching works](docs/how-matching-works.md) — blocking, scoring, decision bands, merging, tuning
 - [Tutorials](docs/tutorials/README.md) — hands-on durable MDM walkthroughs

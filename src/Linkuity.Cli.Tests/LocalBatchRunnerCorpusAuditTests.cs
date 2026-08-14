@@ -208,6 +208,161 @@ public class LocalBatchRunnerCorpusAuditTests
         Assert.Contains("metric,cluster_pairwise_precision,1.000000", lines);
     }
 
+    /// <summary>
+    /// Three identically-named records auto-match into ONE cluster of 3, but ground truth names only
+    /// two of them (p1, p2) as the same real entity — p3 is its own unrelated singleton that happens
+    /// to share the name. The oracle (largest true entity) is 2; the cluster holds 3. This is the
+    /// over-merge shape the whole gate exists to catch, reproduced through the real CLI wiring.
+    /// </summary>
+    private static Fixture WriteOverMergedFixture()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "linkuity-corpus-om-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        var csv = Path.Combine(dir, "companies.csv");
+        File.WriteAllText(csv,
+            "\"id\",\"organization_name\"\n" +
+            "\"p1\",\"APEX ENERGY LLC\"\n" +
+            "\"p2\",\"APEX ENERGY LLC\"\n" +
+            "\"p3\",\"APEX ENERGY LLC\"\n");
+
+        var gt = Path.Combine(dir, "ground-truth.csv");
+        File.WriteAllText(gt,
+            "\"record_id\",\"canonical_key\"\n" +
+            "\"p1\",\"apex\"\n\"p2\",\"apex\"\n\"p3\",\"apex-solo\"\n");
+
+        var profile = Path.Combine(dir, "a.profile.json");
+        File.WriteAllText(profile, """
+        {
+          "contentType": "organization",
+          "fields": [
+            { "name": "organization_name", "semanticType": "OrganizationName",
+              "roles": ["Searchable","Matchable","Blocking"],
+              "similarityEvaluator": "canonical-jaccard", "weight": 4.0 }
+          ],
+          "normalizationStrategy": "identity",
+          "maxBlockSize": 50,
+          "blockingStrategies": ["exact-value","token"],
+          "candidateRetrievalStrategy": "linear",
+          "similarityStrategy": "field-weighted",
+          "scoringStrategy": "identifier-weighted",
+          "decisionStrategy": "threshold",
+          "clusteringStrategy": "union-find",
+          "autoMatchThreshold": 0.41,
+          "reviewThreshold": 0.31
+        }
+        """);
+
+        var corpusSource = Path.Combine(dir, "corpus-manifest.json");
+        File.WriteAllText(corpusSource, "{ \"snapshot\": \"2026-08-10\", \"records\": 3 }\n");
+
+        return new Fixture(dir, csv, gt, profile, profile, corpusSource);
+    }
+
+    // ---- over-merge oracle gate ----
+
+    /// <summary>
+    /// Changed deliberately: this used to assert exit 0 on an over-merged corpus, which meant a run
+    /// that merged distinct entities together was indistinguishable from a clean one to anything
+    /// reading exit codes -- CI included. Exit 1 is "it ran and the result is not acceptable",
+    /// still distinct from exit 2's "it could not run".
+    /// </summary>
+    [Fact]
+    public async Task ReportOnly_OverMergedCorpus_FailsTheRun()
+    {
+        var f = WriteOverMergedFixture();
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("over-merge oracle (largest true entity in ground truth): 2",
+            output, StringComparison.Ordinal);
+        Assert.Contains("clusters over oracle 1", output, StringComparison.Ordinal);
+        Assert.Contains("records in clusters over oracle 3", output, StringComparison.Ordinal);
+        Assert.Contains("over-merge gate: FAIL", output, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public async Task ReportOnly_CleanCorpus_ReportsWrongMergeGatePass()
+    {
+        var f = WriteFixture();
+
+        var (exit, output, _) = await RunAsync(Audit(f, f.ProfileA));
+
+        Assert.Equal(0, exit);
+        Assert.Contains("wrong-merge gate: PASS", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReportOnly_AnyWrongMerge_FailsTheRun()
+    {
+        // No threshold to satisfy and none to configure: one wrongly merged pair is a failure.
+        var f = WriteOverMergedFixture();
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("wrong-merge gate: FAIL", output, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public async Task ReportOnly_HealthyCorpus_ReportsPassVerdict()
+    {
+        var f = WriteFixture();   // p1/p2 (oracle 2) and q1/q2 (oracle 2), no cluster exceeds either
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA));
+
+        Assert.Equal(0, exit);
+        Assert.Equal("", err);
+        Assert.Contains("over-merge gate: PASS", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The whole point of the task: writing a baseline over a known-bad, over-merged run must still
+    /// RECORD the numbers and REPORT the failure — it must not become unusable for that purpose by
+    /// aborting the write. Enforcement lives in --compare-baseline (below), not here.
+    /// </summary>
+    [Fact]
+    public async Task WriteBaseline_OverMergedCorpus_RecordsTheRunAndReportsFailButExitsZero()
+    {
+        var f = WriteOverMergedFixture();
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA, "--write-baseline", f.BaselineDir));
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Baseline written to", err, StringComparison.Ordinal);
+        Assert.Contains("OVER-MERGE GATE: FAIL", err, StringComparison.Ordinal);
+        Assert.Contains("over-merge gate: FAIL", output, StringComparison.Ordinal);
+        Assert.True(File.Exists(f.JsonPath));
+    }
+
+    /// <summary>
+    /// The gate that "cannot pass in that state": --compare-baseline is where the over-merge oracle
+    /// actually enforces, reusing the EXISTING GATE FAILED/exit-1 mechanism rather than a new one.
+    /// The rule is absolute (this run's clusters against this run's own ground truth) so it fires
+    /// even though nothing about the baseline itself changed.
+    /// </summary>
+    [Fact]
+    public async Task CompareBaseline_OverMergedCorpus_FailsTheGate()
+    {
+        var f = WriteOverMergedFixture();
+        var (writeExit, _, _) = await RunAsync(Audit(f, f.ProfileA, "--write-baseline", f.BaselineDir));
+        Assert.Equal(0, writeExit);
+
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA, "--compare-baseline", f.BaselineDir));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("GATE FAILED:", err, StringComparison.Ordinal);
+        Assert.Contains("over-merge gate failed", err, StringComparison.Ordinal);
+        Assert.Contains("oracle", err, StringComparison.Ordinal);
+        Assert.Contains("stop and escalate", err, StringComparison.Ordinal);
+        Assert.Contains("=== corpus audit ===", output, StringComparison.Ordinal);
+    }
+
     // ---- usage / validation (exit 2) ----
 
     [Fact]

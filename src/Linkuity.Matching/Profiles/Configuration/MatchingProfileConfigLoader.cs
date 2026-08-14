@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Linkuity.Core.Models;
 using Linkuity.Core.Normalization;
+using Linkuity.Matching.Extraction;
 using Linkuity.Matching.Strategies;
 
 namespace Linkuity.Matching.Profiles.Configuration;
@@ -95,6 +96,47 @@ public sealed class MatchingProfileConfigLoader
         if (duplicate is not null)
             throw new MatchingProfileConfigException($"Matching profile '{source}' declares field '{duplicate.Key}' more than once.");
 
+        // Derived fields, validated here rather than in BuildField because every rule below is
+        // about a field's relationship to ANOTHER field, which BuildField cannot see. A bad
+        // reference must fail at load: at match time it would silently produce an empty derived
+        // field, which scores as missing rather than as an error.
+        foreach (var field in fields)
+        {
+            if (field.SourceField is null && field.Extractor is null)
+                continue;
+
+            if (field.SourceField is null || field.Extractor is null)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' declares only one of " +
+                    "'sourceField' and 'extractor'. A derived field needs both: one says where the " +
+                    "value comes from, the other how to read it.");
+
+            if (!ValueExtractors.Default.ContainsKey(field.Extractor))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' names unknown extractor " +
+                    $"'{field.Extractor}'. Registered: {string.Join(", ", ValueExtractors.Default.Keys.OrderBy(k => k, StringComparer.Ordinal))}.");
+
+            var sourceDeclared = fields.FirstOrDefault(
+                f => string.Equals(f.Name, field.SourceField, StringComparison.OrdinalIgnoreCase));
+            if (sourceDeclared is null)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from '{field.SourceField}', " +
+                    "which the profile does not declare.");
+
+            if (ReferenceEquals(sourceDeclared, field))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from itself.");
+
+            // One level only. Chained derivation would make the result depend on the order fields
+            // are processed, and nothing needs it; the rule is a guard, not a limitation felt.
+            if (sourceDeclared.IsDerived)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' field '{field.Name}' derives from " +
+                    $"'{sourceDeclared.Name}', which is itself derived. Derivation is one level deep.");
+        }
+
+        var comparisons = BuildComparisons(document, fields, source);
+
         // Members of one alias group must be priced identically: they are the same fact, so
         // differing parameters mean the score depends on which spelling a source happened to use.
         foreach (var group in fields.Where(f => f.AliasGroup is not null).GroupBy(f => f.AliasGroup!, StringComparer.Ordinal))
@@ -122,6 +164,16 @@ public sealed class MatchingProfileConfigLoader
 
         var scoring = Require(document.ScoringStrategy, "scoringStrategy", source);
         RequireRegistered(registry.Scoring, scoring, "scoring strategy", source);
+
+        // Only the evidence scorer knows what a comparison level is. The older scorers resolve a
+        // signal by field name, would find none for a comparison, and would silently drop the
+        // whole location fact rather than fail — the pair would score as though address had never
+        // been considered.
+        if (comparisons.Count > 0 && scoring != "evidence")
+            throw new MatchingProfileConfigException(
+                $"Matching profile '{source}' declares comparisons but uses the '{scoring}' scoring " +
+                "strategy. Comparison levels carry their own evidence and only the 'evidence' scorer " +
+                "reads them; any other scorer would drop the comparison silently.");
 
         var decision = Require(document.DecisionStrategy, "decisionStrategy", source);
         RequireRegistered(registry.Decision, decision, "decision strategy", source);
@@ -241,6 +293,7 @@ public sealed class MatchingProfileConfigLoader
         {
             ContentType = contentType,
             Fields = fields,
+            Comparisons = comparisons,
             NormalizationStrategy = normalization,
             BlockingStrategies = blocking,
             CandidateRetrievalStrategy = retrieval,
@@ -255,7 +308,7 @@ public sealed class MatchingProfileConfigLoader
             MaxBlockSize = document.MaxBlockSize,
             DefaultPhoneRegion = phoneRegion,
             DefaultDateOrder = dateOrder,
-            PlaceholderValues = document.PlaceholderValues ?? [],
+            RarityExemptValues = document.RarityExemptValues ?? [],
             MinClusterCohesion = document.MinClusterCohesion,
             MaxAutoClusterSize = document.MaxAutoClusterSize
         };
@@ -326,8 +379,156 @@ public sealed class MatchingProfileConfigLoader
             Weight = weight,
             EvaluatorOptions = field.EvaluatorOptions,
             Evidence = evidence,
-            AliasGroup = field.AliasGroup
+            AliasGroup = field.AliasGroup,
+            NullEquivalents = field.NullEquivalents,
+            SourceField = field.SourceField,
+            Extractor = field.Extractor
         };
+    }
+
+    /// <summary>
+    /// Builds and validates the profile's comparisons. Every rule here exists because breaking it
+    /// produces a profile that scores rather than fails: an unreachable level, a fact counted
+    /// twice, or a ladder a pair can fall off the end of.
+    /// </summary>
+    private static List<ProfileComparison> BuildComparisons(
+        MatchingProfileDocument document, List<ProfileField> fields, string source)
+    {
+        if (document.Comparisons is null || document.Comparisons.Count == 0)
+            return [];
+
+        var fieldNames = new HashSet<string>(fields.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var claimedFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var comparisons = new List<ProfileComparison>();
+
+        foreach (var doc in document.Comparisons)
+        {
+            var name = Require(doc.Name, "comparison name", source);
+
+            if (fieldNames.Contains(name))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' comparison '{name}' has the same name as a field. " +
+                    "The scorer resolves a signal by name and would price the comparison as that field.");
+            if (!seenNames.Add(name))
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' declares comparison '{name}' more than once.");
+
+            var members = doc.Fields ?? [];
+            if (members.Count == 0)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' comparison '{name}' declares no fields.");
+
+            foreach (var member in members)
+            {
+                if (!fieldNames.Contains(member))
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' names field '{member}', " +
+                        "which the profile does not declare.");
+
+                // One fact, one contribution: a field scored by two comparisons is counted twice,
+                // which is the exact defect comparisons exist to remove.
+                if (!claimedFields.TryAdd(member, name))
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' field '{member}' belongs to both comparison " +
+                        $"'{claimedFields[member]}' and '{name}'. A field belongs to at most one.");
+
+                var declared = fields.First(f => string.Equals(f.Name, member, StringComparison.OrdinalIgnoreCase));
+                if (declared.AliasGroup is not null)
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' field '{member}' is in comparison '{name}' and " +
+                        $"also in alias group '{declared.AliasGroup}'. Both exist to make one fact " +
+                        "contribute once; using them together counts it through two mechanisms.");
+            }
+
+            var levelDocs = doc.Levels ?? [];
+            if (levelDocs.Count < 2)
+                throw new MatchingProfileConfigException(
+                    $"Matching profile '{source}' comparison '{name}' declares {levelDocs.Count} level(s). " +
+                    "A comparison needs at least two: one or more that match, and a final catch-all.");
+
+            var memberSet = new HashSet<string>(members, StringComparer.OrdinalIgnoreCase);
+            var seenLevels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var levels = new List<ComparisonLevel>();
+
+            for (var i = 0; i < levelDocs.Count; i++)
+            {
+                var levelDoc = levelDocs[i];
+                var levelName = Require(levelDoc.Name, $"level name in comparison '{name}'", source);
+                if (!seenLevels.Add(levelName))
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' declares level '{levelName}' " +
+                        "more than once. Levels are resolved by name when scoring.");
+
+                var requirements = (levelDoc.Requirements ?? [])
+                    .Select(r => new LevelRequirement
+                    {
+                        Field = Require(r.Field, $"requirement field in level '{levelName}'", source),
+                        MinSimilarity = r.MinSimilarity ?? 1.0
+                    })
+                    .ToList();
+
+                var isLast = i == levelDocs.Count - 1;
+                if (isLast && requirements.Count > 0)
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' ends with level '{levelName}', " +
+                        "which has requirements. The last level must have none so that every pair the " +
+                        "comparison evaluates lands somewhere.");
+                if (!isLast && requirements.Count == 0)
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' level '{levelName}' has no " +
+                        "requirements but is not last, so it always matches and every level below it " +
+                        "is unreachable.");
+
+                foreach (var requirement in requirements)
+                    if (!memberSet.Contains(requirement.Field))
+                        throw new MatchingProfileConfigException(
+                            $"Matching profile '{source}' comparison '{name}' level '{levelName}' requires " +
+                            $"field '{requirement.Field}', which is not among the comparison's fields.");
+
+                if (levelDoc.Evidence is not { SameEntityRate: { } m, ChanceRate: { } u })
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' level '{levelName}' is missing " +
+                        "evidence; sameEntityRate and chanceRate are both required on every level.");
+
+                LevelEvidence evidence;
+                try
+                {
+                    evidence = new LevelEvidence
+                    {
+                        SameEntityRate = m,
+                        ChanceRate = u,
+                        MaxBits = levelDoc.Evidence.MaxBits
+                    };
+                }
+                catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
+                {
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' level '{levelName}' has invalid " +
+                        $"evidence: {ReasonOf(ex)}");
+                }
+
+                // Same rule as a field's agreement cap, for the same reason: nothing that scores
+                // positive may be able to carry a merge on its own. A level scoring negative needs
+                // no cap, because disagreement never carries one.
+                if (evidence.Bits > 0 && evidence.MaxBits is null)
+                    throw new MatchingProfileConfigException(
+                        $"Matching profile '{source}' comparison '{name}' level '{levelName}' scores " +
+                        $"{evidence.Bits:0.###} bits but declares no maxBits. A level that scores positive " +
+                        "must declare a ceiling.");
+
+                levels.Add(new ComparisonLevel
+                {
+                    Name = levelName,
+                    Requirements = requirements,
+                    Evidence = evidence
+                });
+            }
+
+            comparisons.Add(new ProfileComparison { Name = name, Fields = members, Levels = levels });
+        }
+
+        return comparisons;
     }
 
     /// <summary>

@@ -22,6 +22,11 @@ public class SemanticFieldTypeTests
     [InlineData(SemanticFieldType.PostalCode,      "\"postal_code\"")]
     [InlineData(SemanticFieldType.OrganizationName,"\"organization_name\"")]
     [InlineData(SemanticFieldType.DomainName,      "\"domain_name\"")]
+    [InlineData(SemanticFieldType.City,            "\"city\"")]
+    [InlineData(SemanticFieldType.Region,          "\"region\"")]
+    [InlineData(SemanticFieldType.Country,         "\"country\"")]
+    [InlineData(SemanticFieldType.Jurisdiction,    "\"jurisdiction\"")]
+    [InlineData(SemanticFieldType.LegalForm,       "\"legal_form\"")]
     public void Serializes_ToSnakeCaseJsonString(SemanticFieldType type, string expected)
     {
         var json = JsonSerializer.Serialize(type, Options);

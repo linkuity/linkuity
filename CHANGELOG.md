@@ -9,6 +9,20 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- `match corpus fields` CLI command: measures how much each of your columns is
+  actually worth for matching, on your own data, so a matching profile is built
+  from measurement rather than guesswork. Per matchable field it reports fill
+  rate (declared `nullEquivalents` count as unfilled), how often records of the
+  SAME entity agree, how often records of DIFFERENT entities agree anyway, the
+  resulting evidence in bits, and a plain verdict. The two agreement rates are
+  printed side by side because neither means anything alone — a column the same
+  entity agrees on 99.8% of the time is worthless if unrelated records agree
+  99.9% of the time too. Also reports what the data can never resolve: records
+  identical on every matchable field that belong to different entities, and
+  which fields were empty throughout the largest such group — the direct answer
+  to "what would we have to collect to separate these". Rates come from the same
+  calibration service the engine scores with, never measured separately. See
+  [docs/choosing-match-fields.md](docs/choosing-match-fields.md).
 - `canonical-jaccard` similarity evaluator: token-set Jaccard computed on
   canonicalized organization names (leading articles dropped, trailing legal
   suffixes stripped, ampersand initials collapsed — the same canonicalizer
@@ -49,6 +63,18 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   company-resolution showcase are the first consumers (`50`).
 
 ### Changed
+- `match corpus audit` in report-only mode now exits **1** when a quality gate
+  fails, instead of printing the failure and exiting 0. A run that merged records
+  belonging to different entities was previously indistinguishable from a clean
+  one to anything reading exit codes, CI included. Exit 2 still means "could not
+  run", and `--write-baseline` still exits 0 deliberately — recording a
+  known-bad run is how a reference point gets established at all.
+- Wrong merges are now gated absolutely rather than relative to a previous run.
+  A run fails if ANY merged pair joins records that ground truth says are
+  different entities; there is no threshold and none is configurable, because a
+  threshold answers "how many wrong merges are acceptable" and the answer is
+  none. Records that cannot be told apart from the available fields are not an
+  allowance to merge them wrongly — such a pair belongs in review, or apart.
 - The built-in `organization` matching profile now scores `organization_name`
   with `canonical-jaccard` (previously `fuzzy`; weight unchanged). This is a
   **behavior change** for anyone relying on the built-in organization
@@ -97,6 +123,12 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   corpus-frequency criterion. (Showcase effective ceiling unchanged at 88.9%.)
 
 ### Removed
+- F1 from `match scoring audit` output, its threshold sweep, and the
+  `ScoringMetrics`/`ThresholdSweepRow` records. F1 weights precision and recall
+  equally, which is the wrong objective when a wrong merge is not an acceptable
+  trade for a found match: an F1 of 0.30 reads as a tuning dial when it is in
+  fact two thirds of merges being wrong. Replaced by the review-queue size and
+  recall including review, reported alongside precision and recall separately.
 - The multi-step job API (`/jobs/*`), the in-process/Azure Service Bus dispatch
   machinery, the two-lane queue, and the `Linkuity.Worker` post-processing host.
   Azure Blob Storage remains an optional artifact-store backend.

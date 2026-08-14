@@ -46,7 +46,16 @@ public sealed record ScoringCoverage(
     int SkippedGroundTruthRows,
     int UnlabeledEndpointPairs);
 
-/// <summary>Direct-edge metric family over labeled pairs. Null metric = n/a (zero denominator).</summary>
+/// <summary>
+/// Direct-edge metric family over labeled pairs. Null metric = n/a (zero denominator).
+/// <para>
+/// F1 is deliberately absent. It weights precision and recall equally, which is the wrong
+/// objective when a wrong merge is not an acceptable trade for a found one: an F1 of 0.30 reads as
+/// a tuning dial when it is in fact two thirds of merges being wrong. What replaces it is the pair
+/// of numbers a reviewer actually needs — precision at the auto threshold, and how much recall the
+/// review queue recovers on top of it, at what queue cost.
+/// </para>
+/// </summary>
 public sealed record ScoringMetrics(
     int LabeledCandidatePairs,
     int TruePairs,
@@ -54,8 +63,15 @@ public sealed record ScoringMetrics(
     int TruePositives,
     double? Precision,
     double? Recall,
-    double? F1,
-    double? ReviewCapture);
+    /// <summary>Share of true pairs that were NOT auto-matched but did land in review.</summary>
+    double? ReviewCapture,
+    /// <summary>Labeled candidate pairs sitting in the review band — the queue's size, which is
+    /// what recall recovered through review actually costs.</summary>
+    int ReviewPairs,
+    /// <summary>Share of true pairs reached by auto OR review. The honest coverage figure: recall
+    /// alone understates a system whose design routes ambiguity to a human rather than merging
+    /// it.</summary>
+    double? RecallIncludingReview);
 
 /// <summary>Every true pair attributed to exactly one outcome.</summary>
 public sealed record MissDecomposition(
@@ -73,7 +89,6 @@ public sealed record ThresholdSweepRow(
     int TruePositives,
     double? Precision,
     double? Recall,
-    double? F1,
     bool IsEffectiveThreshold);
 
 /// <summary>Full result of a scoring audit over a record set for one profile.</summary>

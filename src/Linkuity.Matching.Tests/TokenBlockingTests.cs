@@ -1,3 +1,4 @@
+using Linkuity.Matching.Profiles;
 using Linkuity.Matching.Strategies;
 using Linkuity.Matching.Strategies.Defaults;
 
@@ -11,6 +12,13 @@ public class TokenBlockingTests
         => Strategy.GenerateKeys(
             TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = organizationName }),
             TestProfiles.Person);
+
+    private static MatchingProfile PersonWithOrgNameSentinel(params string[] sentinels) => TestProfiles.Person with
+    {
+        Fields = TestProfiles.Person.Fields
+            .Select(f => f.Name == "organization_name" ? f with { NullEquivalents = sentinels } : f)
+            .ToList()
+    };
 
     [Fact]
     public void Token_EmitsEveryTokenOfEveryVariant()
@@ -41,4 +49,25 @@ public class TokenBlockingTests
             TestProfiles.Person);
         Assert.Empty(keys);
     }
+
+    /// <summary>
+    /// This strategy reads record.Fields directly rather than through BlockingFields.Select, so
+    /// its own blank check has to honour NullEquivalents independently -- otherwise every record
+    /// declaring a sentinel organization_name would collapse into shared token keys.
+    /// </summary>
+    [Fact]
+    public void Token_DeclaredSentinelValue_NoKeys()
+    {
+        var keys = Strategy.GenerateKeys(
+            TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "UNKNOWN" }),
+            PersonWithOrgNameSentinel("UNKNOWN"));
+
+        Assert.Empty(keys);
+    }
+
+    [Fact]
+    public void Token_UndeclaredValue_NotTreatedAsSentinel()
+        => Assert.NotEmpty(Strategy.GenerateKeys(
+            TestRecords.Person("r", new Dictionary<string, string> { ["organization_name"] = "ACME" }),
+            PersonWithOrgNameSentinel("UNKNOWN")));
 }

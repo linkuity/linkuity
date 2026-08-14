@@ -36,6 +36,10 @@ public sealed class EvidenceScoringStrategy : IScoringStrategy
         foreach (var field in profile.Fields)
             fields[field.Name] = field;
 
+        var comparisons = new Dictionary<string, ProfileComparison>(StringComparer.Ordinal);
+        foreach (var comparison in profile.Comparisons)
+            comparisons[comparison.Name] = comparison;
+
         double total = 0;
         var breakdown = new List<ScoreContribution>(signals.Count);
         var best = new Dictionary<string, double>(StringComparer.Ordinal);   // alias group -> winning contribution
@@ -44,6 +48,31 @@ public sealed class EvidenceScoringStrategy : IScoringStrategy
         var priced = new List<(SimilaritySignal Signal, ProfileField Field, FieldEvidence Evidence, double Contribution)>();
         foreach (var signal in signals)
         {
+            // A comparison contributes its matched LEVEL's evidence, whole and once. Nothing is
+            // interpolated here: the levels partition the outcomes, so the pair landed in exactly
+            // one and log2(m/u) for that level IS the evidence — negative for the bottom rungs,
+            // which is how a comparison expresses disagreement.
+            if (comparisons.TryGetValue(signal.Name, out var comparison))
+            {
+                var matched = signal.Outcome == ComparisonOutcome.Compared && signal.Level is not null
+                    ? comparison.Levels.FirstOrDefault(l => string.Equals(l.Name, signal.Level, StringComparison.Ordinal))
+                    : null;
+
+                if (signal.Outcome == ComparisonOutcome.Compared && matched is null)
+                    throw new InvalidOperationException(
+                        $"Comparison '{signal.Name}' reported level '{signal.Level ?? "(none)"}', which it does not " +
+                        "declare. A level that cannot be resolved cannot be priced, and scoring it at " +
+                        "some default would invent evidence.");
+
+                var levelContribution = matched?.Evidence.Bits ?? 0;
+                total += levelContribution;
+                breakdown.Add(new ScoreContribution(
+                    signal.Name, signal.Value,
+                    comparison.Levels.Max(l => l.Evidence.Bits),
+                    levelContribution, signal.Outcome));
+                continue;
+            }
+
             // A signal naming no profile field cannot be priced. Scoring it at some default would
             // invent evidence; dropping it is the only honest option, and the shipped similarity
             // strategy never produces one.

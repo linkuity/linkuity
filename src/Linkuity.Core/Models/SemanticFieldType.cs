@@ -15,5 +15,10 @@ public enum SemanticFieldType
     SourceIdentifier,
     Sku,
     Gtin,
-    ProductName
+    ProductName,
+    City,
+    Region,
+    Country,
+    Jurisdiction,
+    LegalForm
 }

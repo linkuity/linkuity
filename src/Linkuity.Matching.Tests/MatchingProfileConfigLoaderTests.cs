@@ -262,22 +262,43 @@ public class MatchingProfileConfigLoaderTests
     }
 
     [Fact]
-    public void LoadFromJson_PlaceholderValuesAbsent_DefaultsToEmpty()
+    public void LoadFromJson_RarityExemptValuesAbsent_DefaultsToEmpty()
     {
         // A frozen measurement baseline depends on shipped profiles that omit this key loading
         // exactly as they did before it existed.
         var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, Registry());
-        Assert.Empty(profile.PlaceholderValues);
+        Assert.Empty(profile.RarityExemptValues);
     }
 
     [Fact]
-    public void LoadFromJson_ReadsExplicitPlaceholderValues()
+    public void LoadFromJson_ReadsExplicitRarityExemptValues()
     {
         var json = OrganizationJson.Replace(
             "\"reviewThreshold\": 0.75",
-            "\"reviewThreshold\": 0.75,\n      \"placeholderValues\": [\"N/A\", \"UNKNOWN\"]");
+            "\"reviewThreshold\": 0.75,\n      \"rarityExemptValues\": [\"N/A\", \"UNKNOWN\"]");
         var profile = new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
-        Assert.Equal(["N/A", "UNKNOWN"], profile.PlaceholderValues);
+        Assert.Equal(["N/A", "UNKNOWN"], profile.RarityExemptValues);
+    }
+
+    [Fact]
+    public void LoadFromJson_NullEquivalentsAbsent_DefaultsToNull()
+    {
+        // No silent default: a field that does not declare nullEquivalents must load exactly as
+        // it did before this property existed -- no sentinel is invented for it.
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(OrganizationJson, Registry());
+        Assert.Null(profile.Fields.Single(f => f.Name == "organization_name").NullEquivalents);
+    }
+
+    [Fact]
+    public void LoadFromJson_ReadsExplicitNullEquivalents()
+    {
+        var json = OrganizationJson.Replace(
+            "\"similarityEvaluator\": \"fuzzy\", \"weight\": 2.0 },",
+            "\"similarityEvaluator\": \"fuzzy\", \"weight\": 2.0, \"nullEquivalents\": [\"8888\", \"UNKNOWN\"] },");
+
+        var profile = new MatchingProfileConfigLoader().LoadFromJson(json, Registry());
+
+        Assert.Equal(["8888", "UNKNOWN"], profile.Fields.Single(f => f.Name == "organization_name").NullEquivalents);
     }
 
     // Two OrganizationName fields sharing an alias group, %EVIDENCE_A%/%EVIDENCE_B% independently

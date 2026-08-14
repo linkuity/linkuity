@@ -17,6 +17,18 @@ public sealed record MatchingProfile
     public required string ContentType { get; init; }
     public required IReadOnlyList<ProfileField> Fields { get; init; }
 
+    /// <summary>
+    /// Groups of fields that are facets of ONE fact and must therefore contribute once, compared
+    /// as a ladder of ordered levels rather than as independent fields. See
+    /// <see cref="ProfileComparison"/> for why nested attributes (street ⊂ postcode ⊂ city ⊂
+    /// region ⊂ country) cannot be scored independently without inflating them.
+    ///
+    /// Empty by default, and a profile declaring none behaves exactly as it did before this
+    /// existed: the similarity strategy emits one signal per matchable field, as always. A field
+    /// named by a comparison is scored ONLY through that comparison.
+    /// </summary>
+    public IReadOnlyList<ProfileComparison> Comparisons { get; init; } = [];
+
     public required string NormalizationStrategy { get; init; }
     public required IReadOnlyList<string> BlockingStrategies { get; init; }
     public required string CandidateRetrievalStrategy { get; init; }
@@ -87,8 +99,19 @@ public sealed record MatchingProfile
     /// <summary>
     /// Values that carry no information despite being rare — "N/A", "UNKNOWN", "TEST". They keep
     /// their ordinary agreement evidence and lose only rarity weighting (stage 2).
+    ///
+    /// NOT the way to declare a sentinel. This says "do not treat this value as rare"; it does not
+    /// say "treat this value as missing". Two records both carrying a value listed here still
+    /// AGREE, at full strength. Nothing consumes this list yet, so declaring a sentinel here
+    /// produces no error, no warning, and no protection whatsoever.
+    ///
+    /// For a value that means the field was never populated — a name recorded as "under
+    /// confirmation", a legal-form code of "8888" — use <see cref="ProfileField.NullEquivalents"/>
+    /// on the field itself. That one is enforced: it suppresses the blocking key and reports the
+    /// comparison as missing rather than as agreement. The two lists were named alike and mean
+    /// opposite things, which is why this one is no longer called "placeholderValues".
     /// </summary>
-    public IReadOnlyList<string> PlaceholderValues { get; init; } = [];
+    public IReadOnlyList<string> RarityExemptValues { get; init; } = [];
 
     /// <summary>
     /// Minimum share of the comparisons made INSIDE a cluster that must have agreed, or the

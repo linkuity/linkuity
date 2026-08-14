@@ -591,4 +591,106 @@ public class ReachabilityDiagnosticTests
 
         Assert.Equal(ignoringSuppression.OrderBy(x => x), active.OrderBy(x => x));
     }
+
+    // ------------------------------------------------------------------------------------
+    // Task 5: reachability classification and co-occurrence stats must honour
+    // ProfileField.NullEquivalents, not a raw blank check -- otherwise a declared sentinel
+    // (e.g. GLEIF legal_form "8888") is read as a genuine shared value here while the matcher
+    // correctly treats it as absent.
+    // ------------------------------------------------------------------------------------
+
+    // organization_name (usable) plus legal_form declared Blocking-ONLY (no Identifier role),
+    // SemanticType.LegalForm -- unusable for the same reason NameAndAddressProfile's
+    // address_line is: no configured strategy can key it. legal_form additionally declares
+    // "8888" as a sentinel, mirroring the real GLEIF profile this task exists for.
+    private static MatchingProfile NameAndLegalFormProfile() => new()
+    {
+        ContentType = "organization",
+        Fields =
+        [
+            new ProfileField
+            {
+                Name = "organization_name",
+                SemanticType = SemanticFieldType.OrganizationName,
+                Roles = FieldRole.Searchable | FieldRole.Matchable | FieldRole.Blocking,
+                SimilarityEvaluator = "canonical-jaccard",
+                Weight = 4.0
+            },
+            new ProfileField
+            {
+                Name = "legal_form",
+                SemanticType = SemanticFieldType.LegalForm,
+                Roles = FieldRole.Blocking,
+                SimilarityEvaluator = "exact",
+                Weight = 1.0,
+                NullEquivalents = ["8888"]
+            }
+        ],
+        NormalizationStrategy = "identity",
+        BlockingStrategies = ["fingerprint", "token", "acronym"],
+        CandidateRetrievalStrategy = "linear",
+        SimilarityStrategy = "field-weighted",
+        ScoringStrategy = "identifier-weighted",
+        DecisionStrategy = "threshold",
+        ClusteringStrategy = "union-find",
+        AutoMatchThreshold = 0.41,
+        ReviewThreshold = 0.31,
+        MaxBlockSize = 50
+    };
+
+    /// <summary>"KAPPA VENTURES" / "LYNX ENTERPRISES" share no name-derived key (same names
+    /// DeclaredUnusableAndUndeclaredFixture uses for its address_line case). Both carry
+    /// legal_form "8888", the ONLY declared sentinel for that field -- so, unlike
+    /// DeclaredUnusableAndUndeclaredFixture, the shared value must NOT count as a B1 match: it
+    /// is absent per ProfileField.IsAbsent on both sides. No other column is shared, so this
+    /// must land in B3, not B1.</summary>
+    private static (IReadOnlyList<EntityRecord> Records, MatchingProfile Profile, IReadOnlyDictionary<string, string> GroundTruth) SentinelOnlySharedBlockingFieldFixture()
+    {
+        var records = new List<EntityRecord>
+        {
+            Org("e0", "KAPPA VENTURES", ("legal_form", "8888")),
+            Org("e1", "LYNX ENTERPRISES", ("legal_form", "8888")),
+        };
+        var groundTruth = new Dictionary<string, string> { ["e0"] = "kappa-lynx", ["e1"] = "kappa-lynx" };
+        return (records, NameAndLegalFormProfile(), groundTruth);
+    }
+
+    [Fact]
+    public void DeclaredSentinelOnlySharedBlockingValue_IsNotCauseB1()
+    {
+        var result = Diagnose(SentinelOnlySharedBlockingFieldFixture(), maxBlockSize: null);
+
+        Assert.Equal(1, result.CauseB3.PairCount);
+        Assert.Equal(0, result.CauseB1.PairCount);
+        Assert.DoesNotContain("legal_form", result.CauseB1.ByColumn.Keys);
+    }
+
+    [Fact]
+    public void DeclaredSentinelOnlySharedValue_IsNotACoOccurrenceSample()
+    {
+        var result = Diagnose(SentinelOnlySharedBlockingFieldFixture(), maxBlockSize: null);
+
+        var legalForm = result.Unreachable.ByColumn["legal_form"];
+        Assert.Equal(0, legalForm.SampleSize);
+        Assert.Equal(0, legalForm.SharedCount);
+    }
+
+    [Fact]
+    public void GenuineSharedBlockingValue_StillCausesB1()
+    {
+        // Control: a real (non-sentinel) shared value on the same declared-but-unusable field
+        // must still classify as B1, so the sentinel fix above is not achieved by breaking B1
+        // detection generally.
+        var records = new List<EntityRecord>
+        {
+            Org("f0", "KAPPA VENTURES", ("legal_form", "LLC")),
+            Org("f1", "LYNX ENTERPRISES", ("legal_form", "LLC")),
+        };
+        var groundTruth = new Dictionary<string, string> { ["f0"] = "kappa-lynx-2", ["f1"] = "kappa-lynx-2" };
+
+        var result = Diagnose((records, NameAndLegalFormProfile(), groundTruth), maxBlockSize: null);
+
+        Assert.Equal(1, result.CauseB1.PairCount);
+        Assert.Contains("legal_form", result.CauseB1.ByColumn.Keys);
+    }
 }

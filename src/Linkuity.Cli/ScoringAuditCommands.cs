@@ -9,7 +9,7 @@ namespace Linkuity.Cli;
 /// <summary>
 /// `match scoring audit` and `match scoring explain`: score candidate pairs under a
 /// profile (batch blocking-linear fidelity) and report band outcomes, direct-edge
-/// P/R/F1, threshold sweep, miss decomposition, and per-field diagnostics. See
+/// precision/recall, threshold sweep, miss decomposition, and per-field diagnostics. See
 /// docs/superpowers/specs/2026-07-26-scoring-audit-instrument-design.md.
 /// </summary>
 public static class ScoringAuditCommands

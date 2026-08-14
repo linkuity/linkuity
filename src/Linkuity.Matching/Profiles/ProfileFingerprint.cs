@@ -66,13 +66,13 @@ public static class ProfileFingerprint
         if (profile.MaxAutoClusterSize is { } maxAutoClusterSize)
             canonical.Append("maxAutoClusterSize=").Append(maxAutoClusterSize.ToString(inv)).Append('\n');
 
-        if (profile.PlaceholderValues.Count > 0)
+        if (profile.RarityExemptValues.Count > 0)
         {
             // Sorted for the same reason BlockingStrategies is above: nothing today reads this
             // list order-sensitively (stage 2 reserves it for rarity weighting), so two profiles
             // differing only in declaration order must fingerprint alike.
-            canonical.Append("placeholderValues=")
-                .Append(string.Join(",", profile.PlaceholderValues.OrderBy(v => v, StringComparer.Ordinal)))
+            canonical.Append("rarityExemptValues=")
+                .Append(string.Join(",", profile.RarityExemptValues.OrderBy(v => v, StringComparer.Ordinal)))
                 .Append('\n');
         }
 
@@ -103,6 +103,45 @@ public static class ProfileFingerprint
                     .Append(evidence.SameEntityAgreement.ToString("R", inv)).Append(',')
                     .Append(evidence.ChanceAgreement.ToString("R", inv)).Append(',')
                     .Append(evidence.MaxAgreementBits?.ToString("R", inv) ?? "none");
+            }
+
+            // Same non-null/non-empty-only rule, for the same reason: a sentinel list changes
+            // which pairs are ever compared as MissingOneSide/MissingBoth versus Compared, which
+            // changes evidence exactly like blocking or normalization do. Sorted because
+            // declaration order does not change which values are treated as absent.
+            if (field.NullEquivalents is { Count: > 0 })
+            {
+                canonical.Append('|').Append("nullEquivalents=")
+                    .Append(string.Join(",", field.NullEquivalents.OrderBy(v => v, StringComparer.Ordinal)));
+            }
+
+            // Same non-null-only rule again. Derivation decides what value this field even holds,
+            // so two profiles differing only in it score differently and must not fingerprint
+            // alike — while a profile declaring no derived field keeps its pre-existing bytes.
+            if (field.IsDerived)
+                canonical.Append('|').Append("derived=").Append(field.SourceField).Append(':').Append(field.Extractor);
+
+            canonical.Append('\n');
+        }
+
+        // Comparisons, sorted by name for the same reason fields are. Level ORDER is emitted as
+        // written and never sorted: the ladder is resolved first-match-wins, so two profiles with
+        // the same levels in a different order genuinely score differently. Appended only when
+        // present, so a profile declaring none keeps the bytes it had before comparisons existed.
+        foreach (var comparison in profile.Comparisons.OrderBy(c => c.Name, StringComparer.Ordinal))
+        {
+            canonical.Append("comparison=").Append(comparison.Name)
+                .Append('|').Append(string.Join(",", comparison.Fields.OrderBy(f => f, StringComparer.Ordinal)));
+
+            foreach (var level in comparison.Levels)
+            {
+                canonical.Append('|').Append(level.Name).Append('=')
+                    .Append(string.Join("+", level.Requirements.Select(r =>
+                        $"{r.Field}>={r.MinSimilarity.ToString("R", inv)}")))
+                    .Append(':')
+                    .Append(level.Evidence.SameEntityRate.ToString("R", inv)).Append(',')
+                    .Append(level.Evidence.ChanceRate.ToString("R", inv)).Append(',')
+                    .Append(level.Evidence.MaxBits?.ToString("R", inv) ?? "none");
             }
 
             canonical.Append('\n');

@@ -25,7 +25,7 @@ public sealed class FingerprintBlockingStrategy : IBlockingStrategy
                 continue;
             if (!TokenCanonicalizers.Default.TryGetValue(field.SemanticType, out var canonicalizer))
                 continue;
-            if (!record.Fields.TryGetValue(field.Name, out var value) || string.IsNullOrWhiteSpace(value))
+            if (!record.Fields.TryGetValue(field.Name, out var value) || field.IsAbsent(value))
                 continue;
 
             foreach (var tokens in canonicalizer.Variants(value))

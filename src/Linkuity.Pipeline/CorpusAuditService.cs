@@ -63,7 +63,7 @@ public sealed class CorpusAuditService
             throw new ArgumentException($"Duplicate SourceRecordId in input: '{duplicate.Key}'.");
 
         var effectiveMax = maxBlockSize ?? profile.MaxBlockSize;
-        var normalization = _registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(_registry, profile);
         var similarity = _registry.Similarity[profile.SimilarityStrategy];
         var scoring = _registry.Scoring[profile.ScoringStrategy];
 
@@ -158,7 +158,7 @@ public sealed class CorpusAuditService
 
         var (tp, pp, ap) = ClusterPairCounts(roots, trueLabel);
         return BuildResult(records, profile, effectiveMax, normalized, trueLabel, roots,
-            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap, blastRadius);
+            unlabeled, emitted, occurrences, floorLifted, truePairs.Values, tp, pp, ap, blastRadius, byLabel);
     }
 
     private static long Pack(int lo, int hi) => ((long)lo << 32) | (uint)hi;
@@ -209,7 +209,8 @@ public sealed class CorpusAuditService
         IReadOnlyList<EntityRecord> records, MatchingProfile profile, int? effectiveMax,
         EntityRecord[] normalized, string?[] trueLabel, int[] roots,
         int unlabeled, long emitted, long occurrences, long floorLifted,
-        IEnumerable<TruePairState> states, long tp, long pp, long ap, CohesionBlastRadius? blastRadius)
+        IEnumerable<TruePairState> states, long tp, long pp, long ap, CohesionBlastRadius? blastRadius,
+        IReadOnlyDictionary<string, List<int>> byLabel)
     {
         var all = states.ToList();
 
@@ -225,11 +226,15 @@ public sealed class CorpusAuditService
 
         // Field coverage over TRUE pairs: how often each matchable field was populated on both
         // sides, so the report shows the real denominator distribution rather than a scalar.
+        // "Populated" is asked of ProfileField.IsAbsent, not a raw blank check, so a declared
+        // sentinel (e.g. GLEIF legal_form "8888") is reported as absent here exactly as it is to
+        // the matcher -- otherwise this coverage figure and the engine's own comparability
+        // decision would silently disagree on the same field.
         var coverage = profile.Fields
             .Where(f => f.Roles.HasFlag(FieldRole.Matchable))
             .Select(f => new FieldCoverageRow(f.Name, f.Weight, all.Count(x =>
-                normalized[x.Left].Fields.TryGetValue(f.Name, out var lv) && !string.IsNullOrWhiteSpace(lv) &&
-                normalized[x.Right].Fields.TryGetValue(f.Name, out var rv) && !string.IsNullOrWhiteSpace(rv))))
+                normalized[x.Left].Fields.TryGetValue(f.Name, out var lv) && !f.IsAbsent(lv) &&
+                normalized[x.Right].Fields.TryGetValue(f.Name, out var rv) && !f.IsAbsent(rv))))
             .ToList();
 
         long unlabeledEndpointPairs = 0;
@@ -253,6 +258,8 @@ public sealed class CorpusAuditService
             clusterSizes.Values.Count(v => v > 1),
             clusterSizes.Values.Count(v => v == 1));
 
+        var overMerge = BuildOverMergeAudit(clusterSizes.Values, summary.LargestClusterSize, byLabel);
+
         var counts = new CorpusAuditCounts(records.Count, unlabeled, unlabeledEndpointPairs,
             all.Count, emitted, occurrences, ap, pp, tp,
             all.Count(x => x.Reachable), all.Count(x => x.Band == CorpusBand.Auto), floorLifted);
@@ -274,7 +281,38 @@ public sealed class CorpusAuditService
         return new CorpusAuditResult(
             new CorpusAuditInputs(effectiveMax, profile.AutoMatchThreshold, profile.ReviewThreshold,
                 profile.ReviewFloorGate, coverage),
-            counts, metrics, summary, strata, outcomes, blastRadius);
+            counts, metrics, summary, strata, outcomes, overMerge,
+            new WrongMergeGate(counts.PredictedPositive, counts.TruePositive),
+            blastRadius);
+    }
+
+    /// <summary>
+    /// The oracle is the largest true entity size IN THIS RUN'S OWN GROUND TRUTH — the largest
+    /// number of records <paramref name="byLabel"/> groups under one canonical key — never a
+    /// literal number, so the same code path is exactly as correct on a person corpus as on an
+    /// organization one. Zero ground truth (an empty <paramref name="byLabel"/>) is vacuously
+    /// passing: there is no oracle to measure a cluster against, so nothing can be reported as
+    /// exceeding it. <paramref name="clusterSizes"/> is O(clusters), never O(pairs), so this scales
+    /// to the multi-million-record corpora this service already targets.
+    /// </summary>
+    internal static OverMergeAudit BuildOverMergeAudit(
+        IReadOnlyCollection<int> clusterSizes, int largestClusterSize,
+        IReadOnlyDictionary<string, List<int>> byLabel)
+    {
+        if (byLabel.Count == 0) return new OverMergeAudit(0, largestClusterSize, 0, 0, 0);
+
+        var oracle = byLabel.Values.Max(members => members.Count);
+        var clustersOverOracle = 0;
+        var recordsOverOracle = 0L;
+        var clustersOverOneThousand = 0;
+        foreach (var size in clusterSizes)
+        {
+            if (size > oracle) { clustersOverOracle++; recordsOverOracle += size; }
+            if (size > 1000) clustersOverOneThousand++;
+        }
+
+        return new OverMergeAudit(oracle, largestClusterSize, clustersOverOracle, recordsOverOracle,
+            clustersOverOneThousand);
     }
 
     /// <summary>

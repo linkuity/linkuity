@@ -22,7 +22,7 @@ internal static class BlockingKeyIndex
         IReadOnlyList<EntityRecord> records, MatchingProfile profile, IStrategyRegistry registry,
         CancellationToken ct = default)
     {
-        var normalization = registry.Normalization[profile.NormalizationStrategy];
+        var normalization = ProfileNormalization.Resolve(registry, profile);
         var keyIds = new Dictionary<string, int>(KeyComparer);
         var keyNames = new List<string>();
         var members = new List<List<int>>();

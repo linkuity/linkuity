@@ -18,6 +18,10 @@ decision bands, clustering, tuning — see
 [`how-matching-works.md`](how-matching-works.md); this page won't repeat that
 narrative, only the schema and how to author it.
 
+> **Not sure which of your columns belong in the profile?** Don't guess — measure. `match corpus
+> fields` reports how much each column is actually worth on your data, and what your data can never
+> resolve. See [choosing-match-fields.md](choosing-match-fields.md).
+
 ## The matching profile
 
 A profile is the entire configuration for one content type (taxonomy) — the
@@ -115,6 +119,7 @@ annotated block above is not fiction, it will load as-is.)
 | `fields[].similarityEvaluator` | no | Which evaluator compares this field: `exact`, `fuzzy`, `jaccard`, `canonical-jaccard`, `ngram`, `numeric`, or `date`. Must be registered if present; unknown value throws. |
 | `fields[].weight` | no | Relative importance in weighted scoring. Defaults to `1.0`. |
 | `fields[].evaluatorOptions` | no | Per-evaluator tuning knobs, as a string-to-string map. Recognized keys: `numeric.tolerance`, `numeric.maxPercentDiff` (for the `numeric` evaluator), `date.maxDays` (for `date`), `ngram.size` (for `ngram`). E.g. `{ "ngram.size": "3" }`. |
+| `fields[].nullEquivalents` | no | Values that mean "absent" for this field even though the string itself is non-blank — a GLEIF legal-form code like `"8888"` ("not provided"), a national-ID placeholder like `"000-00-0000"`, `"UNKNOWN"`, `"N/A"`. Compared case- and trim-insensitively. A declared sentinel is treated exactly like a blank value everywhere blank is already recognized: it produces `MissingOneSide`/`MissingBoth` rather than `Compared` (so it contributes zero evidence), and it never becomes a blocking key — otherwise every record sharing the sentinel would collapse into one block. Omitted or empty (the default) changes nothing. |
 | `normalizationStrategy` | yes | `identity` (no-op — the usual choice when data is already clean at ingest) or `semantic-field` (applies per-semantic-type cleaning at match time). Must be registered. |
 | `blockingStrategies[]` | yes, ≥ 1 entry | Which blocking strategies run; the engine unions the keys they all produce. Built-ins: `exact-value`, `token-name`, `prefix`, `ngram`, `phonetic`, `dob-lastname-phonetic`, `fingerprint`, `token`, `acronym`. Each name must be registered. |
 | `maxBlockSize` | no | Absolute cap on how many records a single blocking key may match before that key is suppressed entirely (produces zero candidates rather than being ranked/truncated). Distinct from `MaxCandidates` (a retrieval-time top-N cap per query, not a key-frequency cap). Omitted ⇒ no suppression on the in-process `linear` path; the durable Lucene path derives a default from `MaxCandidates` when unset. Must be ≥ 1 if present. The built-in `organization` profile sets it to `50`. See [how-matching-works.md](how-matching-works.md#blocking) and `match blocking audit` for measuring its effect. |

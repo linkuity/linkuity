@@ -29,7 +29,7 @@ public sealed class PhoneticBlockingStrategy : IBlockingStrategy
         {
             if (!field.Roles.HasFlag(FieldRole.Blocking) || !IsNameType(field.SemanticType))
                 continue;
-            if (!record.Fields.TryGetValue(field.Name, out var value) || string.IsNullOrWhiteSpace(value))
+            if (!record.Fields.TryGetValue(field.Name, out var value) || field.IsAbsent(value))
                 continue;
 
             var token = SelectToken(value, field.SemanticType);

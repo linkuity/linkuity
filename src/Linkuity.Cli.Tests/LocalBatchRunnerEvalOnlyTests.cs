@@ -124,8 +124,13 @@ public class LocalBatchRunnerEvalOnlyTests
         var (exit, output, err) = await RunAsync(
             ["match", "corpus", "audit", "--input", f.Csv, "--ground-truth", f.GroundTruth, "--profile", f.Profile]);
 
-        Assert.Equal(0, exit);
-        Assert.Equal("", err);
+        // This test is about WHICH RECORDS get loaded, and it still asserts that: 6 records, 3 true
+        // pairs. The exit code is 1 rather than 0 because the fixture genuinely over-merges -- all
+        // six records share the blocking field and score exactly at the auto threshold, so three
+        // distinct entities collapse into one cluster of 6 against an oracle of 2. That was always
+        // true; it used to exit 0 and go unremarked.
+        Assert.Equal(1, exit);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
         Assert.Contains("records 6", output, StringComparison.Ordinal);
         Assert.Contains("true pairs 3", output, StringComparison.Ordinal);
     }
