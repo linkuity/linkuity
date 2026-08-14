@@ -65,11 +65,62 @@ RECORD_COLUMNS = (["id", "organization_name"]
                   + [c for c, _ in ADDRESS_COLUMNS]
                   + ["alias_type", "script_relation"])
 
+# --- address observation extraction ----------------------------------------------
+# Phase 0.2 read Entity.LegalAddress.* only and copied it onto every alias row, which
+# made seven of eight corpus fields invariant within an entity by construction (see
+# 2026-08-10-phase-0.4-two-observation-corpus.md). This extracts the addresses that
+# defect ignored: legal, headquarters, and OtherAddress.N.
+def _address_field_columns(prefix):
+    """(corpus field name, GLEIF column) for the five address fields under `prefix`.
+
+    Field order is address_line, city, region, postal_code, country -- the same order
+    ADDRESS_COLUMNS already uses, so LEGAL_ADDRESS_COLUMNS below is exactly its first
+    five entries. This is NOT the order the plan's prose lists them in (it writes
+    country before postal_code); nothing depends on that prose order, only on all five
+    fields being present and compared as one tuple.
+    """
+    return [
+        ("address_line", f"{prefix}.FirstAddressLine"),
+        ("city", f"{prefix}.City"),
+        ("region", f"{prefix}.Region"),
+        ("postal_code", f"{prefix}.PostalCode"),
+        ("country", f"{prefix}.Country"),
+    ]
+
+
+LEGAL_ADDRESS_COLUMNS = ADDRESS_COLUMNS[:5]
+HEADQUARTERS_ADDRESS_COLUMNS = _address_field_columns("Entity.HeadquartersAddress")
+
+_OTHER_ADDRESS_PREFIX = "Entity.OtherAddresses.OtherAddress."
+_OTHER_ADDRESS_SUFFIX = ".FirstAddressLine"
+
+
+def other_address_slot_numbers(header):
+    """Ascending N for every 'Entity.OtherAddresses.OtherAddress.N.*' group in `header`.
+
+    Discovered from the header rather than hard-coded like OTHER_NAME_SLOTS: GLEIF's pad
+    width is a snapshot fact, not a constant this module should assume. One column per
+    slot (FirstAddressLine) is enough to detect the slot; GLEIF pads every field of a
+    slot together, so the other four are assumed present alongside it.
+    """
+    numbers = []
+    for name in header:
+        if name.startswith(_OTHER_ADDRESS_PREFIX) and name.endswith(_OTHER_ADDRESS_SUFFIX):
+            middle = name[len(_OTHER_ADDRESS_PREFIX):-len(_OTHER_ADDRESS_SUFFIX)]
+            if middle.isdigit():
+                numbers.append(int(middle))
+    return sorted(numbers)
+
+
 REQUIRED_GLEIF_COLUMNS = (
     ["LEI", "Entity.LegalName",
      "Entity.RegistrationAuthority.RegistrationAuthorityID",
      "Entity.RegistrationAuthority.RegistrationAuthorityEntityID"]
     + [c for _, c in ADDRESS_COLUMNS]
+    # Headquarters is REQUIRED, not discovered like OtherAddress: the plan measured 0%
+    # blank across the whole snapshot, so an absent column here is a snapshot change
+    # entity_records must abort on loudly, the same posture as a missing LegalName.
+    + [c for _, c in HEADQUARTERS_ADDRESS_COLUMNS]
     + [c for pair in OTHER_NAME_SLOTS for c in pair]
     + [c for pair in TRANSLITERATED_SLOTS for c in pair]
 )
@@ -187,22 +238,56 @@ def entity_aliases(row, ix):
     return out, drops
 
 
-def entity_records(row, ix):
-    """(one record dict per distinct name, alias drop counts) for this entity.
+def entity_records(row, ix, other_slot_numbers):
+    """One record per (name, address) OBSERVATION for this entity -- not one per name.
 
-    Each record carries the entity's whole payload. `_ordinal` is assigned over the FULL
-    alias list, before gating, so a gated record has the same id in records.csv and
-    records-full.csv. The drop counts are passed straight through from entity_aliases so
-    run_parse can accumulate them without reaching past this function.
+    Phase 0.2 emitted one record per alias and copied the entity's single legal address
+    onto every one, which made seven of eight corpus fields invariant within an entity by
+    construction (2026-08-10-phase-0.4-two-observation-corpus.md, "Record definition").
+    This pairs the distinct names entity_aliases finds with the distinct addresses
+    entity_addresses finds by CYCLING THE SHORTER LIST: `max(len(names), len(addresses))`
+    records, name index and address index both `ordinal % len(list)`. Three names and two
+    addresses gives (n1,a1) (n2,a2) (n3,a1) -- the plan's own example. This is never the
+    cross product: 3 names x 2 addresses is 3 records, never 6.
+
+    jurisdiction and legal_form are entity-level attributes, not address fields -- GLEIF
+    records one of each per entity, not one per address -- so they are constant across
+    every record exactly as before; only the five address_* fields vary with the paired
+    address.
+
+    `_ordinal` is assigned over this FULL (name, address) pairing, before gating, so a
+    gated record keeps the same id in records.csv and records-full.csv -- the same
+    invariant entity_aliases already upheld for the alias-only version.
+
+    Both `aliases` and `addresses` are non-empty for every real entity: entity_aliases
+    raises on a blank legal name, and the full-file address-count measurement (Task 2)
+    shows the four distinct-address-count buckets sum to exactly the total entity count,
+    i.e. no entity has zero. An entity with zero addresses would mean this invariant
+    broke, so it raises rather than silently emitting a blank-address record.
+
+    Returns (records, alias_drops, address_drops, name_count, address_count). The last
+    two let run_parse count entities that become multi-record for the FIRST time under
+    this plan -- one name, more than one address, a pair shape the alias-only corpus
+    could never produce -- without recomputing entity_aliases/entity_addresses itself.
     """
     lei = row[ix["LEI"]].strip()
-    payload = {corpus_col: row[ix[gleif_col]].strip()
-               for corpus_col, gleif_col in ADDRESS_COLUMNS}
+    jurisdiction = row[ix["Entity.LegalJurisdiction"]].strip()
+    legal_form = row[ix["Entity.LegalForm.EntityLegalFormCode"]].strip()
 
-    aliases, drops = entity_aliases(row, ix)
+    aliases, alias_drops = entity_aliases(row, ix)
+    addresses, address_drops = entity_addresses(row, ix, other_slot_numbers)
+    if not addresses:
+        raise ValueError(f"entity {lei} has no address observations "
+                         f"(blank legal, headquarters and OtherAddress slots)")
+
     records = []
-    for ordinal, (name, alias_type, relation) in enumerate(aliases):
-        record = dict(payload)
+    for ordinal in range(max(len(aliases), len(addresses))):
+        name, alias_type, relation = aliases[ordinal % len(aliases)]
+        address = addresses[ordinal % len(addresses)]
+        record = {corpus_col: value
+                  for (corpus_col, _), value in zip(LEGAL_ADDRESS_COLUMNS, address)}
+        record["jurisdiction"] = jurisdiction
+        record["legal_form"] = legal_form
         record["id"] = record_id(lei, ordinal)
         record["organization_name"] = name
         record["alias_type"] = alias_type
@@ -210,7 +295,68 @@ def entity_records(row, ix):
         record["_ordinal"] = ordinal
         record["_gated"] = is_gated(alias_type, relation)
         records.append(record)
-    return records, drops
+    return records, alias_drops, address_drops, len(aliases), len(addresses)
+
+
+def is_address_only_multi_record(name_count, address_count):
+    """True when an entity's ONLY source of multi-record-ness is address variation:
+    exactly one distinct name, more than one distinct address.
+
+    This is the pair shape the alias-only corpus could never produce at all -- it varies
+    on address ALONE, with the name held constant across every record. The plan calls
+    this out as the consequence to report, not smooth away, so it is a named predicate
+    rather than an inline condition buried in run_parse's loop.
+    """
+    return name_count == 1 and address_count > 1
+
+
+def entity_addresses(row, ix, other_slot_numbers):
+    """(distinct address tuples for this entity, drops), legal first, then headquarters,
+    then OtherAddress slots in ascending N.
+
+    An address is (address_line, city, region, postal_code, country), trimmed.
+    Distinctness is by the WHOLE tuple, using `.lower()` rather than `.casefold()`: the
+    matching engine compares with .NET `StringComparison.OrdinalIgnoreCase`, which maps
+    each character to its invariant lowercase form one-to-one, while `.casefold()`
+    performs Unicode expansions `.lower()` does not (`"straße".casefold() ==
+    "strasse"`). Using casefold here would merge two addresses the engine treats as
+    different -- under-counting distinct addresses, exactly the direction that hides the
+    variation this task exists to surface. Same reasoning `corpus_variation.py` already
+    applied to its own normalisation (commit 1993e25). `entity_aliases` still uses
+    `.casefold()` for name dedup; that is a pre-existing, separate decision with its own
+    blast radius on the alias corpus's pinned counts and is left alone here, not a
+    precedent to repeat. First occurrence in source order wins its original casing.
+    Source order is fixed and is what Task 3's pairing depends on staying stable across
+    builds.
+
+    Returns (addresses, drops) with drops == {"blankAddress": n, "dedupedCaseFold": n}.
+    A group whose five fields are ALL blank is an unused OtherAddress slot -- GLEIF pads
+    a fixed number of slots per entity and the overwhelming majority go unused -- or, in
+    principle, an absent headquarters address. A group that repeats an address already
+    seen (legal == headquarters is the common case, ~68% of entities per the plan) is a
+    duplicate. Neither is an address this function emits, and both get a NAMED counter
+    rather than a bare `continue` -- the module's Global Constraint (see entity_aliases).
+    The function is PURE: no I/O, callable once per source row.
+    """
+    groups = [LEGAL_ADDRESS_COLUMNS, HEADQUARTERS_ADDRESS_COLUMNS]
+    groups += [_address_field_columns(f"Entity.OtherAddresses.OtherAddress.{n}")
+               for n in other_slot_numbers]
+
+    out = []
+    seen = set()
+    drops = {"blankAddress": 0, "dedupedCaseFold": 0}
+    for columns in groups:
+        address = tuple(row[ix[gleif_col]].strip() for _, gleif_col in columns)
+        if not any(address):
+            drops["blankAddress"] += 1
+            continue
+        key = tuple(field.lower() for field in address)
+        if key in seen:
+            drops["dedupedCaseFold"] += 1
+            continue
+        seen.add(key)
+        out.append(address)
+    return out, drops
 
 
 def record_id(lei, ordinal):
@@ -227,6 +373,64 @@ def lei_from_record_id(rid):
 def true_pairs_from_sizes(sizes):
     """Sum of C(n,2) over entity sizes -- the same formula build-sec-recall-corpus.py uses."""
     return sum(n * (n - 1) // 2 for n in sizes)
+
+
+# --- name/address joint distribution ----------------------------------------------
+# entity_records emits max(name_count, address_count) records per entity (Task 3's
+# cycling rule). fullRecords is therefore ARITHMETICALLY reproducible -- as a COUNT --
+# from nothing more than the joint distribution of (distinct name count, distinct
+# address count) across entities: one small 2-D table, published in the manifest so a
+# reader can re-derive the total record count by hand instead of trusting a bare
+# integer (2026-08-10 Task 4).
+#
+# SCOPE, precisely (2026-08-10 review): this is a CARDINALITY check, not a pairing-
+# content check, and the two are not the same claim. Both `fullRecords` and this joint
+# table are aggregations of the same per-entity `max(len(aliases), len(addresses))`,
+# computed in the same pass over the same values -- so the identity below is true BY
+# CONSTRUCTION under the current code, not an independent measurement of it.
+#   - It DOES catch a future edit that desyncs the write loop's real record count from
+#     the max(n,a) formula -- e.g. someone changing entity_records' loop bound, or
+#     adding a conditional skip in the write loop, without updating this helper too.
+#   - It does NOT catch a miscount inside entity_aliases or entity_addresses (an error
+#     there flows into both sides identically and cancels out), and it does NOT catch
+#     anything about what gets PAIRED with what. If cycling were scrambled -- say,
+#     always emitting (aliases[0], addresses[0]) regardless of ordinal, silently
+#     defeating the whole point of this plan -- len(records) would still equal
+#     max(n,a) and this identity would still pass.
+# Pairing-content correctness is covered elsewhere: `fieldSliceSha256` hashes a
+# deterministic slice of actual emitted rows (would catch a swapped/constant mapping
+# within that slice), and `TestAddressPairingEndToEnd` in test_gleif_org_corpus.py
+# asserts the cycling rule's actual output row-by-row, including the wrap-around case.
+# Anyone relying on "the pairing is correct" should point to those, not to this.
+#
+# Keys are zero-padded 2-digit strings ("NNxAA") rather than a tuple, both because JSON
+# object keys must be strings and so that alphabetic sort (which is what
+# `json.dump(..., sort_keys=True)` applies to every nested dict, including this one)
+# coincides with numeric sort for any count under 100 -- comfortably above the largest
+# observed name or address count in this corpus.
+def name_address_joint_key(name_count, address_count):
+    return f"{name_count:02d}x{address_count:02d}"
+
+
+def parse_name_address_joint_key(key):
+    n, a = key.split("x")
+    return int(n), int(a)
+
+
+def full_records_from_joint(joint):
+    """fullRecords' CARDINALITY, reproducible from the joint distribution alone.
+
+    Each entity contributes max(name_count, address_count) records (entity_records'
+    cycling rule), so summing that maximum, weighted by how many entities share that
+    (name_count, address_count) pair, reconstructs the RECORD COUNT without re-parsing
+    the 4.9 GB source. This is a cardinality identity, not a content one: it is true by
+    construction against the current code (see the module comment above), so it can
+    only ever catch a loop/formula desync, never a pairing-content bug. run_verify
+    asserts this identity on every build as exactly that -- a regression tripwire on
+    the record-count formula, not proof the pairing itself is correct.
+    """
+    return sum(count * max(*parse_name_address_joint_key(key))
+               for key, count in joint.items())
 
 
 def recount_true_pairs(records_csv_path):
@@ -456,6 +660,14 @@ def run_parse(config):
     # counters, never a bare skip: reconciling the source vocabulary against the emitted
     # aliasTypes is how these ~5k rows were found missing in the first place.
     alias_drops = {"blankName": 0, "dedupedCaseFold": 0}
+    # Same treatment for address slots declined by entity_addresses -- see its docstring.
+    address_drops = {"blankAddress": 0, "dedupedCaseFold": 0}
+    # Entities whose ONLY source of multi-record-ness is address variation: one name, more
+    # than one distinct address. Task 3's headline consequence, per is_address_only_multi_record.
+    address_only_multi_record_entities = 0
+    # (distinct name count, distinct address count) -> entity count. Publishes the joint
+    # distribution `full_records_from_joint` reconciles fullRecords against (Task 4).
+    name_address_joint = {}
     entities = gated_records = full_records = 0
     gated_pairs = full_pairs = 0
     cik = {"rows": 0, "numeric": 0, "seriesIds": 0, "empty": 0,
@@ -467,17 +679,26 @@ def run_parse(config):
     try:
         with open(config.gleif_path, encoding="utf-8", newline="") as fh:
             reader = csv.reader(fh)
-            ix = column_index(next(reader))
+            header = next(reader)
+            ix = column_index(header)
+            other_slot_numbers = other_address_slot_numbers(header)
             authority_col = ix["Entity.RegistrationAuthority.RegistrationAuthorityID"]
             entity_id_col = ix["Entity.RegistrationAuthority.RegistrationAuthorityEntityID"]
 
             for lineno, row in enumerate(reader, start=2):
                 try:
-                    records, drops = entity_records(row, ix)
+                    records, drops, addr_drops, name_count, addr_count = entity_records(
+                        row, ix, other_slot_numbers)
                 except ValueError as exc:
                     raise ValueError(f"line {lineno}: {exc}") from exc
                 for reason, count in drops.items():
                     alias_drops[reason] += count
+                for reason, count in addr_drops.items():
+                    address_drops[reason] += count
+                if is_address_only_multi_record(name_count, addr_count):
+                    address_only_multi_record_entities += 1
+                joint_key = name_address_joint_key(name_count, addr_count)
+                name_address_joint[joint_key] = name_address_joint.get(joint_key, 0) + 1
 
                 entities += 1
                 lei = row[ix["LEI"]].strip()
@@ -540,6 +761,12 @@ def run_parse(config):
         "fullTruePairs": full_pairs,
         "aliasTypes": dict(sorted(alias_types.items())),
         "aliasDrops": dict(sorted(alias_drops.items())),
+        # Address-distinctness (and therefore this count) is exactly whatever dedup
+        # entity_addresses uses -- this module never reimplements it, so a fix to that
+        # function's dedup rule changes this count for free the next time parse runs.
+        "addressDrops": dict(sorted(address_drops.items())),
+        "addressOnlyMultiRecordEntities": address_only_multi_record_entities,
+        "nameAddressJoint": dict(sorted(name_address_joint.items())),
         "scriptRelations": dict(sorted(script_relations.items())),
         "cik": cik,
     }
@@ -809,6 +1036,9 @@ def run_verify(config, observed):
          cik["numeric"] + cik["seriesIds"] + cik["empty"]),
         ("fullRecords", observed["fullRecords"],
          "sum(aliasTypes)", sum(observed["aliasTypes"].values())),
+        ("fullRecords", observed["fullRecords"],
+         "sum(nameAddressJoint[n,a] * max(n,a))",
+         full_records_from_joint(observed["nameAddressJoint"])),
     ]:
         if left != right:
             problems.append(f"reconciliation failed: {left_name} = {left:,} "
