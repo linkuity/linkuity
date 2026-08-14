@@ -81,15 +81,10 @@ public static class CorpusAuditTextFormatter
             $"clusters over 1,000 {om.ClustersOverOneThousand:N0}");
         sb.AppendLine(om.Passed ? "over-merge gate: PASS" : $"over-merge gate: FAIL -- {om.FailureMessage}");
 
-        // "not gated" is deliberately not "PASS": a floor nobody declared has not been met, and
-        // reporting it as passing is how an ungated run comes to be cited as a safe one.
-        var mp = result.MergePrecision;
-        sb.AppendLine(!mp.Evaluated
-            ? $"merge-precision gate: not gated (no --min-merge-precision declared); " +
-              $"{mp.WrongMerges} of {mp.PredictedPositive} merged pair(s) are wrong"
-            : mp.Passed
-                ? $"merge-precision gate: PASS ({mp.Precision:P4} >= {mp.Floor:P4}, {mp.WrongMerges} wrong merge(s))"
-                : $"merge-precision gate: FAIL -- {mp.FailureMessage}");
+        var wm = result.WrongMerge;
+        sb.AppendLine(wm.Passed
+            ? $"wrong-merge gate: PASS (0 of {wm.PredictedPositive} merged pair(s) are wrong)"
+            : $"wrong-merge gate: FAIL -- {wm.FailureMessage}");
         sb.AppendLine();
 
         sb.AppendLine("stratum          true    reach     auto   review  nomatch  noncomp   recall");

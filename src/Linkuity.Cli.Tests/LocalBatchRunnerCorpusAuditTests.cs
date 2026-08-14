@@ -283,39 +283,31 @@ public class LocalBatchRunnerCorpusAuditTests
         Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task ReportOnly_MergePrecisionFloor_FailsTheRunWhenUnmet()
-    {
-        var f = WriteOverMergedFixture();
-
-        var (exit, output, err) = await RunAsync([.. Audit(f, f.ProfileA), "--min-merge-precision", "0.99"]);
-
-        Assert.Equal(1, exit);
-        Assert.Contains("merge-precision gate: FAIL", output, StringComparison.Ordinal);
-        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
-    }
 
     [Fact]
-    public async Task ReportOnly_NoFloorDeclared_ReportsNotGatedRatherThanPass()
+    public async Task ReportOnly_CleanCorpus_ReportsWrongMergeGatePass()
     {
         var f = WriteFixture();
 
         var (exit, output, _) = await RunAsync(Audit(f, f.ProfileA));
 
         Assert.Equal(0, exit);
-        Assert.Contains("merge-precision gate: not gated", output, StringComparison.Ordinal);
+        Assert.Contains("wrong-merge gate: PASS", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ReportOnly_RejectsAnOutOfRangeFloor()
+    public async Task ReportOnly_AnyWrongMerge_FailsTheRun()
     {
-        var f = WriteFixture();
+        // No threshold to satisfy and none to configure: one wrongly merged pair is a failure.
+        var f = WriteOverMergedFixture();
 
-        var (exit, _, err) = await RunAsync([.. Audit(f, f.ProfileA), "--min-merge-precision", "1.5"]);
+        var (exit, output, err) = await RunAsync(Audit(f, f.ProfileA));
 
-        Assert.Equal(2, exit);   // could not run, distinct from a gate failure
-        Assert.Contains("Invalid --min-merge-precision", err, StringComparison.Ordinal);
+        Assert.Equal(1, exit);
+        Assert.Contains("wrong-merge gate: FAIL", output, StringComparison.Ordinal);
+        Assert.Contains("GATE FAILED", err, StringComparison.Ordinal);
     }
+
 
     [Fact]
     public async Task ReportOnly_HealthyCorpus_ReportsPassVerdict()
