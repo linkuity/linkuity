@@ -52,6 +52,12 @@ public sealed class LocalBatchRunner
         if (args.Length >= 3 &&
             string.Equals(args[0], "match", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "corpus", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[2], "fields", StringComparison.OrdinalIgnoreCase))
+            return await FieldUsefulnessCommands.RunAsync(args, ct);
+
+        if (args.Length >= 3 &&
+            string.Equals(args[0], "match", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "corpus", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[2], "calibrate", StringComparison.OrdinalIgnoreCase))
             return await FieldEvidenceCalibrationCommands.RunAsync(args, ct);
 
