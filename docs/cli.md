@@ -30,7 +30,9 @@ dotnet run --project src/Linkuity.Cli -- run `
 | `--output` | Output directory for `golden-records.csv` and `artifacts/`. |
 | `--neo4j-export` | Also write a `neo4j-export.zip` graph bundle (optional). |
 
-See [`docs/configuration.md`](configuration.md) for the full profile and merge-policy schema.
+See [`docs/configuration.md`](configuration.md) for the full profile and merge-policy schema, and
+[`docs/choosing-match-fields.md`](choosing-match-fields.md) for `match corpus fields`, which measures
+how much each of your columns is worth for matching before you write that profile.
 
 Outputs land under `--output`:
 

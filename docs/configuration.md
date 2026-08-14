@@ -18,6 +18,10 @@ decision bands, clustering, tuning — see
 [`how-matching-works.md`](how-matching-works.md); this page won't repeat that
 narrative, only the schema and how to author it.
 
+> **Not sure which of your columns belong in the profile?** Don't guess — measure. `match corpus
+> fields` reports how much each column is actually worth on your data, and what your data can never
+> resolve. See [choosing-match-fields.md](choosing-match-fields.md).
+
 ## The matching profile
 
 A profile is the entire configuration for one content type (taxonomy) — the

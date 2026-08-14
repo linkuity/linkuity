@@ -34,10 +34,23 @@ public static class FieldUsefulnessCommands
 
         if (!options.TryGetValue("profile", out var profilePath) || string.IsNullOrWhiteSpace(profilePath))
         {
+            await Console.Error.WriteLineAsync("--profile is required.");
             await Console.Error.WriteLineAsync(Usage);
             return 2;
         }
-        if (!options.TryGetValue("ground-truth", out var truthPath) || !File.Exists(truthPath))
+        // "not supplied" and "supplied but missing" are different mistakes and get different
+        // messages: reporting an absent flag as a file not found at the empty path sends the reader
+        // looking for a path problem they do not have.
+        if (!options.TryGetValue("ground-truth", out var truthPath) || string.IsNullOrWhiteSpace(truthPath))
+        {
+            await Console.Error.WriteLineAsync(
+                "--ground-truth is required: this report works by comparing how often confirmed-same " +
+                "records agree against how often confirmed-different records agree, so it cannot run " +
+                "without knowing which is which.");
+            await Console.Error.WriteLineAsync(Usage);
+            return 2;
+        }
+        if (!File.Exists(truthPath))
         {
             await Console.Error.WriteLineAsync($"Ground-truth CSV not found: {truthPath}");
             return 2;
