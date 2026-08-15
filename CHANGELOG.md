@@ -9,6 +9,19 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- Record corrections (F6 milestone 1): resending a record through
+  `ingest-incremental` with the same `(project, source record id)` but different
+  field values now supersedes the prior record and re-enters matching — an
+  unclustered record is simply re-scored, a clustered record detaches from its
+  cluster (dissolving it if it was the only member) with the golden record
+  recomputed from the remaining survivors, and an identical resend is a safe
+  no-op rather than an error. `IncrementalIngestResult.RecordsCorrected` reports
+  how many corrections a batch applied. Scope is intentionally narrow for this
+  milestone: only the file metadata store's non-Lucene-indexed path supports it
+  (an indexed store throws `NotSupportedException` instead of silently leaving a
+  stale candidate searchable); the PostgreSQL backend does not yet apply
+  corrections either, and throws rather than dropping them silently. Deletion is
+  not addressed by this milestone.
 - `match corpus fields` CLI command: measures how much each of your columns is
   actually worth for matching, on your own data, so a matching profile is built
   from measurement rather than guesswork. Per matchable field it reports fill
@@ -115,6 +128,18 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   sharing the CLI's batch engine.
 
 ### Fixed
+- Golden-record field values could depend on the order records arrived in (F54): when
+  multiple cluster members shared the highest-priority source but disagreed on a
+  field's value, or a consensus vote tied on both count and length, the merge picked
+  whichever value happened to be enumerated first rather than resolving on content.
+  Fixed by breaking every tie on field content (majority, then longest, then
+  alphabetical), proven with permutation tests. This also closed a related gap: the
+  batch (`run`, `POST /run`) and durable (`ingest-incremental`, `persist-batch`)
+  paths used to carry two independently-maintained copies of this merge logic that
+  had quietly drifted apart on case-sensitivity of consensus grouping, corpus-wide
+  vs. cluster-local field scope, a hardcoded vs. configurable source-field name, and
+  blank-value checking. Both paths now share one implementation
+  (`Linkuity.Core.Merge.GoldenRecordMerge`), so they cannot drift apart again.
 - Blocking-audit suppression boundary aligned with the engine's corpus-frequency
   count: the engine (`blocking-linear`) counts a key's frequency over a corpus
   that excludes the query record, so a full block of exactly `maxBlockSize + 1`

@@ -13,15 +13,17 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Linkuity.Cli.Tests;
 
 /// <summary>
-/// DOCUMENTS KNOWN DEFECTS (engine audit 2026-07-28, finding C1). The tests marked <c>Skip</c> in
-/// this class FAIL today; the Skip keeps CI green. Remove the Skips when Phase 1 lands — they are
-/// the acceptance criteria for that work.
+/// Engine audit 2026-07-28, finding C1. Two fixes have since landed against this class:
+/// normalization (#43, "fix: normalize on the durable ingest path...") and golden-record merge
+/// (this change, F54 — see <see cref="Linkuity.Core.Merge.GoldenRecordMerge"/>). Both were the
+/// same shape of bug: batch and durable each carried their own copy of the same logic, and the
+/// copies quietly drifted apart.
 ///
 /// The engine ships two supported production paths that resolve the same input independently:
 ///   - BATCH   — BatchRunService (CLI `run`, API `POST /run`): normalize → match → cluster →
 ///               GoldenRecordService.
 ///   - DURABLE — IMetadataStore.SaveIncrementalIngestAsync (CLI `ingest-incremental`):
-///               IncrementalResolver → GoldenRecordMerge.
+///               IncrementalResolver → CompletedBatchResolver.
 ///
 /// Both are invoked here FOR REAL, in-process, over the same sample CSV and the same profile.
 /// Neither arm reads a pre-baked artifact — contrast samples/durable/full-vs-incremental-consistency,
@@ -29,21 +31,28 @@ namespace Linkuity.Cli.Tests;
 /// the batch matcher at all. BatchArm_ActuallyRunsTheMatcher and DurableArm_ActuallyRunsTheMatcher
 /// guard against this class silently degrading into that same non-comparison.
 ///
-/// WHAT THIS CLASS ESTABLISHED
+/// WHAT THIS CLASS ESTABLISHED, AND WHAT'S NOW FIXED
 ///  1. On all three shipped sample corpora the two paths produce the SAME partition of records into
 ///     entities — bulk-loaded, one-at-a-time, and durable-versus-durable. Clustering parity holds
 ///     where it has been measured.
-///  2. They nevertheless produce DIFFERENT golden records on every one of those corpora, because
-///     the durable path stores un-normalized field values. That is the live, customer-visible bug.
+///  2. Golden-record VALUES used to differ (the durable path stored un-normalized field values —
+///     fixed by #43) and the two paths' merge logic used to be two independent, hand-maintained
+///     copies that disagreed on case-sensitivity of consensus grouping, corpus-wide vs.
+///     cluster-local field universe, a hardcoded vs. configurable source-field name, blank-value
+///     checking, and — critically — whether a tie between candidate values was broken by content
+///     or by which member happened to be enumerated first (F54). Both paths now call the single
+///     implementation in Linkuity.Core.Merge.GoldenRecordMerge, so none of these can drift apart
+///     again by construction, not just by these tests staying green.
 ///  3. Clustering parity is luckier than it looks. It survives only because every sample happens to
 ///     carry an identically-formatted date_of_birth inside each true cluster, and because
 ///     MatchKey.Normalize absorbs punctuation before the evaluators see it. Change either and the
 ///     partitions diverge — NormalizationDrift_PhoneCountryCode and NormalizationDrift_DateFormat
-///     are two-record corpora that do exactly that.
+///     are two-record corpora that do exactly that. This one is unrelated to golden-record merge
+///     and remains open.
 ///
 /// Retrieval is deliberately CONTROLLED FOR throughout (no Lucene index, so both arms use
-/// blocking-linear). Every divergence recorded here is therefore attributable to normalization, not
-/// to the batch/durable retrieval-strategy difference.
+/// blocking-linear). Every divergence recorded here is therefore attributable to normalization or
+/// merge logic, not to the batch/durable retrieval-strategy difference.
 /// </summary>
 public sealed class BatchDurableParityTests : IDisposable
 {
@@ -307,21 +316,17 @@ public sealed class BatchDurableParityTests : IDisposable
     }
 
     /// <summary>
-    /// EXPECTED TO FAIL on all three samples — and it is the most customer-visible divergence found,
-    /// because it fires on the SHIPPED corpora with no special fixture required.
+    /// PASSES today. The two paths agree on the PARTITION here, so this compares the canonical
+    /// field values each path produced for identically-membered clusters.
     ///
-    /// The two paths agree on the PARTITION here, so this compares the canonical field values each
-    /// path produced for identically-membered clusters. Every observed difference is the `phone`
-    /// field: batch stores E.164 ("+12125552000"), durable stores whatever the CSV said
-    /// ("(212) 555-2000", "312.555.0147"). Same entity, different golden record.
-    ///
-    /// ATTRIBUTION MATTERS: this is audit finding C1(a) — normalization — surfacing in OUTPUT rather
-    /// than in clustering. It is NOT evidence for C1(d). Both mergers selected the same member
-    /// record's value; they simply had different data to select from. None of the eight documented
-    /// behavioural differences between GoldenRecordService and GoldenRecordMerge (case-sensitivity
-    /// of the merge-policy lookup and consensus grouping, cluster-local versus corpus-wide field
-    /// universe, hard-coded "source" versus configurable source field, IsNullOrEmpty versus
-    /// IsNullOrWhiteSpace) is exercised by these corpora — they are real in code but latent here.
+    /// Used to fail on all three shipped samples: batch stored E.164 phone ("+12125552000") while
+    /// durable stored whatever the CSV said ("(212) 555-2000") — audit finding C1(a), fixed by
+    /// #43. The other documented divergence between the two paths' merge logic (case-sensitivity
+    /// of consensus grouping, cluster-local versus corpus-wide field universe, hardcoded versus
+    /// configurable source field, blank-value checking, and order-dependent tie-breaking — F54)
+    /// was real in code but never exercised by these three corpora specifically; it no longer
+    /// exists to exercise, since both paths now share one implementation
+    /// (<see cref="Linkuity.Core.Merge.GoldenRecordMerge"/>).
     /// </summary>
     [Theory]
     [MemberData(nameof(Samples))]

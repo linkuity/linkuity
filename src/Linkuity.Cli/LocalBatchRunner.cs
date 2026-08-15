@@ -375,12 +375,12 @@ public sealed class LocalBatchRunner
             var records = ReadRecords(inputPath, projectId, sourceId, batchId, now);
             var result = await store.SaveIncrementalIngestAsync(
                 new IncrementalIngestRequest(projectId, sourceId, batchId, records, autoThreshold, reviewThreshold), ct);
-            PrintIngestResult(result.RecordsAdded, result.AutoMatches, result.ReviewTasks, result.SingletonClusters, result.GoldenRecordVersionsCreated);
+            PrintIngestResult(result.RecordsAdded, result.AutoMatches, result.ReviewTasks, result.SingletonClusters, result.GoldenRecordVersionsCreated, result.RecordsCorrected);
             return 0;
         }
 
         var rows = ReadRawRows(inputPath);
-        int added = 0, auto = 0, reviews = 0, singletons = 0, versions = 0, batches = 0;
+        int added = 0, auto = 0, reviews = 0, singletons = 0, versions = 0, corrected = 0, batches = 0;
         for (var offset = 0; offset < rows.Count; offset += batchSize.Value)
         {
             var chunk = rows.Skip(offset).Take(batchSize.Value).ToList();
@@ -389,21 +389,23 @@ public sealed class LocalBatchRunner
             var result = await store.SaveIncrementalIngestAsync(
                 new IncrementalIngestRequest(projectId, sourceId, batch.Id, records, autoThreshold, reviewThreshold), ct);
             added += result.RecordsAdded; auto += result.AutoMatches; reviews += result.ReviewTasks;
-            singletons += result.SingletonClusters; versions += result.GoldenRecordVersionsCreated; batches++;
+            singletons += result.SingletonClusters; versions += result.GoldenRecordVersionsCreated;
+            corrected += result.RecordsCorrected; batches++;
         }
 
         Console.WriteLine($"Batches ingested: {batches}");
-        PrintIngestResult(added, auto, reviews, singletons, versions);
+        PrintIngestResult(added, auto, reviews, singletons, versions, corrected);
         return 0;
     }
 
-    private static void PrintIngestResult(int added, int auto, int reviews, int singletons, int versions)
+    private static void PrintIngestResult(int added, int auto, int reviews, int singletons, int versions, int corrected)
     {
         Console.WriteLine($"Records added: {added}");
         Console.WriteLine($"Auto matches: {auto}");
         Console.WriteLine($"Review tasks: {reviews}");
         Console.WriteLine($"Singleton clusters: {singletons}");
         Console.WriteLine($"Golden versions created: {versions}");
+        Console.WriteLine($"Records corrected: {corrected}");
     }
 
     private static async Task<int> ExportReviewTasksCommandAsync(IMetadataStore store, IReadOnlyDictionary<string, string> options, CancellationToken ct)

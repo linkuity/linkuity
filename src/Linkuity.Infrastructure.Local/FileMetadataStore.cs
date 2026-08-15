@@ -195,7 +195,7 @@ public sealed class FileMetadataStore : IMetadataStore
             var db = await LoadAsync(ct);
             var completedBatchWithKeys = WithGeneratedBlockingKeys(db, completedBatch);
             ValidateCompletedBatch(db, completedBatchWithKeys);
-            var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, db.Projects, DateTimeOffset.UtcNow);
+            var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, db.Projects, _profileProvider, DateTimeOffset.UtcNow);
             ApplyMutations(db, mutations);
             IndexRecords(completedBatchWithKeys.EntityRecords);
             await SaveAsync(db, ct);
@@ -239,14 +239,27 @@ public sealed class FileMetadataStore : IMetadataStore
                 .Select(record => _resolver.PrepareForStorage(record, profile))
                 .ToList();
 
+            var context = new FileResolutionContext(db);
+            var (recordsToResolve, correctionMutations) = _resolver.ClassifyAndDetachCorrections(
+                project, profile, incomingRecords, context, DateTimeOffset.UtcNow);
+
+            if (correctionMutations.CorrectionEventsToInsert.Count > 0 && _index is not null)
+                throw new NotSupportedException(
+                    "Record correction is not yet supported on an index-backed store: a Lucene-indexed " +
+                    "candidate for the superseded record would remain searchable after this call, which " +
+                    "could produce wrong matches. Supported only for stores without an attached index " +
+                    "until Lucene reindexing on correction is built.");
+
+            ApplyMutations(db, correctionMutations);
+
             var (result, mutations) = _resolver.Resolve(
-                request, project, profile, incomingRecords, new FileResolutionContext(db), DateTimeOffset.UtcNow);
+                request, project, profile, recordsToResolve, context, DateTimeOffset.UtcNow);
 
             ApplyMutations(db, mutations);
             UpdateBatchRecordCount(db, request.IngestBatchId, request.Records.Count);
-            IndexRecords(incomingRecords);
+            IndexRecords(recordsToResolve);
             await SaveAsync(db, ct);
-            return result;
+            return result with { RecordsCorrected = correctionMutations.CorrectionEventsToInsert.Count };
         }
         finally
         {
@@ -277,6 +290,11 @@ public sealed class FileMetadataStore : IMetadataStore
     private static void ApplyMutations(ResolutionWorkingSet db, MutationSet m)
     {
         db.EntityRecords.AddRange(m.RecordsToInsert);
+        foreach (var r in m.RecordsToUpdate)
+        {
+            db.EntityRecords.RemoveAll(x => x.Id == r.Id);
+            db.EntityRecords.Add(r);
+        }
 
         foreach (var c in m.ClustersToUpsert)
         {
@@ -296,10 +314,11 @@ public sealed class FileMetadataStore : IMetadataStore
         db.ReviewTasks.AddRange(m.ReviewTasksToInsert);
         db.ClusterMergeEvents.AddRange(m.MergeEventsToInsert);
         db.ClusterDissolutionEvents.AddRange(m.DissolutionEventsToInsert);
+        db.RecordCorrectedEvents.AddRange(m.CorrectionEventsToInsert);
     }
 
     public async Task<IReadOnlyList<EntityRecord>> ListEntityRecordsAsync(Guid projectId, CancellationToken ct = default)
-        => (await LoadAsync(ct)).EntityRecords.Where(r => r.ProjectId == projectId).ToList();
+        => (await LoadAsync(ct)).EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
 
     public async Task<IReadOnlyList<MatchEdge>> ListMatchEdgesAsync(Guid projectId, CancellationToken ct = default)
         => (await LoadAsync(ct)).MatchEdges.Where(e => e.ProjectId == projectId).ToList();
@@ -325,6 +344,9 @@ public sealed class FileMetadataStore : IMetadataStore
 
     public async Task<IReadOnlyList<ClusterMergeEvent>> ListClusterMergeEventsAsync(Guid projectId, CancellationToken ct = default)
         => (await LoadAsync(ct)).ClusterMergeEvents.Where(e => e.ProjectId == projectId).ToList();
+
+    public async Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => (await LoadAsync(ct)).RecordCorrectedEvents.Where(e => e.ProjectId == projectId).ToList();
 
     private async Task<ResolutionWorkingSet> LoadAsync(CancellationToken ct)
     {
@@ -419,8 +441,6 @@ public sealed class FileMetadataStore : IMetadataStore
         {
             if (record.ProjectId != request.ProjectId || record.SourceId != request.SourceId || record.IngestBatchId != request.IngestBatchId)
                 throw new InvalidOperationException("Incremental record provenance does not match the ingest request.");
-            if (db.EntityRecords.Any(r => r.ProjectId == request.ProjectId && string.Equals(r.SourceRecordId, record.SourceRecordId, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException($"Entity record already exists for project {request.ProjectId}: {record.SourceRecordId}");
         }
     }
 
@@ -519,7 +539,7 @@ public sealed class FileMetadataStore : IMetadataStore
     private sealed class FileResolutionContext(ResolutionWorkingSet db) : IResolutionContext
     {
         public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
             => db.Clusters
@@ -528,13 +548,18 @@ public sealed class FileMetadataStore : IMetadataStore
                 .ToList();
 
         public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id)).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
             => db.GoldenRecords.Where(g => g.ProjectId == projectId && clusterIds.Contains(g.ClusterId)).ToList();
 
         public IReadOnlyList<GoldenRecordVersion> GetVersionsForGoldenRecords(IReadOnlyCollection<Guid> goldenRecordIds)
             => db.GoldenRecordVersions.Where(v => goldenRecordIds.Contains(v.GoldenRecordId)).ToList();
+
+        public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
+            => db.EntityRecords.FirstOrDefault(r =>
+                r.ProjectId == projectId && r.SupersededAt is null &&
+                string.Equals(r.SourceRecordId, sourceRecordId, StringComparison.OrdinalIgnoreCase));
     }
 
     private sealed class EntityRecordProjectSourceComparer : IEqualityComparer<(Guid ProjectId, string SourceRecordId)>

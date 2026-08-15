@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Infrastructure.Lucene;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 
@@ -353,6 +354,129 @@ public class FileMetadataStoreTests : IDisposable
         Assert.Equal("crm@example.com", Assert.Single(await store.ListGoldenRecordVersionsAsync(project.Id, CancellationToken.None)).Fields["email"]);
     }
 
+    /// <summary>
+    /// The built-in "person" profile declares no field with
+    /// SemanticType.SourceIdentifier (only the built-in "organization" profile does), so
+    /// there is no profile-declared answer to "which column names the source system".
+    /// Source-priority merge must still work by falling back to a column literally named
+    /// "source" — the assumption durable ingestion made unconditionally before source-field
+    /// resolution became profile-driven. This pins that fallback down as intentional,
+    /// exercising CompletedBatchResolver's own copy of it.
+    /// </summary>
+    [Fact]
+    public async Task SaveCompletedBatchAsync_SourcePriorityFallsBackToSourceColumn_WhenProfileDoesNotDeclareSourceIdentifier()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-source-fallback-completed.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync(
+            "Customer MDM",
+            "person",
+            new MergeConfiguration
+            {
+                MergeFields = [new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing"] }]
+            },
+            now,
+            CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var crm = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string>
+            {
+                ["id"] = "crm-001",
+                ["source"] = "CRM",
+                ["email"] = "crm@example.com"
+            });
+        var marketing = NewRecordWithFields(project.Id, source.Id, batch.Id, "mkt-001", now, ["email:alice"],
+            new Dictionary<string, string>
+            {
+                ["id"] = "mkt-001",
+                ["source"] = "Marketing",
+                ["email"] = "marketing@example.com"
+            });
+        var clusterId = Guid.NewGuid();
+
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [crm, marketing],
+                [],
+                [new Cluster { Id = clusterId, ProjectId = project.Id, MemberEntityRecordIds = [crm.Id, marketing.Id], CreatedAt = now }],
+                [],
+                []),
+            CancellationToken.None);
+
+        var golden = Assert.Single(await store.ListGoldenRecordsAsync(project.Id, CancellationToken.None));
+        Assert.Equal("crm@example.com", golden.Fields["email"]);
+    }
+
+    /// <summary>
+    /// Same intent as the completed-batch version above, but exercises
+    /// IncrementalResolver.UpdateGoldenRecords's own copy of the fallback — a separate code
+    /// path — by recomputing the golden record when a third record joins an already-formed
+    /// cluster via SaveIncrementalIngestAsync.
+    /// </summary>
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_SourcePriorityFallsBackToSourceColumn_WhenProfileDoesNotDeclareSourceIdentifier()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-source-fallback-incremental.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync(
+            "Customer MDM",
+            "person",
+            new MergeConfiguration
+            {
+                MergeFields = [new MergeField { FieldName = "email", SourcePriority = ["CRM", "Marketing", "Web"] }]
+            },
+            now,
+            CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var initialBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var crm = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-001", now, ["phone:5550100"],
+            new Dictionary<string, string>
+            {
+                ["id"] = "crm-001",
+                ["source"] = "CRM",
+                ["email"] = "crm@example.com",
+                ["phone"] = "5550100",
+                ["name"] = "Alice CRM"
+            });
+        var marketing = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "mkt-001", now, ["phone:5550100"],
+            new Dictionary<string, string>
+            {
+                ["id"] = "mkt-001",
+                ["source"] = "Marketing",
+                ["email"] = "marketing@example.com",
+                ["phone"] = "5550100",
+                ["name"] = "Alice Marketing"
+            });
+        var clusterId = Guid.NewGuid();
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [crm, marketing],
+                [],
+                [new Cluster { Id = clusterId, ProjectId = project.Id, MemberEntityRecordIds = [crm.Id, marketing.Id], CreatedAt = now }],
+                [],
+                []),
+            CancellationToken.None);
+
+        var incrementalBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var web = NewRecordWithFields(project.Id, source.Id, incrementalBatch.Id, "web-001", now.AddMinutes(1), ["phone:5550100"],
+            new Dictionary<string, string>
+            {
+                ["id"] = "web-001",
+                ["source"] = "Web",
+                ["email"] = "web@example.com",
+                ["phone"] = "5550100",
+                ["name"] = "Alice Web"
+            });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, incrementalBatch.Id, [web], 0.90, 0.75),
+            CancellationToken.None);
+
+        var golden = Assert.Single(await store.ListGoldenRecordsAsync(project.Id, CancellationToken.None));
+        Assert.Equal("crm@example.com", golden.Fields["email"]);
+    }
+
     [Fact]
     public async Task SaveCompletedBatchAsync_WhenPolicyProjectClusterHasNoMembers_ThrowsValidationError()
     {
@@ -700,6 +824,126 @@ public class FileMetadataStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_AppliesCorrectionInsteadOfThrowing()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@old.example.com", ["name"] = "Alice" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice-new"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@new.example.com", ["name"] = "Alice" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.RecordsCorrected);
+
+        var currentRecords = await store.ListEntityRecordsAsync(project.Id, CancellationToken.None);
+        var live = Assert.Single(currentRecords); // superseded original is excluded by default
+        Assert.Equal("alice@new.example.com", live.Fields["email"]);
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithIdenticalValues_IsNoOp()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-noop.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var retryBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var identicalResend = NewRecordWithFields(project.Id, source.Id, retryBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, retryBatch.Id, [identicalResend], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(0, result.RecordsCorrected);
+        Assert.Equal(0, result.RecordsAdded); // nothing new was added either
+        Assert.Single(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None)); // still exactly one row
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_CorrectionOnNonIdentifierField_SupersededRecordNotMatchedAgainst()
+    {
+        // Regression for the bug where GetLinearCorpus/GetRecordsByIds did not filter out
+        // superseded records: a correction that leaves the identifier field (email) unchanged
+        // and only changes a non-identifier field (name) used to score ~0.98 against its own
+        // now-superseded predecessor (identifier-weighted scoring floors to 0.98 on any exact
+        // identifier match, regardless of how much the non-identifier fields disagree) and
+        // auto-merge the corrected record with the very record it just replaced.
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction-non-identifier.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com", ["name"] = "Alice" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+        var originalId = original.Id;
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        // Identifier field (email) unchanged; only the non-identifier "name" field changes.
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com", ["name"] = "Bob" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.RecordsCorrected);
+
+        var edges = await store.ListMatchEdgesAsync(project.Id, CancellationToken.None);
+        Assert.DoesNotContain(edges, e => e.LeftEntityRecordId == originalId || e.RightEntityRecordId == originalId);
+
+        var clusters = await store.ListClustersAsync(project.Id, CancellationToken.None);
+        Assert.DoesNotContain(clusters, c => c.MemberEntityRecordIds.Contains(originalId));
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
+    {
+        var indexDir = Path.Combine(_root, "lucene-correction-guard");
+        var engine = MatchingDefaults.CreateEngine();
+        var provider = new DefaultMatchingProfileProvider([DefaultMatchingProfileProvider.CreatePersonProfile()]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-indexed-guard.json") },
+            engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@old.example.com", ["name"] = "Alice" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@new.example.com", ["name"] = "Alice" });
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task SaveIncrementalIngestAsync_WhenAutoMatchesMultipleExistingClusters_MergesBridgedClusters()
     {
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata.json") });
@@ -835,4 +1079,30 @@ public class FileMetadataStoreTests : IDisposable
             BlockingKeys = blockingKeys,
             CreatedAt = createdAt
         };
+
+    [Fact]
+    public async Task ListRecordCorrectedEventsAsync_ReturnsEventsForCorrection()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction-events.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "a@old.example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "a@new.example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        var events = await store.ListRecordCorrectedEventsAsync(project.Id, CancellationToken.None);
+
+        var evt = Assert.Single(events);
+        Assert.Equal("a@old.example.com", evt.PreviousFields["email"]);
+        Assert.Equal("a@new.example.com", evt.NewFields["email"]);
+    }
 }

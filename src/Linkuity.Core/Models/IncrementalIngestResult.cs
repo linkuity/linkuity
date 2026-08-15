@@ -5,4 +5,5 @@ public sealed record IncrementalIngestResult(
     int AutoMatches,
     int ReviewTasks,
     int SingletonClusters,
-    int GoldenRecordVersionsCreated);
+    int GoldenRecordVersionsCreated,
+    int RecordsCorrected = 0);

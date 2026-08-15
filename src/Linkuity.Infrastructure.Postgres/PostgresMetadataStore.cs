@@ -310,7 +310,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
         await ValidateCompletedBatchAsync(conn, tx, completedBatchWithKeys, ct);
 
         // Resolve using the shared CompletedBatchResolver.
-        var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, DateTimeOffset.UtcNow);
+        var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, _profileProvider, DateTimeOffset.UtcNow);
 
         // Apply all mutations within the same transaction.
         await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
@@ -690,6 +690,11 @@ public sealed class PostgresMetadataStore : IMetadataStore
             new { ProjectId = projectId }, cancellationToken: ct));
         return rows.Select(MapClusterMergeEvent).ToList();
     }
+
+    public Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "Record-correction events are not yet persisted on the PostgreSQL backend " +
+            "(F6 milestone 3). Corrections themselves are also not yet supported on this backend.");
 
     // ──────────────────────────────── T12 helpers ───────────────────────────────
 

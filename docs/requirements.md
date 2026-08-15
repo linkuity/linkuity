@@ -117,14 +117,21 @@ number and sit in whichever section they belong to, so existing numbers never sh
   closed their account ("deleted"). Both need to flow through to Linkuity's picture
   of the entity, ideally without the customer having to manually intervene.
 
-  **Status: Not implemented.** There is no soft-delete or tombstone concept for a
-  source record being withdrawn anywhere in the codebase — the word "tombstone"
-  exists only for Linkuity's own internal cluster-merge bookkeeping, unrelated to a
-  record disappearing at its source. Corrections are actively worse than merely
-  unsupported: both storage backends key a record on `(project, source record id)`
-  and **throw an error** if a record with that key already exists — so resending a
-  corrected version of a record a source has already sent once is currently
-  rejected, not applied.
+  **Status: Partially implemented.** Corrections now work on one path: resending a
+  record through `ingest-incremental` with the same `(project, source record id)`
+  but different field values updates the stored record (superseding, not
+  overwriting, the prior one) and flows through matching, clustering, and the
+  golden record exactly as new evidence would — an unclustered record simply gets
+  re-scored, while a clustered record detaches from its cluster (dissolving it if
+  it was the only member) and the golden record recomputes from the survivors. An
+  identical resend (no field changed) is a safe no-op. This is supported on the
+  file metadata store's non-Lucene-indexed path only: attach an index and the same
+  call throws `NotSupportedException` rather than silently leaving a stale,
+  still-searchable candidate behind. Three things remain unimplemented: deletion
+  (the "customer closed their account" half of this requirement — there is still
+  no tombstone concept for a record withdrawn at the source), the PostgreSQL
+  backend (corrections throw there too — see `PostgresMutationApplier`), and
+  excluding a superseded record from a Lucene-indexed store's retrieval.
 
 ### Data arriving late or out of order
 
@@ -171,15 +178,21 @@ number and sit in whichever section they belong to, so existing numbers never sh
   trusted record dependent on load order — a subtler but real violation of the same
   guarantee.
 
-  **Status: Partially implemented.** Clustering order-independence is proven by an
+  **Status: Fully implemented.** Clustering order-independence is proven by an
   actual test that feeds the same three records in three different orderings and
   asserts identical cluster membership every time. Golden-record *value*
-  order-independence is not tested anywhere, and there's a concrete reason to worry
-  about it: `MergeByPriority` uses a first-match lookup over cluster members when
-  more than one record shares the same highest-priority source with different
-  values for a field — a pattern that is, by construction, sensitive to the order
-  those members are enumerated in. Whether that order is itself arrival-order-
-  dependent in practice hasn't been verified either way.
+  order-independence was not tested, and on inspection was a real bug:
+  `MergeByPriority` used a first-match lookup over cluster members when more than
+  one record shared the same highest-priority source with different values for a
+  field, and `MergeByConsensus` broke a full count/length tie the same way — both
+  sensitive to member-list order, which in every caller tracked arrival order.
+  Fixed by making every tie resolve on field content (majority, then longest, then
+  alphabetical) rather than position, with permutation tests proving it
+  (`Linkuity.Core.Merge.GoldenRecordMerge`). The fix also closed a related gap: the
+  batch and durable paths used to carry two independently-maintained copies of this
+  logic that had quietly drifted apart (case-sensitivity, field-universe scope,
+  source-field configurability, blank-value checking); both now call the same
+  implementation, so they cannot drift apart again.
 
 ### Deciding what matches
 

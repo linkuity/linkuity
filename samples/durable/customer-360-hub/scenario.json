@@ -27,7 +27,7 @@
     { "command": "ingest-incremental",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "batch-id": "{mktBatchId}",
                 "input": "data/marketing-batch.csv", "profiles": "customer.profile.json" },
-      "assert": { "stdout": { "Records added": "1", "Auto matches": "1" } } },
+      "assert": { "stdout": { "Records added": "1", "Auto matches": "1", "Golden versions created": "1" } } },
     { "command": "cluster list",
       "args": { "project-id": "{projectId}" },
       "assert": { "rows": [ { "where": { "member_ids~": "mkt-013" },
@@ -43,7 +43,7 @@
     { "command": "golden list",
       "args": { "project-id": "{projectId}" },
       "assert": { "rows": [ { "where": { "member_ids~": "crm-010" },
-                              "expect": { "version": "2", "email": "carol.chen@example.com" } } ] } },
+                              "expect": { "version": "3", "email": "carol.chen@example.com" } } ] } },
 
     { "command": "batch create",
       "args": { "project-id": "{projectId}", "source-id": "{sourceId}", "record-count": "1" },
