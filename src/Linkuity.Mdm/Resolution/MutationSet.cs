@@ -23,4 +23,5 @@ public sealed class MutationSet
     // did not survive re-evaluation) — see ClusterDissolutionEvent.
     public List<ClusterDissolutionEvent> DissolutionEventsToInsert { get; } = [];
     public List<RecordCorrectedEvent> CorrectionEventsToInsert { get; } = [];
+    public List<RecordDeletedEvent> DeletionEventsToInsert { get; } = [];
 }
