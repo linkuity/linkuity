@@ -217,6 +217,162 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
         Assert.Contains("review_threshold", reviewCsv);
     }
 
+    /// <summary>
+    /// Issue #74 coverage gap: <c>RecordsCorrected</c> is exercised at every layer below the CLI's
+    /// print statement (resolver: IncrementalResolverCorrectionTests; store:
+    /// FileMetadataStoreTests.SaveIncrementalIngestAsync_ResendWithDifferentValues_...), but nothing
+    /// asserted on the actual printed "Records corrected: N" line
+    /// (LocalBatchRunner.cs PrintIngestResult, called from the single-batch path at :378). This
+    /// closes that gap for the only value the line can actually take through the CLI today — see
+    /// <see cref="IngestIncremental_CorrectingResend_ThrowsBecauseIndexBackedCorrectionIsUnsupported"/>
+    /// for why "Records corrected: 1" is not currently reachable that way.
+    /// </summary>
+    [Fact]
+    public async Task IngestIncremental_PrintsRecordsCorrectedZero_WhenNoCorrectionOccurs()
+    {
+        var metadataPath = Path.Combine(_root, "metadata-correction-output-zero.json");
+        var inputPath = Path.Combine(_root, "correction-output-zero.csv");
+        var runner = new LocalBatchRunner();
+
+        await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Customer MDM", "--content-type", "person"], CancellationToken.None);
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
+        var project = Assert.Single(await store.ListProjectsAsync(CancellationToken.None));
+        await runner.RunAsync(["source", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--name", "CRM"], CancellationToken.None);
+        var source = Assert.Single(await store.ListSourcesAsync(project.Id, CancellationToken.None));
+        await runner.RunAsync(["batch", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--source-id", source.Id.ToString(), "--record-count", "1"], CancellationToken.None);
+        var batch = Assert.Single(await store.ListIngestBatchesAsync(project.Id, CancellationToken.None));
+
+        await File.WriteAllTextAsync(
+            inputPath,
+            """
+            id,source,name,email
+            crm-001,CRM,Alice,alice@example.com
+            """,
+            Encoding.UTF8);
+
+        using var output = new StringWriter();
+        var previousOut = Console.Out;
+        Console.SetOut(output);
+        int exitCode;
+        try
+        {
+            exitCode = await runner.RunAsync(
+                [
+                    "ingest-incremental",
+                    "--metadata", metadataPath,
+                    "--project-id", project.Id.ToString(),
+                    "--source-id", source.Id.ToString(),
+                    "--batch-id", batch.Id.ToString(),
+                    "--input", inputPath,
+                    "--auto-threshold", "0.90",
+                    "--review-threshold", "0.75"
+                ],
+                CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+        }
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Records corrected: 0", output.ToString());
+    }
+
+    /// <summary>
+    /// Discovered while adding CLI-level coverage for the "Records corrected: N" line (issue #74),
+    /// and documented here because it changes what that coverage can honestly assert.
+    ///
+    /// LocalBatchRunner.RunMetadataCommandAsync ALWAYS attaches a Lucene index to the metadata
+    /// store for durable commands — both the file backend (LocalBatchRunner.cs:196-204) and the
+    /// Postgres backend (:169-177) construct a <c>LuceneCandidateRetrieval</c> unconditionally; no
+    /// CLI flag opts out. FileMetadataStore.SaveIncrementalIngestAsync (FileMetadataStore.cs:246-251)
+    /// refuses to apply ANY correction once an index is attached: "Record correction is not yet
+    /// supported on an index-backed store ... until Lucene reindexing on correction is built."
+    ///
+    /// Those two facts combine so that `ingest-incremental` can NEVER successfully process a
+    /// correcting resend through the CLI as shipped: the call throws before PrintIngestResult ever
+    /// runs, for every correction, unconditionally (the guard only checks "is an index attached",
+    /// not anything about the specific correction). Program.cs has no top-level exception handler
+    /// (`Main` is `new LocalBatchRunner().RunAsync(args, ct)` with nothing wrapping it), so this
+    /// propagates all the way out and crashes the process.
+    ///
+    /// This contrasts with the API's file-backed path (RuntimeInfrastructureRegistration.cs:26-30),
+    /// which constructs FileMetadataStore with no index and so does not hit this guard — corrections
+    /// work there today. Only the CLI is affected.
+    ///
+    /// "Records corrected: 1" is therefore not a reachable CLI output today, which is why this test
+    /// documents the throw instead of the print line — pinning down current, real behavior so a
+    /// future change to either side (Lucene reindexing on correction, or the CLI's forced index
+    /// attachment) doesn't silently drift without a test noticing. Fixing this gap is out of scope
+    /// here.
+    /// </summary>
+    [Fact]
+    public async Task IngestIncremental_CorrectingResend_ThrowsBecauseIndexBackedCorrectionIsUnsupported()
+    {
+        var metadataPath = Path.Combine(_root, "metadata-correction-throws.json");
+        var firstInputPath = Path.Combine(_root, "correction-throws-initial.csv");
+        var correctionInputPath = Path.Combine(_root, "correction-throws-resend.csv");
+        var runner = new LocalBatchRunner();
+
+        await runner.RunAsync(["project", "create", "--metadata", metadataPath, "--name", "Customer MDM", "--content-type", "person"], CancellationToken.None);
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = metadataPath });
+        var project = Assert.Single(await store.ListProjectsAsync(CancellationToken.None));
+        await runner.RunAsync(["source", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--name", "CRM"], CancellationToken.None);
+        var source = Assert.Single(await store.ListSourcesAsync(project.Id, CancellationToken.None));
+        await runner.RunAsync(["batch", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--source-id", source.Id.ToString(), "--record-count", "1"], CancellationToken.None);
+        var initialBatch = Assert.Single(await store.ListIngestBatchesAsync(project.Id, CancellationToken.None));
+
+        await File.WriteAllTextAsync(
+            firstInputPath,
+            """
+            id,source,name,email
+            crm-001,CRM,Alice,alice@old.example.com
+            """,
+            Encoding.UTF8);
+
+        var initialExit = await runner.RunAsync(
+            [
+                "ingest-incremental",
+                "--metadata", metadataPath,
+                "--project-id", project.Id.ToString(),
+                "--source-id", source.Id.ToString(),
+                "--batch-id", initialBatch.Id.ToString(),
+                "--input", firstInputPath,
+                "--auto-threshold", "0.90",
+                "--review-threshold", "0.75"
+            ],
+            CancellationToken.None);
+        Assert.Equal(0, initialExit);
+
+        await runner.RunAsync(["batch", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--source-id", source.Id.ToString(), "--record-count", "1"], CancellationToken.None);
+        var correctionBatch = (await store.ListIngestBatchesAsync(project.Id, CancellationToken.None)).Last();
+
+        // Same SourceRecordId (crm-001) as above, changed email — IncrementalResolver would treat
+        // this as a correction (ClassifyAndDetachCorrections) if the store let it through.
+        await File.WriteAllTextAsync(
+            correctionInputPath,
+            """
+            id,source,name,email
+            crm-001,CRM,Alice,alice@new.example.com
+            """,
+            Encoding.UTF8);
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => runner.RunAsync(
+            [
+                "ingest-incremental",
+                "--metadata", metadataPath,
+                "--project-id", project.Id.ToString(),
+                "--source-id", source.Id.ToString(),
+                "--batch-id", correctionBatch.Id.ToString(),
+                "--input", correctionInputPath,
+                "--auto-threshold", "0.90",
+                "--review-threshold", "0.75"
+            ],
+            CancellationToken.None));
+
+        Assert.Contains("index-backed store", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
