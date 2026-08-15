@@ -250,7 +250,7 @@ public sealed class LocalBatchRunner
                     return 2;
             }
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FileNotFoundException or FormatException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FileNotFoundException or FormatException or NotSupportedException)
         {
             await Console.Error.WriteLineAsync(ex.Message);
             return 2;

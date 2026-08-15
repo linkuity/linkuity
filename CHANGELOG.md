@@ -128,6 +128,37 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   sharing the CLI's batch engine.
 
 ### Fixed
+- Record correction bugs found in post-merge review of F6 milestone 1 (#63): (1)
+  `FileMetadataStore.ApplyMutations` could orphan a golden record against a
+  tombstoned cluster when one ingest batch corrected both members of a
+  2-member cluster — the clear-by-cluster-id ran before, not after, the
+  golden-record upsert loop, so it couldn't catch an upsert queued earlier in
+  the same batch for the same now-dead cluster; (2) `DetachFromCluster`'s
+  tombstone branch wrote a cluster's stale, pre-batch membership instead of
+  the batch's pending-reduced membership, inconsistent with its sibling
+  "survivors keep cluster id" branch; (3) `IncrementalIngestResult.RecordsAdded`
+  double-counted corrected records (a correction was reported as both "added"
+  and "corrected"); (4) `FileMetadataStore.UpdateBatchRecordCount` over-reported
+  a batch's stored `RecordCount` by including no-op resends that are dropped
+  before resolution.
+- `GoldenRecordMerge.MergeFields` could silently drop a cluster member's field
+  value during consensus/priority merge: it looks up each member's value by one
+  canonical field-name casing, which only works if every member's `Fields`
+  dictionary is case-insensitive — true for freshly-normalized records, false
+  for any record reloaded from the JSON file store (`System.Text.Json`
+  deserializes dictionaries with the default, case-sensitive comparer
+  regardless of the original). Field lookups are now case-insensitive
+  regardless of the caller's dictionary comparer. Also fixed: the merged
+  record's field key order was arrival-order-dependent; it's now sorted
+  deterministically.
+- `ingest-incremental` crashed with an unhandled `NotSupportedException` (raw
+  stack trace, no top-level handler) on any correcting resend through the CLI.
+  The CLI always attaches a Lucene index to the metadata store so durable
+  commands exercise indexed retrieval like production, but index-backed
+  correction isn't supported yet (tracked separately); the resulting guard's
+  exception type just wasn't in the CLI's list of gracefully-handled
+  exceptions. Now fails cleanly with an error message and exit code 2, matching
+  every other "not yet supported on this backend" case.
 - Golden-record field values could depend on the order records arrived in (F54): when
   multiple cluster members shared the highest-priority source but disagreed on a
   field's value, or a consensus vote tied on both count and length, the merge picked

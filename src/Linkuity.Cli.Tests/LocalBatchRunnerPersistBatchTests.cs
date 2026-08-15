@@ -224,8 +224,9 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
     /// asserted on the actual printed "Records corrected: N" line
     /// (LocalBatchRunner.cs PrintIngestResult, called from the single-batch path at :378). This
     /// closes that gap for the only value the line can actually take through the CLI today — see
-    /// <see cref="IngestIncremental_CorrectingResend_ThrowsBecauseIndexBackedCorrectionIsUnsupported"/>
-    /// for why "Records corrected: 1" is not currently reachable that way.
+    /// <see cref="IngestIncremental_CorrectingResend_FailsGracefullyBecauseIndexBackedCorrectionIsUnsupported"/>
+    /// for why "Records corrected: 1" is not currently reachable that way (index-backed correction
+    /// isn't supported yet — #66 — but as of #78 that now fails gracefully instead of crashing).
     /// </summary>
     [Fact]
     public async Task IngestIncremental_PrintsRecordsCorrectedZero_WhenNoCorrectionOccurs()
@@ -279,8 +280,8 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
     }
 
     /// <summary>
-    /// Discovered while adding CLI-level coverage for the "Records corrected: N" line (issue #74),
-    /// and documented here because it changes what that coverage can honestly assert.
+    /// Regression for #78, discovered while adding CLI-level coverage for the "Records corrected: N"
+    /// line (issue #74).
     ///
     /// LocalBatchRunner.RunMetadataCommandAsync ALWAYS attaches a Lucene index to the metadata
     /// store for durable commands — both the file backend (LocalBatchRunner.cs:196-204) and the
@@ -289,25 +290,26 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
     /// refuses to apply ANY correction once an index is attached: "Record correction is not yet
     /// supported on an index-backed store ... until Lucene reindexing on correction is built."
     ///
-    /// Those two facts combine so that `ingest-incremental` can NEVER successfully process a
-    /// correcting resend through the CLI as shipped: the call throws before PrintIngestResult ever
-    /// runs, for every correction, unconditionally (the guard only checks "is an index attached",
-    /// not anything about the specific correction). Program.cs has no top-level exception handler
-    /// (`Main` is `new LocalBatchRunner().RunAsync(args, ct)` with nothing wrapping it), so this
-    /// propagates all the way out and crashes the process.
+    /// Those two facts combine so that every correcting resend through `ingest-incremental` hits
+    /// that guard (the guard only checks "is an index attached", not anything about the specific
+    /// correction) — full support (Lucene reindexing on correction) is out of scope here, that's
+    /// #66. But until #63, `DispatchMetadataCommandAsync`'s catch clause (LocalBatchRunner.cs) did
+    /// not include <see cref="NotSupportedException"/> alongside the other known,
+    /// user-actionable exception types it already handles (ArgumentException,
+    /// InvalidOperationException, FileNotFoundException, FormatException) — every other
+    /// "not yet supported on this backend" guard in the codebase (PostgresResolutionContext,
+    /// PostgresMutationApplier, PostgresMetadataStore) throws the same exception type for the same
+    /// category of condition, so the omission meant this one specific case propagated all the way
+    /// out of Program.cs (which has no top-level handler) and crashed the process with a raw stack
+    /// trace instead of getting the same graceful "print the message, exit 2" treatment as every
+    /// sibling case. This test asserts the fixed, graceful behavior.
     ///
     /// This contrasts with the API's file-backed path (RuntimeInfrastructureRegistration.cs:26-30),
     /// which constructs FileMetadataStore with no index and so does not hit this guard — corrections
-    /// work there today. Only the CLI is affected.
-    ///
-    /// "Records corrected: 1" is therefore not a reachable CLI output today, which is why this test
-    /// documents the throw instead of the print line — pinning down current, real behavior so a
-    /// future change to either side (Lucene reindexing on correction, or the CLI's forced index
-    /// attachment) doesn't silently drift without a test noticing. Fixing this gap is out of scope
-    /// here.
+    /// work there today. Only the CLI needed this fix.
     /// </summary>
     [Fact]
-    public async Task IngestIncremental_CorrectingResend_ThrowsBecauseIndexBackedCorrectionIsUnsupported()
+    public async Task IngestIncremental_CorrectingResend_FailsGracefullyBecauseIndexBackedCorrectionIsUnsupported()
     {
         var metadataPath = Path.Combine(_root, "metadata-correction-throws.json");
         var firstInputPath = Path.Combine(_root, "correction-throws-initial.csv");
@@ -357,20 +359,32 @@ public sealed class LocalBatchRunnerPersistBatchTests : IDisposable
             """,
             Encoding.UTF8);
 
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => runner.RunAsync(
-            [
-                "ingest-incremental",
-                "--metadata", metadataPath,
-                "--project-id", project.Id.ToString(),
-                "--source-id", source.Id.ToString(),
-                "--batch-id", correctionBatch.Id.ToString(),
-                "--input", correctionInputPath,
-                "--auto-threshold", "0.90",
-                "--review-threshold", "0.75"
-            ],
-            CancellationToken.None));
+        using var errorOutput = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(errorOutput);
+        int exitCode;
+        try
+        {
+            exitCode = await runner.RunAsync(
+                [
+                    "ingest-incremental",
+                    "--metadata", metadataPath,
+                    "--project-id", project.Id.ToString(),
+                    "--source-id", source.Id.ToString(),
+                    "--batch-id", correctionBatch.Id.ToString(),
+                    "--input", correctionInputPath,
+                    "--auto-threshold", "0.90",
+                    "--review-threshold", "0.75"
+                ],
+                CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
 
-        Assert.Contains("index-backed store", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, exitCode);
+        Assert.Contains("index-backed store", errorOutput.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()
