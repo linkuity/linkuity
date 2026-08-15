@@ -915,6 +915,60 @@ public class FileMetadataStoreTests : IDisposable
         Assert.DoesNotContain(clusters, c => c.MemberEntityRecordIds.Contains(originalId));
     }
 
+    /// <summary>
+    /// Regression for #69/#70: a single batch mixing all three ClassifyAndDetachCorrections
+    /// outcomes (brand new, identical no-op resend, correction) exercises both counter bugs
+    /// found in the whole-branch review after PR #63. #69 — RecordsAdded double-counted
+    /// corrected records because Resolve's incomingRecords parameter IS recordsToResolve
+    /// (new + corrected, no-ops already excluded), so a corrected record was counted both as
+    /// "added" and as "corrected". #70 — the batch's stored RecordCount was reconciled against
+    /// request.Records.Count (the raw incoming count, still including the dropped no-op) rather
+    /// than recordsToResolve.Count (what was actually stored/resolved).
+    /// </summary>
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_MixedBatch_CountsOnlyGenuinelyNewRecordsAsAdded()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-mixed-counts.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+
+        var initialBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var noOpSource = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-noop", now, ["email:noop"],
+            new Dictionary<string, string> { ["id"] = "crm-noop", ["source"] = "CRM", ["email"] = "noop@example.com" });
+        var toBeCorrected = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-correct", now, ["email:correct-old"],
+            new Dictionary<string, string> { ["id"] = "crm-correct", ["source"] = "CRM", ["email"] = "old@example.com" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, initialBatch.Id, [noOpSource, toBeCorrected], 0.90, 0.75),
+            CancellationToken.None);
+
+        // Raw incoming count of 3, matching what request.Records.Count would be below — the
+        // stored count bug #70 fixes reconciles this down to 2 (the no-op is dropped).
+        var mixedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 3, now.AddMinutes(1), CancellationToken.None);
+        var brandNew = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "web-new", now.AddMinutes(1), ["email:new"],
+            new Dictionary<string, string> { ["id"] = "web-new", ["source"] = "Web", ["email"] = "new@example.com" });
+        var identicalResend = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "crm-noop", now.AddMinutes(1), ["email:noop"],
+            new Dictionary<string, string> { ["id"] = "crm-noop", ["source"] = "CRM", ["email"] = "noop@example.com" });
+        var corrected = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "crm-correct", now.AddMinutes(1), ["email:correct-new"],
+            new Dictionary<string, string> { ["id"] = "crm-correct", ["source"] = "CRM", ["email"] = "newvalue@example.com" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, mixedBatch.Id, [brandNew, identicalResend, corrected], 0.90, 0.75),
+            CancellationToken.None);
+
+        // Bug #69: only the genuinely new record should count as "added" — the corrected
+        // record must not be double-counted as both added and corrected.
+        Assert.Equal(1, result.RecordsAdded);
+        Assert.Equal(1, result.RecordsCorrected);
+
+        // Bug #70: the batch's stored RecordCount must reflect rows actually resolved (new +
+        // corrected = 2), not the raw incoming count of 3 that still includes the dropped no-op.
+        var storedBatch = (await store.ListIngestBatchesAsync(project.Id, CancellationToken.None))
+            .Single(b => b.Id == mixedBatch.Id);
+        Assert.Equal(2, storedBatch.RecordCount);
+    }
+
     [Fact]
     public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
     {
