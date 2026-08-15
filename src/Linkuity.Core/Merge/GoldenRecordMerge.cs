@@ -23,6 +23,11 @@ public static class GoldenRecordMerge
             .GroupBy(field => field, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderBy(v => v, StringComparer.Ordinal).First())
             .Where(field => !IsNonCanonicalField(field, sourceField))
+            // #77: sorted by the canonical field name so the output's key order depends only on
+            // field content, never on which order members happened to be enumerated in — the
+            // same F54 reasoning this class's tie-breaks already apply, extended to the shape of
+            // the returned dictionary itself.
+            .OrderBy(field => field, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return fields.ToDictionary(

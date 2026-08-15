@@ -261,6 +261,30 @@ public class GoldenRecordMergeTests
         Assert.Equal("Bern", result["city"]);   // consensus majority
     }
 
+    [Theory]
+    [InlineData(0, 1, 2)]
+    [InlineData(2, 1, 0)]
+    [InlineData(1, 2, 0)]
+    public void MergeFields_KeyOrderIsDeterministic_RegardlessOfMemberArrivalOrder(int i0, int i1, int i2)
+    {
+        // Same members, same content, three different arrival orders. #77: the returned
+        // dictionary's key ORDER must not depend on which order the members happened to be
+        // enumerated in -- the same reasoning F54 already applied to tie-breaking VALUES here
+        // applies to the shape of the output itself.
+        var candidates = new[]
+        {
+            Rec(("zebra", "Z1")),
+            Rec(("mango", "M1")),
+            Rec(("apple", "A1")),
+        };
+        var members = new List<IReadOnlyDictionary<string, string>>
+            { candidates[i0], candidates[i1], candidates[i2] };
+
+        var result = GoldenRecordMerge.MergeFields(members, NoPriority, "source");
+
+        Assert.Equal(["apple", "mango", "zebra"], result.Keys.ToList());
+    }
+
     // --- DictionaryEquals ---
 
     [Fact]
