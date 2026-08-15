@@ -20,7 +20,8 @@ public static class GoldenRecordMerge
     {
         var fields = members
             .SelectMany(m => m.Keys)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(field => field, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(v => v, StringComparer.Ordinal).First())
             .Where(field => !IsNonCanonicalField(field, sourceField))
             .ToList();
 
@@ -63,8 +64,10 @@ public static class GoldenRecordMerge
             .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(group => group.Count())
             .ThenByDescending(group => group.Key.Length)
-            .ThenBy(group => group.Key, StringComparer.Ordinal)
-            .FirstOrDefault()?.Key ?? "";
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault()
+            ?.OrderBy(value => value, StringComparer.Ordinal)
+            .First() ?? "";
 
     public static bool DictionaryEquals(IReadOnlyDictionary<string, string> left, IReadOnlyDictionary<string, string> right)
         => left.Count == right.Count &&

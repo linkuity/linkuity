@@ -101,6 +101,27 @@ public class GoldenRecordMergeTests
         Assert.Equal("Bern", result); // alphabetically first, regardless of arrival order
     }
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(1, 0)]
+    public void MergeByConsensus_CasingTie_ReturnsSameCasingRegardlessOfArrivalOrder(int i0, int i1)
+    {
+        // "Alice" and "ALICE" are the same value under the case-insensitive grouping (tied count,
+        // tied length), so the ONLY thing left to pick a winning casing is content, never which
+        // record's casing happened to become the group's Key first.
+        var members = new List<IReadOnlyDictionary<string, string>>
+        {
+            Rec(("name", "Alice")),
+            Rec(("name", "ALICE")),
+        };
+        var input = new List<IReadOnlyDictionary<string, string>> { members[i0], members[i1] };
+
+        var result = GoldenRecordMerge.MergeByConsensus(input, "name");
+
+        // Not just case-insensitively equal — the exact same casing regardless of order.
+        Assert.Equal("ALICE", result);
+    }
+
     // --- MergeByPriority ---
 
     [Fact]
