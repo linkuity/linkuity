@@ -9,6 +9,19 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- Record corrections (F6 milestone 1): resending a record through
+  `ingest-incremental` with the same `(project, source record id)` but different
+  field values now supersedes the prior record and re-enters matching — an
+  unclustered record is simply re-scored, a clustered record detaches from its
+  cluster (dissolving it if it was the only member) with the golden record
+  recomputed from the remaining survivors, and an identical resend is a safe
+  no-op rather than an error. `IncrementalIngestResult.RecordsCorrected` reports
+  how many corrections a batch applied. Scope is intentionally narrow for this
+  milestone: only the file metadata store's non-Lucene-indexed path supports it
+  (an indexed store throws `NotSupportedException` instead of silently leaving a
+  stale candidate searchable); the PostgreSQL backend does not yet apply
+  corrections either, and throws rather than dropping them silently. Deletion is
+  not addressed by this milestone.
 - `match corpus fields` CLI command: measures how much each of your columns is
   actually worth for matching, on your own data, so a matching profile is built
   from measurement rather than guesswork. Per matchable field it reports fill
