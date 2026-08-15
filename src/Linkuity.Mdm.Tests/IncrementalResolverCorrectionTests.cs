@@ -420,7 +420,7 @@ public class IncrementalResolverCorrectionTests
         // member of a cluster A left several lines of this same batch earlier.
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOldId = Guid.NewGuid();
         var survivorId = Guid.NewGuid();
