@@ -77,6 +77,116 @@ public sealed class IncrementalResolver
     public EntityRecord PrepareForStorage(EntityRecord record, MatchingProfile profile)
         => _engine.PrepareForStorage(record, profile);
 
+    public (IReadOnlyList<EntityRecord> RecordsToResolve, MutationSet DetachMutations) ClassifyAndDetachCorrections(
+        Project project,
+        MatchingProfile profile,
+        IReadOnlyList<EntityRecord> incomingRecords,
+        IResolutionContext context,
+        DateTimeOffset now)
+    {
+        var mutations = new MutationSet();
+        var toResolve = new List<EntityRecord>();
+
+        foreach (var incoming in incomingRecords)
+        {
+            var current = context.FindCurrentRecordBySourceRecordId(incoming.ProjectId, incoming.SourceRecordId);
+            if (current is null)
+            {
+                toResolve.Add(incoming);
+                continue;
+            }
+
+            if (GoldenRecordMerge.DictionaryEquals(current.Fields, incoming.Fields))
+                continue; // identical resend — safe no-op, nothing to do
+
+            // Correction. Detach from any current cluster before it re-enters resolution.
+            Guid? previousClusterId = DetachFromCluster(project, profile, current, context, mutations, now);
+
+            mutations.RecordsToUpdate.Add(current with { SupersededAt = now });
+            mutations.CorrectionEventsToInsert.Add(new RecordCorrectedEvent
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = project.Id,
+                SupersededEntityRecordId = current.Id,
+                CorrectedEntityRecordId = incoming.Id,
+                PreviousFields = current.Fields,
+                NewFields = incoming.Fields,
+                PreviousClusterId = previousClusterId,
+                IngestBatchId = incoming.IngestBatchId,
+                CreatedAt = now
+            });
+            toResolve.Add(incoming);
+        }
+
+        return (toResolve, mutations);
+    }
+
+    // Returns the cluster the record was detached from, or null if it had none (already a
+    // singleton). Populates `mutations` with whatever the detach requires — reduced/tombstoned
+    // cluster, recomputed golden record — for the CALLER'S old cluster; the record ITSELF re-enters
+    // resolution fresh via `toResolve`, handled by the caller.
+    private static Guid? DetachFromCluster(
+        Project project, MatchingProfile profile, EntityRecord record, IResolutionContext context,
+        MutationSet mutations, DateTimeOffset now)
+    {
+        var clusters = context.GetActiveClustersContaining(project.Id, [record.Id]);
+        if (clusters.Count == 0)
+            return null;
+
+        var cluster = clusters[0]; // a record belongs to at most one active cluster
+        var survivorIds = cluster.MemberEntityRecordIds.Where(id => id != record.Id).ToList();
+
+        if (survivorIds.Count == 0)
+        {
+            // The corrected record was the cluster's only member — tombstone it, matching the
+            // existing dissolution-tombstone shape (Status = "merged", MergedIntoClusterId = null),
+            // and remove its golden record entirely.
+            mutations.ClustersToUpsert.Add(new Cluster
+            {
+                Id = cluster.Id, ProjectId = cluster.ProjectId, MemberEntityRecordIds = cluster.MemberEntityRecordIds,
+                CreatedAt = cluster.CreatedAt, Status = "merged", MergedIntoClusterId = null,
+                ComparisonsInside = cluster.ComparisonsInside, AgreementsInside = cluster.AgreementsInside
+            });
+            mutations.GoldenRecordClusterIdsToClear.Add(cluster.Id);
+            return cluster.Id;
+        }
+
+        // Survivors keep the existing cluster id (F28) — including when exactly one remains and it
+        // becomes a de facto singleton; nothing about ITS identity changed.
+        mutations.ClustersToUpsert.Add(new Cluster
+        {
+            Id = cluster.Id, ProjectId = cluster.ProjectId, MemberEntityRecordIds = survivorIds,
+            CreatedAt = cluster.CreatedAt, Status = cluster.Status, MergedIntoClusterId = cluster.MergedIntoClusterId,
+            ComparisonsInside = cluster.ComparisonsInside, AgreementsInside = cluster.AgreementsInside
+        });
+
+        var survivorRecords = context.GetRecordsByIds(project.Id, survivorIds).Select(r => r.Fields).ToList();
+        var golden = context.GetGoldenRecordsForClusters(project.Id, [cluster.Id]).FirstOrDefault();
+        if (golden is null)
+            return cluster.Id; // no golden record existed yet for this cluster — nothing to recompute
+
+        var mergeIndex = project.MergeConfiguration?.MergeFields
+            .ToDictionary(f => f.FieldName, f => f.SourcePriority, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        var sourceField = profile.Fields
+            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+        var recomputedFields = GoldenRecordMerge.MergeFields(survivorRecords, mergeIndex, sourceField);
+
+        var versionId = Guid.NewGuid();
+        mutations.GoldenRecordsToUpsert.Add(new GoldenRecord
+        {
+            Id = golden.Id, ProjectId = golden.ProjectId, ClusterId = golden.ClusterId,
+            CurrentVersionId = versionId, Fields = recomputedFields, UpdatedAt = now
+        });
+        mutations.VersionsToInsert.Add(new GoldenRecordVersion
+        {
+            Id = versionId, GoldenRecordId = golden.Id, ProjectId = golden.ProjectId, ClusterId = golden.ClusterId,
+            IngestBatchId = record.IngestBatchId, VersionNumber = 1, Fields = recomputedFields, CreatedAt = now
+        });
+
+        return cluster.Id;
+    }
+
     // incomingRecords MUST already carry blocking keys. Returns counts + the targeted mutations to apply.
     public (IncrementalIngestResult Result, MutationSet Mutations) Resolve(
         IncrementalIngestRequest request,

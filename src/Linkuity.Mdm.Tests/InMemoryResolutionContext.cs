@@ -45,6 +45,11 @@ internal sealed class InMemoryResolutionContext : IResolutionContext
         return GoldenRecordVersions.Where(v => idSet.Contains(v.GoldenRecordId)).ToList();
     }
 
+    public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
+        => Records.FirstOrDefault(r =>
+            r.ProjectId == projectId && r.SupersededAt is null &&
+            string.Equals(r.SourceRecordId, sourceRecordId, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
     /// Mirrors FileMetadataStore's own ApplyMutations (source :264). A multi-ingest test that skips
     /// this sees an empty corpus on the second call — indistinguishable from "never ingested."
