@@ -196,11 +196,7 @@ public sealed class IncrementalResolver
         if (golden is null)
             return cluster.Id; // no golden record existed yet for this cluster — nothing to recompute
 
-        var mergeIndex = project.MergeConfiguration?.MergeFields
-            .ToDictionary(f => f.FieldName, f => f.SourcePriority, StringComparer.OrdinalIgnoreCase)
-            ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
-        var sourceField = profile.Fields
-            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+        var (mergeIndex, sourceField) = MergePolicyResolver.For(project, profile);
         var recomputedFields = GoldenRecordMerge.MergeFields(survivorRecords, mergeIndex, sourceField);
 
         // Next sequential version number, mirroring UpdateGoldenRecords's own
@@ -511,15 +507,7 @@ public sealed class IncrementalResolver
         IEnumerable<Guid> affectedClusterIds,
         DateTimeOffset now)
     {
-        var mergeIndex = project.MergeConfiguration?.MergeFields
-            .ToDictionary(field => field.FieldName, field => field.SourcePriority, StringComparer.OrdinalIgnoreCase)
-            ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
-        // Falls back to the conventional "source" column when the profile doesn't declare one
-        // (e.g. the built-in person profile) — durable ingestion has always assumed that
-        // convention, and a project can attach a merge policy's source priority without the
-        // profile itself declaring a SourceIdentifier field.
-        var sourceField = profile.Fields
-            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+        var (mergeIndex, sourceField) = MergePolicyResolver.For(project, profile);
 
         var versionsCreated = 0;
         foreach (var clusterId in affectedClusterIds.Distinct())

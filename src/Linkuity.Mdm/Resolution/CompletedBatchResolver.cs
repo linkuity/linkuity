@@ -45,12 +45,8 @@ public static class CompletedBatchResolver
             if (ingestBatchIds.Count != 1)
                 throw new InvalidOperationException("Cluster members must belong to exactly one ingest batch when project merge policy is applied.");
 
-            var mergeIndex = project.MergeConfiguration!.MergeFields
-                .ToDictionary(field => field.FieldName, field => field.SourcePriority, StringComparer.OrdinalIgnoreCase);
-            // See IncrementalResolver's identical fallback: durable ingestion has always assumed
-            // the "source" column convention even when the profile doesn't declare it.
-            var sourceField = profileProvider.GetProfile(project.ContentType).Fields
-                .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+            var profile = profileProvider.GetProfile(project.ContentType);
+            var (mergeIndex, sourceField) = MergePolicyResolver.For(project, profile);
             var fields = GoldenRecordMerge.MergeFields(members.Select(m => m.Fields).ToList(), mergeIndex, sourceField);
             var goldenRecordId = Guid.NewGuid();
             var versionId = Guid.NewGuid();
