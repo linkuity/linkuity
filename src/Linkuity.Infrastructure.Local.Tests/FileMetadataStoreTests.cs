@@ -1237,4 +1237,65 @@ public class FileMetadataStoreTests : IDisposable
         Assert.Equal("merged", tombstoned.Status);
         Assert.DoesNotContain(raw.GoldenRecords, g => g.ClusterId == clusterId);
     }
+
+    /// <summary>
+    /// Regression for #76. GoldenRecordMerge.MergeFields collects field names across all cluster
+    /// members case-insensitively, then picks ONE canonical casing and looks that up in each
+    /// member's own Fields dictionary via plain TryGetValue. That only works if every member's
+    /// dictionary uses a case-insensitive comparer. FileMetadataStore reloads its whole working
+    /// set via System.Text.Json on every call (LoadAsync), and STJ deserializes a
+    /// Dictionary&lt;string,string&gt; with the default (ordinal, case-SENSITIVE) comparer,
+    /// regardless of what comparer the in-memory object had before serialization. So a record
+    /// ingested in one call and then read back on a later call carries a case-sensitive Fields
+    /// dictionary — exactly what happens here to "existing" once "incoming" triggers the reload
+    /// on the second SaveIncrementalIngestAsync call.
+    /// </summary>
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ConsensusMerge_DoesNotDropFieldFromMemberReloadedWithDifferentCasing()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-field-casing.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var initialBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+
+        // Built in-process with a case-insensitive comparer (the normal case for a freshly
+        // constructed record), but this record round-trips through the JSON file store between
+        // this call and the next one, so by the time the second ingest reads it back its Fields
+        // dictionary has lost that comparer.
+        var existing = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-001", now, ["email:alice@example.com"],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["email"] = "alice@example.com",
+                ["Department"] = "Sales"
+            });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, initialBatch.Id, [existing], 0.90, 0.75), CancellationToken.None);
+
+        // Auto-matches "existing" on email and joins its cluster. Its own Fields dictionary is
+        // freshly built (case-insensitive, like real ingestion paths build it) and carries the
+        // SAME field under different casing with no value of its own — present only so the
+        // field-name union in MergeFields has two casings of "department" to pick a canonical
+        // spelling from. "Sales" (on "existing") is the cluster's only real value for this field.
+        var incrementalBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var incoming = NewRecordWithFields(project.Id, source.Id, incrementalBatch.Id, "web-001", now.AddMinutes(1), ["email:alice@example.com"],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["email"] = "alice@example.com",
+                ["DEPARTMENT"] = ""
+            });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, incrementalBatch.Id, [incoming], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.AutoMatches);
+        var golden = Assert.Single(await store.ListGoldenRecordsAsync(project.Id, CancellationToken.None));
+
+        // If MergeByConsensus looks each member's value up using only the one canonical
+        // field-name casing MergeFields chose, "existing"'s case-sensitive (post-reload)
+        // dictionary won't match that casing and its "Sales" value is silently dropped, leaving
+        // the golden record with no real value for this field at all.
+        var departmentEntry = golden.Fields.FirstOrDefault(kv => string.Equals(kv.Key, "department", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("Sales", departmentEntry.Value);
+    }
 }
