@@ -245,4 +245,131 @@ public class IncrementalResolverCorrectionTests
         Assert.Equal(clusterId, Assert.Single(mutations.GoldenRecordClusterIdsToClear));
         Assert.Empty(mutations.GoldenRecordsToUpsert); // nothing to recompute — cluster is gone
     }
+
+    [Fact]
+    public void ExistingRecord_DifferentFields_GoldenRecordAlreadyVersioned_NextVersionNumberIsSequential()
+    {
+        var projectId = Guid.NewGuid();
+        var merge = new MergeConfiguration { MergeFields = [] };
+        var project = MakeProject(projectId, merge);
+        var context = new FakeContext();
+
+        var correctedOldId = Guid.NewGuid();
+        var survivorId = Guid.NewGuid();
+        var correctedOld = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, correctedOldId);
+        var survivor = MakeRecord(projectId, "sib-1", new Dictionary<string, string> { ["name"] = "Alice" }, survivorId);
+        context.Records.AddRange([correctedOld, survivor]);
+
+        var clusterId = Guid.NewGuid();
+        context.Clusters.Add(new Cluster
+        {
+            Id = clusterId, ProjectId = projectId, MemberEntityRecordIds = [correctedOldId, survivorId],
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        var goldenId = Guid.NewGuid();
+        context.GoldenRecords.Add(new GoldenRecord
+        {
+            Id = goldenId, ProjectId = projectId, ClusterId = clusterId, CurrentVersionId = Guid.NewGuid(),
+            Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = DateTimeOffset.UtcNow
+        });
+        // The golden record already has 2 prior versions — the next one must be 3, not 1.
+        context.Versions.AddRange(
+        [
+            new GoldenRecordVersion
+            {
+                Id = Guid.NewGuid(), GoldenRecordId = goldenId, ProjectId = projectId, ClusterId = clusterId,
+                IngestBatchId = Guid.NewGuid(), VersionNumber = 1,
+                Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = DateTimeOffset.UtcNow
+            },
+            new GoldenRecordVersion
+            {
+                Id = Guid.NewGuid(), GoldenRecordId = goldenId, ProjectId = projectId, ClusterId = clusterId,
+                IngestBatchId = Guid.NewGuid(), VersionNumber = 2,
+                Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = DateTimeOffset.UtcNow
+            }
+        ]);
+
+        var resend = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Zoe" });
+
+        var (_, mutations) = Resolver.ClassifyAndDetachCorrections(
+            project, Linkuity.Matching.MatchingDefaults.CreatePersonProfile(), [resend], context, DateTimeOffset.UtcNow);
+
+        var newVersion = Assert.Single(mutations.VersionsToInsert);
+        Assert.Equal(3, newVersion.VersionNumber);
+    }
+
+    [Fact]
+    public void ExistingRecord_DifferentFields_RecomputedVersion_AttributedToCorrectingRecordsIngestBatch()
+    {
+        var projectId = Guid.NewGuid();
+        var merge = new MergeConfiguration { MergeFields = [] };
+        var project = MakeProject(projectId, merge);
+        var context = new FakeContext();
+
+        var correctedOldId = Guid.NewGuid();
+        var survivorId = Guid.NewGuid();
+        var correctedOld = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, correctedOldId);
+        var survivor = MakeRecord(projectId, "sib-1", new Dictionary<string, string> { ["name"] = "Alice" }, survivorId);
+        context.Records.AddRange([correctedOld, survivor]);
+
+        var clusterId = Guid.NewGuid();
+        context.Clusters.Add(new Cluster
+        {
+            Id = clusterId, ProjectId = projectId, MemberEntityRecordIds = [correctedOldId, survivorId],
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        var goldenId = Guid.NewGuid();
+        context.GoldenRecords.Add(new GoldenRecord
+        {
+            Id = goldenId, ProjectId = projectId, ClusterId = clusterId, CurrentVersionId = Guid.NewGuid(),
+            Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = DateTimeOffset.UtcNow
+        });
+
+        var resend = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Zoe" });
+
+        var (_, mutations) = Resolver.ClassifyAndDetachCorrections(
+            project, Linkuity.Matching.MatchingDefaults.CreatePersonProfile(), [resend], context, DateTimeOffset.UtcNow);
+
+        var newVersion = Assert.Single(mutations.VersionsToInsert);
+        // The correcting record's own batch, NOT correctedOld's (the superseded record's) batch.
+        Assert.Equal(resend.IngestBatchId, newVersion.IngestBatchId);
+        Assert.NotEqual(correctedOld.IngestBatchId, newVersion.IngestBatchId);
+    }
+
+    [Fact]
+    public void TwoCorrections_SameBatch_SameCluster_BothDetachesReflectedInSurvivorList()
+    {
+        var projectId = Guid.NewGuid();
+        var project = MakeProject(projectId);
+        var context = new FakeContext();
+
+        var correctedOld1Id = Guid.NewGuid();
+        var correctedOld2Id = Guid.NewGuid();
+        var survivorId = Guid.NewGuid();
+        var correctedOld1 = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, correctedOld1Id);
+        var correctedOld2 = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Bob" }, correctedOld2Id);
+        var survivor = MakeRecord(projectId, "sib-1", new Dictionary<string, string> { ["name"] = "Carol" }, survivorId);
+        context.Records.AddRange([correctedOld1, correctedOld2, survivor]);
+
+        var clusterId = Guid.NewGuid();
+        context.Clusters.Add(new Cluster
+        {
+            Id = clusterId, ProjectId = projectId,
+            MemberEntityRecordIds = [correctedOld1Id, correctedOld2Id, survivorId],
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+
+        var resend1 = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Zoe" });
+        var resend2 = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Yuri" });
+
+        var (toResolve, mutations) = Resolver.ClassifyAndDetachCorrections(
+            project, Linkuity.Matching.MatchingDefaults.CreatePersonProfile(), [resend1, resend2], context, DateTimeOffset.UtcNow);
+
+        Assert.Equal(2, toResolve.Count);
+
+        // Both records left the cluster in this one call — the FINAL entry for this cluster id must
+        // reflect BOTH detaches, not just the last one processed.
+        var finalClusterState = mutations.ClustersToUpsert.Last(c => c.Id == clusterId);
+        Assert.Equal([survivorId], finalClusterState.MemberEntityRecordIds);
+    }
 }
