@@ -998,6 +998,156 @@ public class FileMetadataStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteRecordsAsync_ExistingRecord_MarksDeletedAndDetachesFromCluster()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        var result = await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None);
+
+        Assert.Equal(1, result.RecordsDeleted);
+        Assert.Empty(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None)); // no longer current
+
+        var events = await store.ListRecordDeletedEventsAsync(project.Id, CancellationToken.None);
+        var evt = Assert.Single(events);
+        Assert.Equal("alice@example.com", evt.PreviousFields["email"]);
+        // Every current record belongs to a cluster, even an unmatched one — MaterializeComponent
+        // always materializes a (possibly single-member) cluster for an incoming component, so
+        // there is no "unclustered" state to observe here; PreviousClusterId records that
+        // singleton cluster's id, not null.
+        Assert.NotNull(evt.PreviousClusterId);
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_DeletingSameSourceRecordIdTwice_SecondCallThrows()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-twice.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None));
+        Assert.Contains("crm-001", ex.Message);
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_UnknownSourceRecordId_Throws()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-unknown.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 0, now, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(project.Id, source.Id, batch.Id, ["nonexistent"], CancellationToken.None));
+        Assert.Contains("nonexistent", ex.Message);
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_UnknownProjectSourceOrBatch_Throws()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-provenance.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 0, now, CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(Guid.NewGuid(), source.Id, batch.Id, ["x"], CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(project.Id, Guid.NewGuid(), batch.Id, ["x"], CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(project.Id, source.Id, Guid.NewGuid(), ["x"], CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_DuplicateSourceRecordIdInOneCall_Throws()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-dup.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 0, now, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.DeleteRecordsAsync(project.Id, source.Id, batch.Id, ["crm-001", "crm-001"], CancellationToken.None));
+        Assert.Contains("Duplicate", ex.Message);
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_OnIndexedStore_ThrowsNotSupportedWithoutMutatingFile()
+    {
+        var indexDir = Path.Combine(_root, "lucene-deletion-guard");
+        var engine = MatchingDefaults.CreateEngine();
+        var provider = new DefaultMatchingProfileProvider([DefaultMatchingProfileProvider.CreatePersonProfile()]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var databasePath = Path.Combine(_root, "metadata-deletion-indexed-guard.json");
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = databasePath }, engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        // Captured AFTER the deletion batch exists — CreateIngestBatchAsync itself persists
+        // (adding the new batch row), so capturing beforeContent any earlier would make this
+        // comparison trip on that unrelated, expected write rather than isolating what
+        // DeleteRecordsAsync's own guard does (or, here, correctly does not do).
+        var beforeContent = await File.ReadAllTextAsync(databasePath);
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None));
+
+        var afterContent = await File.ReadAllTextAsync(databasePath);
+        Assert.Equal(beforeContent, afterContent); // guard fires before any mutation is applied
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_MultipleIdsOneCall_AllTombstonedAndCounted()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-multi.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var a = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-a", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-a", ["email"] = "a@example.com" });
+        var b = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-b", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-b", ["email"] = "b@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [a, b], 0.90, 0.75), CancellationToken.None);
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        var result = await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-a", "crm-b"], CancellationToken.None);
+
+        Assert.Equal(2, result.RecordsDeleted);
+        Assert.Empty(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None));
+        Assert.Equal(2, (await store.ListRecordDeletedEventsAsync(project.Id, CancellationToken.None)).Count);
+    }
+
+    [Fact]
     public async Task SaveIncrementalIngestAsync_WhenAutoMatchesMultipleExistingClusters_MergesBridgedClusters()
     {
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata.json") });
