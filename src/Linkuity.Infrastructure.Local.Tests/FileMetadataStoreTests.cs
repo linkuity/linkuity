@@ -1105,4 +1105,82 @@ public class FileMetadataStoreTests : IDisposable
         Assert.Equal("a@old.example.com", evt.PreviousFields["email"]);
         Assert.Equal("a@new.example.com", evt.NewFields["email"]);
     }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_CorrectingBothMembersOfTwoMemberClusterInOneBatch_LeavesNoOrphanedGoldenRecord()
+    {
+        // Regression for #67: a 2-member cluster {A,B} with a golden record, where ONE batch
+        // corrects BOTH members. Iteration 1 (correcting A) reduces the cluster to the survivor
+        // {B} and, because a golden record already exists, recomputes+queues a new golden record
+        // row (still keyed to this same cluster id) alongside it. Iteration 2 (correcting B) sees
+        // the cluster's pending-reduced membership as already empty, so it tombstones the cluster
+        // and queues GoldenRecordClusterIdsToClear for it. ApplyMutations used to run that clear
+        // BEFORE the GoldenRecordsToUpsert loop, so it could only remove a golden row already
+        // persisted in `db` — never one iteration 1 queued into the SAME MutationSet for the SAME
+        // cluster id — leaving an orphaned golden record pointing at a now-tombstoned cluster.
+        //
+        // ListGoldenRecordsAsync filters by active cluster and would mask this: an orphaned golden
+        // record pointing at a "merged" cluster is exactly what that filter excludes. So this test
+        // reads the raw persisted state directly instead.
+        var databasePath = Path.Combine(_root, "metadata-two-member-correction.json");
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = databasePath });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+
+        var memberA = NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "crm-a", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-a", ["name"] = "Alice" });
+        var memberB = NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "crm-b", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-b", ["name"] = "Alice" });
+        var clusterId = Guid.NewGuid();
+        var goldenId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [memberA, memberB],
+                [],
+                [
+                    new Cluster
+                    {
+                        Id = clusterId, ProjectId = project.Id,
+                        MemberEntityRecordIds = [memberA.Id, memberB.Id], CreatedAt = now
+                    }
+                ],
+                [
+                    new GoldenRecord
+                    {
+                        Id = goldenId, ProjectId = project.Id, ClusterId = clusterId, CurrentVersionId = versionId,
+                        Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = now
+                    }
+                ],
+                [
+                    new GoldenRecordVersion
+                    {
+                        Id = versionId, GoldenRecordId = goldenId, ProjectId = project.Id, ClusterId = clusterId,
+                        IngestBatchId = seedBatch.Id, VersionNumber = 1,
+                        Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = now
+                    }
+                ]),
+            CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 2, now.AddMinutes(1), CancellationToken.None);
+        var correctedA = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-a", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-a", ["name"] = "Alice-corrected" });
+        var correctedB = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-b", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-b", ["name"] = "Alice-corrected-too" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [correctedA, correctedB], 0.90, 0.75),
+            CancellationToken.None);
+
+        Assert.Equal(2, result.RecordsCorrected);
+
+        var raw = System.Text.Json.JsonSerializer.Deserialize<Linkuity.Mdm.Resolution.ResolutionWorkingSet>(
+            await File.ReadAllTextAsync(databasePath))!;
+        var tombstoned = raw.Clusters.Single(c => c.Id == clusterId);
+        Assert.Equal("merged", tombstoned.Status);
+        Assert.DoesNotContain(raw.GoldenRecords, g => g.ClusterId == clusterId);
+    }
 }

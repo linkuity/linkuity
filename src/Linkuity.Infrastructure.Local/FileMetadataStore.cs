@@ -302,12 +302,20 @@ public sealed class FileMetadataStore : IMetadataStore
             db.Clusters.Add(c);
         }
 
-        db.GoldenRecords.RemoveAll(g => m.GoldenRecordClusterIdsToClear.Contains(g.ClusterId));
         foreach (var g in m.GoldenRecordsToUpsert)
         {
             db.GoldenRecords.RemoveAll(x => x.Id == g.Id);
             db.GoldenRecords.Add(g);
         }
+        // Clears run LAST, deliberately: within one MutationSet, a cluster can both receive a
+        // (now-stale) golden record upsert AND get tombstoned by a LATER correction detaching the
+        // rest of its membership in the SAME batch (e.g. correcting both members of a 2-member
+        // cluster — see #67). GoldenRecordsToUpsert entries only exist in-memory in `m` at this
+        // point, not yet in `db`, so a clear run BEFORE the upsert loop can only remove a golden
+        // row already persisted from a PRIOR call — never one this same call just queued for the
+        // very cluster it is also clearing. Running the clear after the upsert loop makes a
+        // same-batch tombstone always win over an earlier same-batch upsert for that cluster id.
+        db.GoldenRecords.RemoveAll(g => m.GoldenRecordClusterIdsToClear.Contains(g.ClusterId));
 
         db.GoldenRecordVersions.AddRange(m.VersionsToInsert);
         db.MatchEdges.AddRange(m.EdgesToInsert);
