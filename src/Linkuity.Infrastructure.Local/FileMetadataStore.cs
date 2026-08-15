@@ -539,7 +539,7 @@ public sealed class FileMetadataStore : IMetadataStore
     private sealed class FileResolutionContext(ResolutionWorkingSet db) : IResolutionContext
     {
         public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
             => db.Clusters
@@ -548,7 +548,7 @@ public sealed class FileMetadataStore : IMetadataStore
                 .ToList();
 
         public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id)).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
             => db.GoldenRecords.Where(g => g.ProjectId == projectId && clusterIds.Contains(g.ClusterId)).ToList();

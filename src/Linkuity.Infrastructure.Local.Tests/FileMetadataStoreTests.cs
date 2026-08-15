@@ -878,6 +878,44 @@ public class FileMetadataStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveIncrementalIngestAsync_CorrectionOnNonIdentifierField_SupersededRecordNotMatchedAgainst()
+    {
+        // Regression for the bug where GetLinearCorpus/GetRecordsByIds did not filter out
+        // superseded records: a correction that leaves the identifier field (email) unchanged
+        // and only changes a non-identifier field (name) used to score ~0.98 against its own
+        // now-superseded predecessor (identifier-weighted scoring floors to 0.98 on any exact
+        // identifier match, regardless of how much the non-identifier fields disagree) and
+        // auto-merge the corrected record with the very record it just replaced.
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction-non-identifier.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com", ["name"] = "Alice" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+        var originalId = original.Id;
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        // Identifier field (email) unchanged; only the non-identifier "name" field changes.
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com", ["name"] = "Bob" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.RecordsCorrected);
+
+        var edges = await store.ListMatchEdgesAsync(project.Id, CancellationToken.None);
+        Assert.DoesNotContain(edges, e => e.LeftEntityRecordId == originalId || e.RightEntityRecordId == originalId);
+
+        var clusters = await store.ListClustersAsync(project.Id, CancellationToken.None);
+        Assert.DoesNotContain(clusters, c => c.MemberEntityRecordIds.Contains(originalId));
+    }
+
+    [Fact]
     public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
     {
         var indexDir = Path.Combine(_root, "lucene-correction-guard");

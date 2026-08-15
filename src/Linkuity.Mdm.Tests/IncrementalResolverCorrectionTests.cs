@@ -38,14 +38,14 @@ public class IncrementalResolverCorrectionTests
         public List<GoldenRecordVersion> Versions { get; } = [];
 
         public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-            => Records.Where(r => r.ProjectId == projectId).ToList();
+            => Records.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
             => Clusters.Where(c => c.ProjectId == projectId && c.Status != "merged"
                                     && c.MemberEntityRecordIds.Any(recordIds.Contains)).ToList();
 
         public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => Records.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id)).ToList();
+            => Records.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null).ToList();
 
         public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
             => GoldenRecords.Where(g => g.ProjectId == projectId && clusterIds.Contains(g.ClusterId)).ToList();

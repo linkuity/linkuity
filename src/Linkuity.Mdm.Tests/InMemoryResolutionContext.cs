@@ -16,7 +16,7 @@ internal sealed class InMemoryResolutionContext : IResolutionContext
     public List<GoldenRecordVersion> GoldenRecordVersions { get; } = [];
 
     public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-        => Records.Where(r => r.ProjectId == projectId).ToList();
+        => Records.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
 
     public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
     {
@@ -30,7 +30,7 @@ internal sealed class InMemoryResolutionContext : IResolutionContext
     public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
     {
         var idSet = recordIds.ToHashSet();
-        return Records.Where(r => r.ProjectId == projectId && idSet.Contains(r.Id)).ToList();
+        return Records.Where(r => r.ProjectId == projectId && idSet.Contains(r.Id) && r.SupersededAt is null).ToList();
     }
 
     public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
