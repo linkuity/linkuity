@@ -30,40 +30,12 @@ public class IncrementalResolverCorrectionTests
         CreatedAt = DateTimeOffset.UtcNow
     };
 
-    private sealed class FakeContext : IResolutionContext
-    {
-        public List<EntityRecord> Records { get; } = [];
-        public List<Cluster> Clusters { get; } = [];
-        public List<GoldenRecord> GoldenRecords { get; } = [];
-        public List<GoldenRecordVersion> Versions { get; } = [];
-
-        public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-            => Records.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
-
-        public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => Clusters.Where(c => c.ProjectId == projectId && c.Status != "merged"
-                                    && c.MemberEntityRecordIds.Any(recordIds.Contains)).ToList();
-
-        public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => Records.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null).ToList();
-
-        public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
-            => GoldenRecords.Where(g => g.ProjectId == projectId && clusterIds.Contains(g.ClusterId)).ToList();
-
-        public IReadOnlyList<GoldenRecordVersion> GetVersionsForGoldenRecords(IReadOnlyCollection<Guid> goldenRecordIds)
-            => Versions.Where(v => goldenRecordIds.Contains(v.GoldenRecordId)).ToList();
-
-        public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
-            => Records.FirstOrDefault(r => r.ProjectId == projectId && r.SupersededAt is null
-                                            && string.Equals(r.SourceRecordId, sourceRecordId, StringComparison.OrdinalIgnoreCase));
-    }
-
     [Fact]
     public void NewRecord_NoExistingMatch_PassesThroughUnchangedNoMutations()
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
         var incoming = MakeRecord(projectId, "new-1", new Dictionary<string, string> { ["email"] = "a@example.com" });
 
         var (toResolve, mutations) = Resolver.ClassifyAndDetachCorrections(
@@ -81,7 +53,7 @@ public class IncrementalResolverCorrectionTests
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
         var existingId = Guid.NewGuid();
         var existing = MakeRecord(projectId, "dup-1", new Dictionary<string, string> { ["email"] = "a@example.com" }, existingId);
         context.Records.Add(existing);
@@ -100,7 +72,7 @@ public class IncrementalResolverCorrectionTests
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
         var existingId = Guid.NewGuid();
         var existing = MakeRecord(projectId, "s-1", new Dictionary<string, string> { ["email"] = "old@example.com" }, existingId);
         context.Records.Add(existing);
@@ -131,7 +103,7 @@ public class IncrementalResolverCorrectionTests
         var projectId = Guid.NewGuid();
         var merge = new MergeConfiguration { MergeFields = [] };
         var project = MakeProject(projectId, merge);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOldId = Guid.NewGuid();
         var sibling1Id = Guid.NewGuid();
@@ -184,7 +156,7 @@ public class IncrementalResolverCorrectionTests
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOldId = Guid.NewGuid();
         var survivorId = Guid.NewGuid();
@@ -215,7 +187,7 @@ public class IncrementalResolverCorrectionTests
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var oldId = Guid.NewGuid();
         var old = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, oldId);
@@ -252,7 +224,7 @@ public class IncrementalResolverCorrectionTests
         var projectId = Guid.NewGuid();
         var merge = new MergeConfiguration { MergeFields = [] };
         var project = MakeProject(projectId, merge);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOldId = Guid.NewGuid();
         var survivorId = Guid.NewGuid();
@@ -273,7 +245,7 @@ public class IncrementalResolverCorrectionTests
             Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = DateTimeOffset.UtcNow
         });
         // The golden record already has 2 prior versions — the next one must be 3, not 1.
-        context.Versions.AddRange(
+        context.GoldenRecordVersions.AddRange(
         [
             new GoldenRecordVersion
             {
@@ -304,7 +276,7 @@ public class IncrementalResolverCorrectionTests
         var projectId = Guid.NewGuid();
         var merge = new MergeConfiguration { MergeFields = [] };
         var project = MakeProject(projectId, merge);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOldId = Guid.NewGuid();
         var survivorId = Guid.NewGuid();
@@ -341,7 +313,7 @@ public class IncrementalResolverCorrectionTests
     {
         var projectId = Guid.NewGuid();
         var project = MakeProject(projectId);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOld1Id = Guid.NewGuid();
         var correctedOld2Id = Guid.NewGuid();
@@ -379,7 +351,7 @@ public class IncrementalResolverCorrectionTests
         var projectId = Guid.NewGuid();
         var merge = new MergeConfiguration { MergeFields = [] };
         var project = MakeProject(projectId, merge);
-        var context = new FakeContext();
+        var context = new InMemoryResolutionContext();
 
         var correctedOld1Id = Guid.NewGuid();
         var correctedOld2Id = Guid.NewGuid();
@@ -403,7 +375,7 @@ public class IncrementalResolverCorrectionTests
             Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = DateTimeOffset.UtcNow
         });
         // The golden record already has 2 prior versions before this batch runs.
-        context.Versions.AddRange(
+        context.GoldenRecordVersions.AddRange(
         [
             new GoldenRecordVersion
             {
