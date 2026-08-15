@@ -23,6 +23,11 @@ public static class GoldenRecordMerge
             .GroupBy(field => field, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderBy(v => v, StringComparer.Ordinal).First())
             .Where(field => !IsNonCanonicalField(field, sourceField))
+            // #77: sorted by the canonical field name so the output's key order depends only on
+            // field content, never on which order members happened to be enumerated in — the
+            // same F54 reasoning this class's tie-breaks already apply, extended to the shape of
+            // the returned dictionary itself.
+            .OrderBy(field => field, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return fields.ToDictionary(
@@ -42,7 +47,7 @@ public static class GoldenRecordMerge
         foreach (var source in sourcePriority)
         {
             var tier = members
-                .Where(m => m.TryGetValue(sourceField, out var s) &&
+                .Where(m => TryGetFieldValue(m, sourceField, out var s) &&
                             string.Equals(s, source, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             // Multiple members can share this tier's source and still disagree on the field's
@@ -59,7 +64,7 @@ public static class GoldenRecordMerge
 
     public static string MergeByConsensus(IReadOnlyList<IReadOnlyDictionary<string, string>> members, string field)
         => members
-            .Select(m => m.TryGetValue(field, out var value) ? value : "")
+            .Select(m => TryGetFieldValue(m, field, out var value) ? value : "")
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(group => group.Count())
@@ -68,6 +73,34 @@ public static class GoldenRecordMerge
             .FirstOrDefault()
             ?.OrderBy(value => value, StringComparer.Ordinal)
             .First() ?? "";
+
+    /// <summary>
+    /// #76: a case-insensitive field lookup that works regardless of the comparer the member's
+    /// own dictionary happens to use. MergeFields picks ONE canonical casing for a field name
+    /// across all members, and that casing does not necessarily match any given member's own key
+    /// casing. A plain <c>TryGetValue</c> only finds it when the member's dictionary is itself
+    /// case-insensitive — true for a record built fresh in-process, but not for one reloaded via
+    /// System.Text.Json (its dictionary deserializer defaults to the case-SENSITIVE ordinal
+    /// comparer regardless of what comparer the object had before serialization). Relying on the
+    /// caller's comparer silently drops that member's value from the merge; looking it up
+    /// case-insensitively here does not.
+    /// </summary>
+    private static bool TryGetFieldValue(IReadOnlyDictionary<string, string> member, string field, out string value)
+    {
+        if (member.TryGetValue(field, out value!))
+            return true;
+
+        foreach (var (key, candidate) in member)
+        {
+            if (!string.Equals(key, field, StringComparison.OrdinalIgnoreCase))
+                continue;
+            value = candidate;
+            return true;
+        }
+
+        value = "";
+        return false;
+    }
 
     public static bool DictionaryEquals(IReadOnlyDictionary<string, string> left, IReadOnlyDictionary<string, string> right)
         => left.Count == right.Count &&

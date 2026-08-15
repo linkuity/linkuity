@@ -130,8 +130,10 @@ number and sit in whichever section they belong to, so existing numbers never sh
   still-searchable candidate behind. Three things remain unimplemented: deletion
   (the "customer closed their account" half of this requirement — there is still
   no tombstone concept for a record withdrawn at the source), the PostgreSQL
-  backend (corrections throw there too — see `PostgresMutationApplier`), and
-  excluding a superseded record from a Lucene-indexed store's retrieval.
+  backend (corrections throw there too — the pre-existing duplicate-source-record-id
+  check in `PostgresMetadataStore.ValidateIncrementalRequestAsync` rejects any
+  resend before it would reach the resolver), and excluding a superseded record
+  from a Lucene-indexed store's retrieval.
 
 ### Data arriving late or out of order
 

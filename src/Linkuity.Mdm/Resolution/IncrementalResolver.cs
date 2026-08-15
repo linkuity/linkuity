@@ -171,10 +171,18 @@ public sealed class IncrementalResolver
         {
             // The corrected record was the cluster's only member — tombstone it, matching the
             // existing dissolution-tombstone shape (Status = "merged", MergedIntoClusterId = null),
-            // and remove its golden record entirely.
+            // and remove its golden record entirely. MemberEntityRecordIds is currentMemberIds —
+            // this SAME BATCH's pending-reduced membership immediately before this detach (which,
+            // survivorIds being empty, is exactly [record.Id]) — not cluster.MemberEntityRecordIds
+            // (the stale, pre-batch list). A second correction in this batch may already have
+            // detached a sibling from this same cluster (see pendingMemberIdsByClusterId above);
+            // using the original list here would restate that already-departed sibling as still a
+            // member of the cluster it left earlier in this very call. This mirrors the sibling
+            // "survivors keep cluster id" branch below, which for the same reason writes
+            // survivorIds (its own pending-reduced result) rather than the original list.
             mutations.ClustersToUpsert.Add(new Cluster
             {
-                Id = cluster.Id, ProjectId = cluster.ProjectId, MemberEntityRecordIds = cluster.MemberEntityRecordIds,
+                Id = cluster.Id, ProjectId = cluster.ProjectId, MemberEntityRecordIds = currentMemberIds,
                 CreatedAt = cluster.CreatedAt, Status = "merged", MergedIntoClusterId = null,
                 ComparisonsInside = cluster.ComparisonsInside, AgreementsInside = cluster.AgreementsInside
             });

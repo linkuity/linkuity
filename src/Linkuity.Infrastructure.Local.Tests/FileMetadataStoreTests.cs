@@ -915,6 +915,60 @@ public class FileMetadataStoreTests : IDisposable
         Assert.DoesNotContain(clusters, c => c.MemberEntityRecordIds.Contains(originalId));
     }
 
+    /// <summary>
+    /// Regression for #69/#70: a single batch mixing all three ClassifyAndDetachCorrections
+    /// outcomes (brand new, identical no-op resend, correction) exercises both counter bugs
+    /// found in the whole-branch review after PR #63. #69 — RecordsAdded double-counted
+    /// corrected records because Resolve's incomingRecords parameter IS recordsToResolve
+    /// (new + corrected, no-ops already excluded), so a corrected record was counted both as
+    /// "added" and as "corrected". #70 — the batch's stored RecordCount was reconciled against
+    /// request.Records.Count (the raw incoming count, still including the dropped no-op) rather
+    /// than recordsToResolve.Count (what was actually stored/resolved).
+    /// </summary>
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_MixedBatch_CountsOnlyGenuinelyNewRecordsAsAdded()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-mixed-counts.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+
+        var initialBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var noOpSource = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-noop", now, ["email:noop"],
+            new Dictionary<string, string> { ["id"] = "crm-noop", ["source"] = "CRM", ["email"] = "noop@example.com" });
+        var toBeCorrected = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-correct", now, ["email:correct-old"],
+            new Dictionary<string, string> { ["id"] = "crm-correct", ["source"] = "CRM", ["email"] = "old@example.com" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, initialBatch.Id, [noOpSource, toBeCorrected], 0.90, 0.75),
+            CancellationToken.None);
+
+        // Raw incoming count of 3, matching what request.Records.Count would be below — the
+        // stored count bug #70 fixes reconciles this down to 2 (the no-op is dropped).
+        var mixedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 3, now.AddMinutes(1), CancellationToken.None);
+        var brandNew = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "web-new", now.AddMinutes(1), ["email:new"],
+            new Dictionary<string, string> { ["id"] = "web-new", ["source"] = "Web", ["email"] = "new@example.com" });
+        var identicalResend = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "crm-noop", now.AddMinutes(1), ["email:noop"],
+            new Dictionary<string, string> { ["id"] = "crm-noop", ["source"] = "CRM", ["email"] = "noop@example.com" });
+        var corrected = NewRecordWithFields(project.Id, source.Id, mixedBatch.Id, "crm-correct", now.AddMinutes(1), ["email:correct-new"],
+            new Dictionary<string, string> { ["id"] = "crm-correct", ["source"] = "CRM", ["email"] = "newvalue@example.com" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, mixedBatch.Id, [brandNew, identicalResend, corrected], 0.90, 0.75),
+            CancellationToken.None);
+
+        // Bug #69: only the genuinely new record should count as "added" — the corrected
+        // record must not be double-counted as both added and corrected.
+        Assert.Equal(1, result.RecordsAdded);
+        Assert.Equal(1, result.RecordsCorrected);
+
+        // Bug #70: the batch's stored RecordCount must reflect rows actually resolved (new +
+        // corrected = 2), not the raw incoming count of 3 that still includes the dropped no-op.
+        var storedBatch = (await store.ListIngestBatchesAsync(project.Id, CancellationToken.None))
+            .Single(b => b.Id == mixedBatch.Id);
+        Assert.Equal(2, storedBatch.RecordCount);
+    }
+
     [Fact]
     public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
     {
@@ -1104,5 +1158,144 @@ public class FileMetadataStoreTests : IDisposable
         var evt = Assert.Single(events);
         Assert.Equal("a@old.example.com", evt.PreviousFields["email"]);
         Assert.Equal("a@new.example.com", evt.NewFields["email"]);
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_CorrectingBothMembersOfTwoMemberClusterInOneBatch_LeavesNoOrphanedGoldenRecord()
+    {
+        // Regression for #67: a 2-member cluster {A,B} with a golden record, where ONE batch
+        // corrects BOTH members. Iteration 1 (correcting A) reduces the cluster to the survivor
+        // {B} and, because a golden record already exists, recomputes+queues a new golden record
+        // row (still keyed to this same cluster id) alongside it. Iteration 2 (correcting B) sees
+        // the cluster's pending-reduced membership as already empty, so it tombstones the cluster
+        // and queues GoldenRecordClusterIdsToClear for it. ApplyMutations used to run that clear
+        // BEFORE the GoldenRecordsToUpsert loop, so it could only remove a golden row already
+        // persisted in `db` — never one iteration 1 queued into the SAME MutationSet for the SAME
+        // cluster id — leaving an orphaned golden record pointing at a now-tombstoned cluster.
+        //
+        // ListGoldenRecordsAsync filters by active cluster and would mask this: an orphaned golden
+        // record pointing at a "merged" cluster is exactly what that filter excludes. So this test
+        // reads the raw persisted state directly instead.
+        var databasePath = Path.Combine(_root, "metadata-two-member-correction.json");
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = databasePath });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+
+        var memberA = NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "crm-a", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-a", ["name"] = "Alice" });
+        var memberB = NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "crm-b", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-b", ["name"] = "Alice" });
+        var clusterId = Guid.NewGuid();
+        var goldenId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [memberA, memberB],
+                [],
+                [
+                    new Cluster
+                    {
+                        Id = clusterId, ProjectId = project.Id,
+                        MemberEntityRecordIds = [memberA.Id, memberB.Id], CreatedAt = now
+                    }
+                ],
+                [
+                    new GoldenRecord
+                    {
+                        Id = goldenId, ProjectId = project.Id, ClusterId = clusterId, CurrentVersionId = versionId,
+                        Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = now
+                    }
+                ],
+                [
+                    new GoldenRecordVersion
+                    {
+                        Id = versionId, GoldenRecordId = goldenId, ProjectId = project.Id, ClusterId = clusterId,
+                        IngestBatchId = seedBatch.Id, VersionNumber = 1,
+                        Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = now
+                    }
+                ]),
+            CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 2, now.AddMinutes(1), CancellationToken.None);
+        var correctedA = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-a", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-a", ["name"] = "Alice-corrected" });
+        var correctedB = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-b", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-b", ["name"] = "Alice-corrected-too" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [correctedA, correctedB], 0.90, 0.75),
+            CancellationToken.None);
+
+        Assert.Equal(2, result.RecordsCorrected);
+
+        var raw = System.Text.Json.JsonSerializer.Deserialize<Linkuity.Mdm.Resolution.ResolutionWorkingSet>(
+            await File.ReadAllTextAsync(databasePath))!;
+        var tombstoned = raw.Clusters.Single(c => c.Id == clusterId);
+        Assert.Equal("merged", tombstoned.Status);
+        Assert.DoesNotContain(raw.GoldenRecords, g => g.ClusterId == clusterId);
+    }
+
+    /// <summary>
+    /// Regression for #76. GoldenRecordMerge.MergeFields collects field names across all cluster
+    /// members case-insensitively, then picks ONE canonical casing and looks that up in each
+    /// member's own Fields dictionary via plain TryGetValue. That only works if every member's
+    /// dictionary uses a case-insensitive comparer. FileMetadataStore reloads its whole working
+    /// set via System.Text.Json on every call (LoadAsync), and STJ deserializes a
+    /// Dictionary&lt;string,string&gt; with the default (ordinal, case-SENSITIVE) comparer,
+    /// regardless of what comparer the in-memory object had before serialization. So a record
+    /// ingested in one call and then read back on a later call carries a case-sensitive Fields
+    /// dictionary — exactly what happens here to "existing" once "incoming" triggers the reload
+    /// on the second SaveIncrementalIngestAsync call.
+    /// </summary>
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ConsensusMerge_DoesNotDropFieldFromMemberReloadedWithDifferentCasing()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-field-casing.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var initialBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+
+        // Built in-process with a case-insensitive comparer (the normal case for a freshly
+        // constructed record), but this record round-trips through the JSON file store between
+        // this call and the next one, so by the time the second ingest reads it back its Fields
+        // dictionary has lost that comparer.
+        var existing = NewRecordWithFields(project.Id, source.Id, initialBatch.Id, "crm-001", now, ["email:alice@example.com"],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["email"] = "alice@example.com",
+                ["Department"] = "Sales"
+            });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, initialBatch.Id, [existing], 0.90, 0.75), CancellationToken.None);
+
+        // Auto-matches "existing" on email and joins its cluster. Its own Fields dictionary is
+        // freshly built (case-insensitive, like real ingestion paths build it) and carries the
+        // SAME field under different casing with no value of its own — present only so the
+        // field-name union in MergeFields has two casings of "department" to pick a canonical
+        // spelling from. "Sales" (on "existing") is the cluster's only real value for this field.
+        var incrementalBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var incoming = NewRecordWithFields(project.Id, source.Id, incrementalBatch.Id, "web-001", now.AddMinutes(1), ["email:alice@example.com"],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["email"] = "alice@example.com",
+                ["DEPARTMENT"] = ""
+            });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, incrementalBatch.Id, [incoming], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.AutoMatches);
+        var golden = Assert.Single(await store.ListGoldenRecordsAsync(project.Id, CancellationToken.None));
+
+        // If MergeByConsensus looks each member's value up using only the one canonical
+        // field-name casing MergeFields chose, "existing"'s case-sensitive (post-reload)
+        // dictionary won't match that casing and its "Sales" value is silently dropped, leaving
+        // the golden record with no real value for this field at all.
+        var departmentEntry = golden.Fields.FirstOrDefault(kv => string.Equals(kv.Key, "department", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("Sales", departmentEntry.Value);
     }
 }
