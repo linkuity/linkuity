@@ -432,4 +432,53 @@ public class IncrementalResolverCorrectionTests
         Assert.Equal([3, 4], mutations.VersionsToInsert.Select(v => v.VersionNumber));
         Assert.All(mutations.VersionsToInsert, v => Assert.Equal(goldenId, v.GoldenRecordId));
     }
+
+    [Fact]
+    public void TwoCorrections_SameBatch_BothMembersOfTwoMemberCluster_TombstoneReflectsPendingReducedMembership()
+    {
+        // Regression for #68: cluster {A,B} with both members corrected in the SAME batch.
+        // Iteration 1 (correcting A) reduces the cluster to the survivor {B} via the "survivors
+        // keep cluster id" branch, which correctly writes the PENDING-reduced membership
+        // ([survivorId]), not the stale pre-batch list. Iteration 2 (correcting B, now the
+        // cluster's only remaining member) takes the tombstone branch — its
+        // MemberEntityRecordIds must be consistent with the sibling branch's convention: the
+        // membership as reduced by THIS BATCH SO FAR ([survivorId], i.e. B alone, since A
+        // already left earlier in this same batch), not cluster.MemberEntityRecordIds (the
+        // ORIGINAL, pre-batch [correctedOldId, survivorId]) — which would restate A as still a
+        // member of a cluster A left several lines of this same batch earlier.
+        var projectId = Guid.NewGuid();
+        var project = MakeProject(projectId);
+        var context = new FakeContext();
+
+        var correctedOldId = Guid.NewGuid();
+        var survivorId = Guid.NewGuid();
+        var correctedOld = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, correctedOldId);
+        var survivor = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Bob" }, survivorId);
+        context.Records.AddRange([correctedOld, survivor]);
+
+        var clusterId = Guid.NewGuid();
+        context.Clusters.Add(new Cluster
+        {
+            Id = clusterId, ProjectId = projectId,
+            MemberEntityRecordIds = [correctedOldId, survivorId],
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+
+        var resend1 = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Zoe" });
+        var resend2 = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Yuri" });
+
+        var (toResolve, mutations) = Resolver.ClassifyAndDetachCorrections(
+            project, Linkuity.Matching.MatchingDefaults.CreatePersonProfile(), [resend1, resend2], context, DateTimeOffset.UtcNow);
+
+        Assert.Equal(2, toResolve.Count);
+
+        // The FINAL entry for this cluster id must be the tombstone (both members left).
+        var finalClusterState = mutations.ClustersToUpsert.Last(c => c.Id == clusterId);
+        Assert.Equal("merged", finalClusterState.Status);
+        Assert.Null(finalClusterState.MergedIntoClusterId);
+        // Must reflect the pending-reduced membership at the moment of tombstoning ([survivorId] —
+        // B alone), consistent with the survivor branch's own convention, NOT the stale original
+        // [correctedOldId, survivorId] that includes A, who already left earlier in this batch.
+        Assert.Equal([survivorId], finalClusterState.MemberEntityRecordIds);
+    }
 }
