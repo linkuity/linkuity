@@ -262,6 +262,7 @@ Auto matches: 0
 Review tasks: 0
 Singleton clusters: 5
 Golden versions created: 5
+Records corrected: 0
 ```
 
 Because the project was empty, there was nothing for these five records to match against. Each
@@ -321,6 +322,7 @@ Auto matches: 3
 Review tasks: 0
 Singleton clusters: 2
 Golden versions created: 5
+Records corrected: 0
 ```
 
 Here's what happened:
@@ -397,6 +399,7 @@ Auto matches: 2
 Review tasks: 1
 Singleton clusters: 2
 Golden versions created: 4
+Records corrected: 0
 ```
 
 Here's the important part:
