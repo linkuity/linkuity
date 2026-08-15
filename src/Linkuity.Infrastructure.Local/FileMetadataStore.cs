@@ -256,10 +256,17 @@ public sealed class FileMetadataStore : IMetadataStore
                 request, project, profile, recordsToResolve, context, DateTimeOffset.UtcNow);
 
             ApplyMutations(db, mutations);
-            UpdateBatchRecordCount(db, request.IngestBatchId, request.Records.Count);
+            UpdateBatchRecordCount(db, request.IngestBatchId, recordsToResolve.Count);
             IndexRecords(recordsToResolve);
             await SaveAsync(db, ct);
-            return result with { RecordsCorrected = correctionMutations.CorrectionEventsToInsert.Count };
+
+            // result.RecordsAdded comes from Resolve's incomingRecords parameter, which IS
+            // recordsToResolve here — new records AND corrected records (no-ops are already
+            // excluded by ClassifyAndDetachCorrections). A corrected record is reported
+            // separately via RecordsCorrected below, so it must be subtracted here or it would
+            // be double-counted as both "added" and "corrected".
+            var correctedCount = correctionMutations.CorrectionEventsToInsert.Count;
+            return result with { RecordsAdded = result.RecordsAdded - correctedCount, RecordsCorrected = correctedCount };
         }
         finally
         {
@@ -268,7 +275,11 @@ public sealed class FileMetadataStore : IMetadataStore
     }
 
     // Reconcile the batch's stored RecordCount with the rows actually ingested in this call.
-    // IngestBatch is an init-only class, so rebuild the working-set entry in place.
+    // Callers pass recordsToResolve.Count (new + corrected records), not the raw incoming
+    // request.Records.Count: ClassifyAndDetachCorrections silently drops identical no-op
+    // resends before this point, so the raw count would over-report rows that were never
+    // stored or resolved. IngestBatch is an init-only class, so rebuild the working-set entry
+    // in place.
     private static void UpdateBatchRecordCount(ResolutionWorkingSet db, Guid batchId, int count)
     {
         var index = db.IngestBatches.FindIndex(b => b.Id == batchId);
