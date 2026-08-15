@@ -372,4 +372,64 @@ public class IncrementalResolverCorrectionTests
         var finalClusterState = mutations.ClustersToUpsert.Last(c => c.Id == clusterId);
         Assert.Equal([survivorId], finalClusterState.MemberEntityRecordIds);
     }
+
+    [Fact]
+    public void TwoCorrections_SameBatch_SameGoldenRecord_VersionNumbersAreSequentialNotDuplicated()
+    {
+        var projectId = Guid.NewGuid();
+        var merge = new MergeConfiguration { MergeFields = [] };
+        var project = MakeProject(projectId, merge);
+        var context = new FakeContext();
+
+        var correctedOld1Id = Guid.NewGuid();
+        var correctedOld2Id = Guid.NewGuid();
+        var survivorId = Guid.NewGuid();
+        var correctedOld1 = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Alice" }, correctedOld1Id);
+        var correctedOld2 = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Bob" }, correctedOld2Id);
+        var survivor = MakeRecord(projectId, "sib-1", new Dictionary<string, string> { ["name"] = "Carol" }, survivorId);
+        context.Records.AddRange([correctedOld1, correctedOld2, survivor]);
+
+        var clusterId = Guid.NewGuid();
+        context.Clusters.Add(new Cluster
+        {
+            Id = clusterId, ProjectId = projectId,
+            MemberEntityRecordIds = [correctedOld1Id, correctedOld2Id, survivorId],
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        var goldenId = Guid.NewGuid();
+        context.GoldenRecords.Add(new GoldenRecord
+        {
+            Id = goldenId, ProjectId = projectId, ClusterId = clusterId, CurrentVersionId = Guid.NewGuid(),
+            Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = DateTimeOffset.UtcNow
+        });
+        // The golden record already has 2 prior versions before this batch runs.
+        context.Versions.AddRange(
+        [
+            new GoldenRecordVersion
+            {
+                Id = Guid.NewGuid(), GoldenRecordId = goldenId, ProjectId = projectId, ClusterId = clusterId,
+                IngestBatchId = Guid.NewGuid(), VersionNumber = 1,
+                Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = DateTimeOffset.UtcNow
+            },
+            new GoldenRecordVersion
+            {
+                Id = Guid.NewGuid(), GoldenRecordId = goldenId, ProjectId = projectId, ClusterId = clusterId,
+                IngestBatchId = Guid.NewGuid(), VersionNumber = 2,
+                Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = DateTimeOffset.UtcNow
+            }
+        ]);
+
+        var resend1 = MakeRecord(projectId, "c-1", new Dictionary<string, string> { ["name"] = "Zoe" });
+        var resend2 = MakeRecord(projectId, "c-2", new Dictionary<string, string> { ["name"] = "Yuri" });
+
+        var (_, mutations) = Resolver.ClassifyAndDetachCorrections(
+            project, Linkuity.Matching.MatchingDefaults.CreatePersonProfile(), [resend1, resend2], context, DateTimeOffset.UtcNow);
+
+        // Two corrections in this one batch both recompute the SAME golden record — the resulting
+        // versions must be sequential (3, then 4), not both "3" (each independently reading the
+        // context's still-stale, pre-batch count of 2).
+        Assert.Equal(2, mutations.VersionsToInsert.Count);
+        Assert.Equal([3, 4], mutations.VersionsToInsert.Select(v => v.VersionNumber));
+        Assert.All(mutations.VersionsToInsert, v => Assert.Equal(goldenId, v.GoldenRecordId));
+    }
 }

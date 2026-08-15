@@ -92,6 +92,11 @@ public sealed class IncrementalResolver
         // member" from context's original, undetached state (which would silently drop only the
         // LAST record processed instead of both).
         var pendingMemberIdsByClusterId = new Dictionary<Guid, IReadOnlyList<Guid>>();
+        // Same reasoning, for version numbers: a second correction detaching from the SAME golden
+        // record in this batch must see the first correction's already-queued version, not
+        // re-read context's still-unchanged (pre-batch) version count and mint the same "next"
+        // number twice.
+        var pendingVersionCountByGoldenRecordId = new Dictionary<Guid, int>();
 
         foreach (var incoming in incomingRecords)
         {
@@ -111,7 +116,8 @@ public sealed class IncrementalResolver
             // matching how every other golden-record-version write in this file attributes to the
             // triggering call, not the member's own history.
             Guid? previousClusterId = DetachFromCluster(
-                project, profile, current, incoming.IngestBatchId, context, mutations, now, pendingMemberIdsByClusterId);
+                project, profile, current, incoming.IngestBatchId, context, mutations, now,
+                pendingMemberIdsByClusterId, pendingVersionCountByGoldenRecordId);
 
             mutations.RecordsToUpdate.Add(current with { SupersededAt = now });
             mutations.CorrectionEventsToInsert.Add(new RecordCorrectedEvent
@@ -140,11 +146,15 @@ public sealed class IncrementalResolver
     // it, not to `record`'s (the superseded record's) own original batch. `pendingMemberIdsByClusterId`
     // carries this SAME CALL's already-reduced membership for a cluster forward across iterations,
     // so a second correction landing on the same cluster detaches from what the first correction
-    // left behind, not from context's original, undetached membership.
+    // left behind, not from context's original, undetached membership. `pendingVersionCountByGoldenRecordId`
+    // does the same for version numbering: a second correction recomputing the SAME golden record
+    // in this call sees the first correction's already-queued version, not context's still-stale
+    // (pre-batch) count.
     private static Guid? DetachFromCluster(
         Project project, MatchingProfile profile, EntityRecord record, Guid correctingIngestBatchId,
         IResolutionContext context, MutationSet mutations, DateTimeOffset now,
-        Dictionary<Guid, IReadOnlyList<Guid>> pendingMemberIdsByClusterId)
+        Dictionary<Guid, IReadOnlyList<Guid>> pendingMemberIdsByClusterId,
+        Dictionary<Guid, int> pendingVersionCountByGoldenRecordId)
     {
         var clusters = context.GetActiveClustersContaining(project.Id, [record.Id]);
         if (clusters.Count == 0)
@@ -195,8 +205,15 @@ public sealed class IncrementalResolver
 
         // Next sequential version number, mirroring UpdateGoldenRecords's own
         // `ws.GoldenRecordVersions.Count(v => v.GoldenRecordId == golden.Id) + 1` — a hardcoded 1
-        // would silently overwrite/duplicate an already-versioned golden record's history.
-        var existingVersions = context.GetVersionsForGoldenRecords([golden.Id]);
+        // would silently overwrite/duplicate an already-versioned golden record's history. Prefer
+        // this SAME CALL's pending count (a prior correction in this batch may already have queued
+        // a version for this golden record) over context's, which never sees this call's own
+        // still-queued VersionsToInsert entries.
+        var existingVersionCount = pendingVersionCountByGoldenRecordId.TryGetValue(golden.Id, out var pendingCount)
+            ? pendingCount
+            : context.GetVersionsForGoldenRecords([golden.Id]).Count;
+        var versionNumber = existingVersionCount + 1;
+        pendingVersionCountByGoldenRecordId[golden.Id] = versionNumber;
 
         var versionId = Guid.NewGuid();
         mutations.GoldenRecordsToUpsert.Add(new GoldenRecord
@@ -207,7 +224,7 @@ public sealed class IncrementalResolver
         mutations.VersionsToInsert.Add(new GoldenRecordVersion
         {
             Id = versionId, GoldenRecordId = golden.Id, ProjectId = golden.ProjectId, ClusterId = golden.ClusterId,
-            IngestBatchId = correctingIngestBatchId, VersionNumber = existingVersions.Count + 1,
+            IngestBatchId = correctingIngestBatchId, VersionNumber = versionNumber,
             Fields = recomputedFields, CreatedAt = now
         });
 
