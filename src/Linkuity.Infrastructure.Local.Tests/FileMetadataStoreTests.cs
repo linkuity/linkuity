@@ -1,5 +1,6 @@
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Local;
+using Linkuity.Infrastructure.Lucene;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
 
@@ -820,6 +821,88 @@ public class FileMetadataStoreTests : IDisposable
 
         Assert.Contains("Duplicate source record id", ex.Message);
         Assert.Empty(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_AppliesCorrectionInsteadOfThrowing()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@old.example.com", ["name"] = "Alice" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice-new"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@new.example.com", ["name"] = "Alice" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(1, result.RecordsCorrected);
+
+        var currentRecords = await store.ListEntityRecordsAsync(project.Id, CancellationToken.None);
+        var live = Assert.Single(currentRecords); // superseded original is excluded by default
+        Assert.Equal("alice@new.example.com", live.Fields["email"]);
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithIdenticalValues_IsNoOp()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-noop.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var retryBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var identicalResend = NewRecordWithFields(project.Id, source.Id, retryBatch.Id, "crm-001", now.AddMinutes(1), ["email:alice"],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "alice@example.com" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, retryBatch.Id, [identicalResend], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Equal(0, result.RecordsCorrected);
+        Assert.Equal(0, result.RecordsAdded); // nothing new was added either
+        Assert.Single(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None)); // still exactly one row
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
+    {
+        var indexDir = Path.Combine(_root, "lucene-correction-guard");
+        var engine = MatchingDefaults.CreateEngine();
+        var provider = new DefaultMatchingProfileProvider([DefaultMatchingProfileProvider.CreatePersonProfile()]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-indexed-guard.json") },
+            engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@old.example.com", ["name"] = "Alice" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@new.example.com", ["name"] = "Alice" });
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None));
     }
 
     [Fact]

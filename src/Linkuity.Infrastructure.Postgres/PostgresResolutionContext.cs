@@ -24,6 +24,10 @@ internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTra
         => throw new NotSupportedException(
             "GetLinearCorpus is not supported on the Postgres backend: candidates are supplied by the Lucene index, never by a full entity_records scan.");
 
+    public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
+        => throw new NotSupportedException(
+            "Record correction is not yet supported on the PostgreSQL backend (F6 milestone 3).");
+
     public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
     {
         if (recordIds.Count == 0)
