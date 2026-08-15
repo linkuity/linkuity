@@ -310,7 +310,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
         await ValidateCompletedBatchAsync(conn, tx, completedBatchWithKeys, ct);
 
         // Resolve using the shared CompletedBatchResolver.
-        var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, DateTimeOffset.UtcNow);
+        var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, _profileProvider, DateTimeOffset.UtcNow);
 
         // Apply all mutations within the same transaction.
         await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);

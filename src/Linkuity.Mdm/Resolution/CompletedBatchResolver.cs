@@ -1,4 +1,6 @@
+using Linkuity.Core.Merge;
 using Linkuity.Core.Models;
+using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Mdm.Resolution;
 
@@ -12,6 +14,7 @@ public static class CompletedBatchResolver
     public static MutationSet Resolve(
         CompletedBatchMetadata batch,
         IReadOnlyList<Project> projects,
+        IMatchingProfileProvider profileProvider,
         DateTimeOffset now)
     {
         var mutations = new MutationSet();
@@ -42,7 +45,13 @@ public static class CompletedBatchResolver
             if (ingestBatchIds.Count != 1)
                 throw new InvalidOperationException("Cluster members must belong to exactly one ingest batch when project merge policy is applied.");
 
-            var fields = GoldenRecordMerge.MergeFields(project, members);
+            var mergeIndex = project.MergeConfiguration!.MergeFields
+                .ToDictionary(field => field.FieldName, field => field.SourcePriority, StringComparer.OrdinalIgnoreCase);
+            // See IncrementalResolver's identical fallback: durable ingestion has always assumed
+            // the "source" column convention even when the profile doesn't declare it.
+            var sourceField = profileProvider.GetProfile(project.ContentType).Fields
+                .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+            var fields = GoldenRecordMerge.MergeFields(members.Select(m => m.Fields).ToList(), mergeIndex, sourceField);
             var goldenRecordId = Guid.NewGuid();
             var versionId = Guid.NewGuid();
 

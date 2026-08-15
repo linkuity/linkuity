@@ -115,6 +115,18 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   sharing the CLI's batch engine.
 
 ### Fixed
+- Golden-record field values could depend on the order records arrived in (F54): when
+  multiple cluster members shared the highest-priority source but disagreed on a
+  field's value, or a consensus vote tied on both count and length, the merge picked
+  whichever value happened to be enumerated first rather than resolving on content.
+  Fixed by breaking every tie on field content (majority, then longest, then
+  alphabetical), proven with permutation tests. This also closed a related gap: the
+  batch (`run`, `POST /run`) and durable (`ingest-incremental`, `persist-batch`)
+  paths used to carry two independently-maintained copies of this merge logic that
+  had quietly drifted apart on case-sensitivity of consensus grouping, corpus-wide
+  vs. cluster-local field scope, a hardcoded vs. configurable source-field name, and
+  blank-value checking. Both paths now share one implementation
+  (`Linkuity.Core.Merge.GoldenRecordMerge`), so they cannot drift apart again.
 - Blocking-audit suppression boundary aligned with the engine's corpus-frequency
   count: the engine (`blocking-linear`) counts a key's frequency over a corpus
   that excludes the query record, so a full block of exactly `maxBlockSize + 1`

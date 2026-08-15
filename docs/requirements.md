@@ -171,15 +171,21 @@ number and sit in whichever section they belong to, so existing numbers never sh
   trusted record dependent on load order — a subtler but real violation of the same
   guarantee.
 
-  **Status: Partially implemented.** Clustering order-independence is proven by an
+  **Status: Fully implemented.** Clustering order-independence is proven by an
   actual test that feeds the same three records in three different orderings and
   asserts identical cluster membership every time. Golden-record *value*
-  order-independence is not tested anywhere, and there's a concrete reason to worry
-  about it: `MergeByPriority` uses a first-match lookup over cluster members when
-  more than one record shares the same highest-priority source with different
-  values for a field — a pattern that is, by construction, sensitive to the order
-  those members are enumerated in. Whether that order is itself arrival-order-
-  dependent in practice hasn't been verified either way.
+  order-independence was not tested, and on inspection was a real bug:
+  `MergeByPriority` used a first-match lookup over cluster members when more than
+  one record shared the same highest-priority source with different values for a
+  field, and `MergeByConsensus` broke a full count/length tie the same way — both
+  sensitive to member-list order, which in every caller tracked arrival order.
+  Fixed by making every tie resolve on field content (majority, then longest, then
+  alphabetical) rather than position, with permutation tests proving it
+  (`Linkuity.Core.Merge.GoldenRecordMerge`). The fix also closed a related gap: the
+  batch and durable paths used to carry two independently-maintained copies of this
+  logic that had quietly drifted apart (case-sensitivity, field-universe scope,
+  source-field configurability, blank-value checking); both now call the same
+  implementation, so they cannot drift apart again.
 
 ### Deciding what matches
 

@@ -1,3 +1,4 @@
+using Linkuity.Core.Merge;
 using Linkuity.Core.Models;
 using Linkuity.Matching;
 using Linkuity.Matching.Clustering;
@@ -282,7 +283,7 @@ public sealed class IncrementalResolver
         var existingClusterIds = touchedClusters.Select(c => c.Id).ToHashSet();
         var reviewTasks = CreateBatchReviewTasks(ws, request, edges, clusterByRecord, incomingIds, autoMergedIncomingIds, existingClusterIds, now);
 
-        var versionsCreated = UpdateGoldenRecords(ws, project, request.IngestBatchId, affectedClusterIds, now);
+        var versionsCreated = UpdateGoldenRecords(ws, project, profile, request.IngestBatchId, affectedClusterIds, now);
 
         // Derive the targeted mutation set from the mutated working set.
         var endGoldenClusterIds = ws.GoldenRecords.Select(g => g.ClusterId).ToHashSet();
@@ -351,10 +352,21 @@ public sealed class IncrementalResolver
     private static int UpdateGoldenRecords(
         ResolutionWorkingSet ws,
         Project project,
+        MatchingProfile profile,
         Guid ingestBatchId,
         IEnumerable<Guid> affectedClusterIds,
         DateTimeOffset now)
     {
+        var mergeIndex = project.MergeConfiguration?.MergeFields
+            .ToDictionary(field => field.FieldName, field => field.SourcePriority, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        // Falls back to the conventional "source" column when the profile doesn't declare one
+        // (e.g. the built-in person profile) — durable ingestion has always assumed that
+        // convention, and a project can attach a merge policy's source priority without the
+        // profile itself declaring a SourceIdentifier field.
+        var sourceField = profile.Fields
+            .FirstOrDefault(f => f.SemanticType == SemanticFieldType.SourceIdentifier)?.Name ?? "source";
+
         var versionsCreated = 0;
         foreach (var clusterId in affectedClusterIds.Distinct())
         {
@@ -362,8 +374,9 @@ public sealed class IncrementalResolver
             var memberIdSet = cluster.MemberEntityRecordIds.ToHashSet();
             var members = ws.EntityRecords
                 .Where(r => r.ProjectId == project.Id && memberIdSet.Contains(r.Id))
+                .Select(r => r.Fields)
                 .ToList();
-            var fields = GoldenRecordMerge.MergeFields(project, members);
+            var fields = GoldenRecordMerge.MergeFields(members, mergeIndex, sourceField);
             var golden = ws.GoldenRecords.FirstOrDefault(g => g.ProjectId == project.Id && g.ClusterId == clusterId);
             if (golden is not null && GoldenRecordMerge.DictionaryEquals(golden.Fields, fields))
                 continue;

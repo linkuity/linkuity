@@ -1,3 +1,4 @@
+using Linkuity.Core.Merge;
 using Linkuity.Core.Models;
 
 namespace Linkuity.Pipeline;
@@ -10,15 +11,11 @@ public class GoldenRecordService
         MergeConfiguration? mergeConfig,
         string? sourceField)
     {
-        var mergeIndex = mergeConfig?.MergeFields
-            .ToDictionary(f => f.FieldName, f => f.SourcePriority)
-            ?? new Dictionary<string, string[]>();
-
-        var allFields = recordsById.Values
-            .SelectMany(r => r.Keys)
-            .Distinct()
-            .Where(f => f != "id" && f != sourceField)
-            .ToList();
+        // sourceField unknown means source-priority has nothing to key on, so every field
+        // resolves by consensus regardless of what the merge config asks for.
+        var mergeIndex = mergeConfig is not null && sourceField is not null
+            ? mergeConfig.MergeFields.ToDictionary(f => f.FieldName, f => f.SourcePriority, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
 
         return clusters.Select(cluster =>
         {
@@ -27,13 +24,7 @@ public class GoldenRecordService
                 .Select(id => recordsById[id])
                 .ToList();
 
-            var fields = new Dictionary<string, string>();
-            foreach (var field in allFields)
-            {
-                fields[field] = mergeIndex.TryGetValue(field, out var priority) && sourceField != null
-                    ? MergeByPriority(members, field, sourceField, priority)
-                    : MergeByConsensus(members, field);
-            }
+            var fields = GoldenRecordMerge.MergeFields(members, mergeIndex, sourceField ?? "");
 
             return new GoldenRecord
             {
@@ -42,35 +33,5 @@ public class GoldenRecordService
                 Fields = fields
             };
         }).ToList();
-    }
-
-    private static string MergeByPriority(
-        List<IReadOnlyDictionary<string, string>> members,
-        string field,
-        string sourceField,
-        string[] sourcePriority)
-    {
-        foreach (var source in sourcePriority)
-        {
-            var value = members
-                .Where(r => r.TryGetValue(sourceField, out var s) && s == source)
-                .Select(r => r.TryGetValue(field, out var v) ? v : "")
-                .FirstOrDefault(v => !string.IsNullOrEmpty(v));
-            if (value != null) return value;
-        }
-        return MergeByConsensus(members, field);
-    }
-
-    private static string MergeByConsensus(
-        List<IReadOnlyDictionary<string, string>> members,
-        string field)
-    {
-        return members
-            .Select(r => r.TryGetValue(field, out var v) ? v : "")
-            .Where(v => !string.IsNullOrEmpty(v))
-            .GroupBy(v => v)
-            .OrderByDescending(g => g.Count())
-            .ThenByDescending(g => g.Key.Length)
-            .FirstOrDefault()?.Key ?? "";
     }
 }

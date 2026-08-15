@@ -195,7 +195,7 @@ public sealed class FileMetadataStore : IMetadataStore
             var db = await LoadAsync(ct);
             var completedBatchWithKeys = WithGeneratedBlockingKeys(db, completedBatch);
             ValidateCompletedBatch(db, completedBatchWithKeys);
-            var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, db.Projects, DateTimeOffset.UtcNow);
+            var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, db.Projects, _profileProvider, DateTimeOffset.UtcNow);
             ApplyMutations(db, mutations);
             IndexRecords(completedBatchWithKeys.EntityRecords);
             await SaveAsync(db, ct);
