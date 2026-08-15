@@ -691,6 +691,11 @@ public sealed class PostgresMetadataStore : IMetadataStore
         return rows.Select(MapClusterMergeEvent).ToList();
     }
 
+    public Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "Record-correction events are not yet persisted on the PostgreSQL backend " +
+            "(F6 milestone 3). Corrections themselves are also not yet supported on this backend.");
+
     // ──────────────────────────────── T12 helpers ───────────────────────────────
 
     private static async Task<List<Project>> LoadProjectsAsync(

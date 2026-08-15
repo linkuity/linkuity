@@ -345,6 +345,9 @@ public sealed class FileMetadataStore : IMetadataStore
     public async Task<IReadOnlyList<ClusterMergeEvent>> ListClusterMergeEventsAsync(Guid projectId, CancellationToken ct = default)
         => (await LoadAsync(ct)).ClusterMergeEvents.Where(e => e.ProjectId == projectId).ToList();
 
+    public async Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => (await LoadAsync(ct)).RecordCorrectedEvents.Where(e => e.ProjectId == projectId).ToList();
+
     private async Task<ResolutionWorkingSet> LoadAsync(CancellationToken ct)
     {
         if (!File.Exists(_databasePath))

@@ -1041,4 +1041,30 @@ public class FileMetadataStoreTests : IDisposable
             BlockingKeys = blockingKeys,
             CreatedAt = createdAt
         };
+
+    [Fact]
+    public async Task ListRecordCorrectedEventsAsync_ReturnsEventsForCorrection()
+    {
+        var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction-events.json") });
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "a@old.example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["id"] = "crm-001", ["source"] = "CRM", ["email"] = "a@new.example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+
+        var events = await store.ListRecordCorrectedEventsAsync(project.Id, CancellationToken.None);
+
+        var evt = Assert.Single(events);
+        Assert.Equal("a@old.example.com", evt.PreviousFields["email"]);
+        Assert.Equal("a@new.example.com", evt.NewFields["email"]);
+    }
 }
