@@ -178,6 +178,7 @@ Auto matches: 0
 Review tasks: 0
 Singleton clusters: 4
 Golden versions created: 4
+Records corrected: 0
 ```
 
 Because the project was empty, there was nothing for these four to match against, so each
@@ -247,6 +248,7 @@ Auto matches: 1
 Review tasks: 1
 Singleton clusters: 2
 Golden versions created: 3
+Records corrected: 0
 ```
 
 Here's what each marketing record did:
