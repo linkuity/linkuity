@@ -8,10 +8,6 @@ canonical-value changes that bump the golden version, and the human-review queue
 ![customer-360-hub: seed a hub, then evolve it over three incremental ingests — an auto-join by exact phone that resolves a same-tier disagreement into golden version 2, a priority promotion that cuts golden version 3, and a borderline record that opens a review task](assets/demo.gif)
 
 > Generated from [`assets/demo.tape`](assets/demo.tape) with [VHS](https://github.com/charmbracelet/vhs).
-> **Stale as of the F54 golden-record-merge fix:** the recording predates the fix that
-> makes same-tier disagreements resolve deterministically (see step 2 above) — the
-> terminal output it shows still displays the old "version 2 at the CRM step" numbering.
-> Re-record with the command in [Run it](#run-it) below to refresh it.
 
 ## The story
 
