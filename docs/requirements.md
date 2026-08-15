@@ -127,13 +127,28 @@ number and sit in whichever section they belong to, so existing numbers never sh
   identical resend (no field changed) is a safe no-op. This is supported on the
   file metadata store's non-Lucene-indexed path only: attach an index and the same
   call throws `NotSupportedException` rather than silently leaving a stale,
-  still-searchable candidate behind. Three things remain unimplemented: deletion
-  (the "customer closed their account" half of this requirement — there is still
-  no tombstone concept for a record withdrawn at the source), the PostgreSQL
-  backend (corrections throw there too — the pre-existing duplicate-source-record-id
-  check in `PostgresMetadataStore.ValidateIncrementalRequestAsync` rejects any
-  resend before it would reach the resolver), and excluding a superseded record
-  from a Lucene-indexed store's retrieval.
+  still-searchable candidate behind.
+
+  Deletion (the "customer closed their account" half of this requirement) now
+  works the same way: a new `record delete` CLI command marks the targeted
+  record(s) `DeletedAt` and detaches them from their cluster via the same
+  `DetachFromCluster` primitive corrections use — an unclustered record is
+  simply tombstoned, a clustered record's cluster recomputes its golden record
+  from the remaining survivors (dissolving the cluster if it was the only
+  member). Every `RecordDeletedEvent` is queryable via
+  `IMetadataStore.ListRecordDeletedEventsAsync`. Scope is the same as
+  corrections: the file metadata store's non-Lucene-indexed path only — the
+  CLI always attaches a Lucene index to the file store today, so `record
+  delete` run through the CLI currently fails gracefully with the same
+  `NotSupportedException` a correcting resend does, until Lucene reindexing on
+  deletion is built.
+
+  Two things remain unimplemented: the PostgreSQL backend (both corrections
+  and deletion throw there — the pre-existing duplicate-source-record-id check
+  in `PostgresMetadataStore.ValidateIncrementalRequestAsync` rejects any resend
+  before it would reach the resolver, and `DeleteRecordsAsync` throws
+  unconditionally), and excluding a superseded or deleted record from a
+  Lucene-indexed store's retrieval.
 
 ### Data arriving late or out of order
 

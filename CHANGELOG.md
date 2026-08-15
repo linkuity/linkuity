@@ -22,6 +22,18 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   stale candidate searchable); the PostgreSQL backend does not yet apply
   corrections either, and throws rather than dropping them silently. Deletion is
   not addressed by this milestone.
+- Record deletion (F6 milestone 2): a new `record delete` CLI command marks a
+  `(project, source record id)` record `DeletedAt` and detaches it from its
+  cluster — an unclustered record is simply tombstoned, a clustered record's
+  cluster recomputes its golden record from the remaining survivors
+  (dissolving the cluster if it was the only member) — reusing the same
+  `DetachFromCluster` primitive corrections use. `IMetadataStore.ListRecordDeletedEventsAsync`
+  exposes the audit trail. Same scope as corrections: the file metadata
+  store's non-Lucene-indexed path only (an indexed store throws
+  `NotSupportedException`, including via the CLI, which always attaches an
+  index for durable commands); the PostgreSQL backend does not yet support
+  deletion either. `--source-record-id` accepts a comma-separated list to
+  delete multiple records in one call.
 - `match corpus fields` CLI command: measures how much each of your columns is
   actually worth for matching, on your own data, so a matching profile is built
   from measurement rather than guesswork. Per matchable field it reports fill
