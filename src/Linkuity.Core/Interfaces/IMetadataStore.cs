@@ -23,4 +23,6 @@ public interface IMetadataStore
     Task<IReadOnlyList<ReviewTask>> ListReviewTasksAsync(Guid projectId, CancellationToken ct = default);
     Task<IReadOnlyList<ClusterMergeEvent>> ListClusterMergeEventsAsync(Guid projectId, CancellationToken ct = default);
     Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default);
+    Task<RecordDeletionResult> DeleteRecordsAsync(Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default);
+    Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default);
 }

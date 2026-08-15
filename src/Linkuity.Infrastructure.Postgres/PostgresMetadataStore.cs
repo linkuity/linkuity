@@ -696,6 +696,15 @@ public sealed class PostgresMetadataStore : IMetadataStore
             "Record-correction events are not yet persisted on the PostgreSQL backend " +
             "(F6 milestone 3). Corrections themselves are also not yet supported on this backend.");
 
+    public Task<RecordDeletionResult> DeleteRecordsAsync(Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "Record deletion is not yet supported on the PostgreSQL backend (F6 milestone 3, #65).");
+
+    public Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "Record-deletion events are not yet persisted on the PostgreSQL backend " +
+            "(F6 milestone 3, #65). Deletion itself is also not yet supported on this backend.");
+
     // ──────────────────────────────── T12 helpers ───────────────────────────────
 
     private static async Task<List<Project>> LoadProjectsAsync(
