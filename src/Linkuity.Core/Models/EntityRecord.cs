@@ -23,5 +23,12 @@ public sealed record EntityRecord
     /// </summary>
     public DateTimeOffset? SupersededAt { get; init; }
 
+    /// <summary>
+    /// Null: this record is live. Non-null: the source system withdrew it (e.g. an account
+    /// closure) as of this timestamp. The row is kept, never deleted, so history (MatchEdge,
+    /// GoldenRecordVersion snapshots) that references this Id stays valid.
+    /// </summary>
+    public DateTimeOffset? DeletedAt { get; init; }
+
     public required DateTimeOffset CreatedAt { get; init; }
 }
