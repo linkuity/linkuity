@@ -13,6 +13,19 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
 
     public async Task ApplyAsync(MutationSet m, CancellationToken ct)
     {
+        // Record corrections (F6 milestone 3) are not wired into the PostgreSQL backend yet —
+        // PostgresResolutionContext.FindCurrentRecordBySourceRecordId throws NotSupportedException,
+        // so today this set is always empty. Guard it explicitly anyway, matching every other
+        // not-yet-supported-on-Postgres case in this codebase (see PostgresResolutionContext.
+        // GetLinearCorpus/FindCurrentRecordBySourceRecordId, PostgresMetadataStore.
+        // ListRecordCorrectedEventsAsync): fail loudly now, rather than silently dropping
+        // superseded-record updates and audit events the moment a future milestone starts
+        // producing them.
+        if (m.RecordsToUpdate.Count > 0 || m.CorrectionEventsToInsert.Count > 0)
+            throw new NotSupportedException(
+                "Record corrections are not yet supported on the PostgreSQL backend (F6 milestone 3): " +
+                "RecordsToUpdate/CorrectionEventsToInsert would be silently dropped.");
+
         // Build record→clusterId map from ClustersToUpsert membership.
         var recordToCluster = new Dictionary<Guid, Guid>();
         foreach (var cluster in m.ClustersToUpsert)
