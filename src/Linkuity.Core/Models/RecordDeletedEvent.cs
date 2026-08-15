@@ -12,8 +12,11 @@ public sealed class RecordDeletedEvent
     public required Guid DeletedEntityRecordId { get; init; }
     public required IReadOnlyDictionary<string, string> PreviousFields { get; init; }
 
-    /// <summary>Cluster the deleted record was detached from, if it wasn't already a singleton. Null
-    /// when it had no other members to leave behind (nothing to detach).</summary>
+    /// <summary>Cluster the deleted record was detached from. Null only when the record was in no
+    /// active cluster at all — in practice this does not happen for a record ingested through the
+    /// normal path, since every current record (including an unmatched singleton) is materialized
+    /// into its own 1-member cluster; non-null even when that cluster had only this one member
+    /// (see IncrementalResolver.DetachFromCluster's tombstone branch).</summary>
     public Guid? PreviousClusterId { get; init; }
 
     public required Guid IngestBatchId { get; init; }

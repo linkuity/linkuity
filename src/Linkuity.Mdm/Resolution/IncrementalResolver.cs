@@ -143,6 +143,14 @@ public sealed class IncrementalResolver
     /// entirely (F6 milestone 2). Unlike a correction, a deleted record never re-enters
     /// resolution — there is no new incoming record to match, so this returns the deleted
     /// records' own Ids for the caller's bookkeeping, not a "to resolve" list.
+    /// <para>
+    /// This method does NOT guard against duplicate sourceRecordIds in <paramref name="sourceRecordIds"/>:
+    /// <paramref name="context"/> does not see this call's own in-flight mutations, so the same id
+    /// passed twice detaches twice and produces two events for one record. The only real caller,
+    /// FileMetadataStore.DeleteRecordsAsync's ValidateDeletionRequest, already rejects duplicates
+    /// before calling this method — so duplicate-freedom is a caller responsibility, not something
+    /// enforced here.
+    /// </para>
     /// </summary>
     public (IReadOnlyList<Guid> DeletedRecordIds, MutationSet Mutations) ClassifyAndDetachDeletions(
         Project project,

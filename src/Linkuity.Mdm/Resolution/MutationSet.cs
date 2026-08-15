@@ -8,7 +8,8 @@ public sealed class MutationSet
     public List<EntityRecord> RecordsToInsert { get; } = [];
 
     // Upsert by Id — distinct from RecordsToInsert, which assumes the Id is always new. Used to
-    // write back a record whose SupersededAt just got set (F6 correction), never for a brand-new one.
+    // write back a record whose SupersededAt (F6 correction) or DeletedAt (F6 deletion) just got
+    // set, never for a brand-new one.
     public List<EntityRecord> RecordsToUpdate { get; } = [];
 
     public List<MatchEdge> EdgesToInsert { get; } = [];
