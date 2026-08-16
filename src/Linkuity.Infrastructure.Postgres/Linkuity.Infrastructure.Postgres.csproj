@@ -30,6 +30,7 @@
     <EmbeddedResource Include="Migrations\0002_score_provenance.sql" />
     <EmbeddedResource Include="Migrations\0003_cluster_cohesion_counters.sql" />
     <EmbeddedResource Include="Migrations\0004_cluster_dissolution_events.sql" />
+    <EmbeddedResource Include="Migrations\0005_record_corrections_and_deletions.sql" />
   </ItemGroup>
 
 </Project>
