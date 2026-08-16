@@ -712,14 +712,91 @@ public sealed class PostgresMetadataStore : IMetadataStore
         return rows.Select(MapRecordCorrectedEvent).ToList();
     }
 
-    public Task<RecordDeletionResult> DeleteRecordsAsync(Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            "Record deletion is not yet supported on the PostgreSQL backend (F6 milestone 3, #65).");
+    public async Task<RecordDeletionResult> DeleteRecordsAsync(
+        Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(sourceRecordIds);
+        if (sourceRecordIds.Count == 0)
+            throw new ArgumentException("At least one source record id is required.", nameof(sourceRecordIds));
 
-    public Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            "Record-deletion events are not yet persisted on the PostgreSQL backend " +
-            "(F6 milestone 3, #65). Deletion itself is also not yet supported on this backend.");
+        await using var conn = await OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+        await ValidateDeletionRequestAsync(conn, tx, projectId, sourceId, ingestBatchId, sourceRecordIds, ct);
+
+        // Checked BEFORE any resolver work, unlike the correction guard in SaveIncrementalIngestAsync:
+        // every deletion request produces a mutation for every input row (no "identical resend"
+        // no-op case), so there's nothing to gain by classifying first — matches
+        // FileMetadataStore.DeleteRecordsAsync's identical reasoning.
+        if (_index is not null)
+            throw new NotSupportedException(
+                "Record deletion is not yet supported on an index-backed Postgres store: a " +
+                "Lucene-indexed candidate for the deleted record would remain searchable after this " +
+                "call, which could produce wrong matches. Supported only for stores without an " +
+                "attached index until Lucene reindexing on deletion is built.");
+
+        var projects = await LoadProjectsAsync(conn, tx, [projectId], ct);
+        var project = projects.Count > 0
+            ? projects[0]
+            : throw new InvalidOperationException($"Project not found: {projectId}");
+        var profile = _profileProvider.GetProfile(project.ContentType);
+        var context = new PostgresResolutionContext(conn, tx);
+        var now = DateTimeOffset.UtcNow;
+
+        var (deletedIds, mutations) = _resolver.ClassifyAndDetachDeletions(
+            project, profile, sourceRecordIds, ingestBatchId, context, now);
+
+        await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
+
+        await tx.CommitAsync(ct);
+        return new RecordDeletionResult(deletedIds.Count);
+    }
+
+    private static async Task ValidateDeletionRequestAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid projectId, Guid sourceId, Guid ingestBatchId,
+        IReadOnlyList<string> sourceRecordIds, CancellationToken ct)
+    {
+        if (!await ExistsAsync(conn, tx,
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = @p0)",
+                [("p0", projectId)], ct))
+            throw new InvalidOperationException($"Project not found: {projectId}");
+
+        if (!await ExistsAsync(conn, tx,
+                "SELECT EXISTS(SELECT 1 FROM sources WHERE id = @p0 AND project_id = @p1)",
+                [("p0", sourceId), ("p1", projectId)], ct))
+            throw new InvalidOperationException($"Source not found for project {projectId}: {sourceId}");
+
+        if (!await ExistsAsync(conn, tx,
+                "SELECT EXISTS(SELECT 1 FROM ingest_batches WHERE id = @p0 AND project_id = @p1 AND source_id = @p2)",
+                [("p0", ingestBatchId), ("p1", projectId), ("p2", sourceId)], ct))
+            throw new InvalidOperationException($"Ingest batch not found for project {projectId}: {ingestBatchId}");
+
+        var duplicate = sourceRecordIds
+            .GroupBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (duplicate is not null)
+            throw new InvalidOperationException($"Duplicate source record id in deletion request: {duplicate.Key}");
+    }
+
+    public async Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default)
+    {
+        await using var conn = await OpenConnectionAsync(ct);
+        var rows = await conn.QueryAsync<RecordDeletedEventRow>(new CommandDefinition(
+            """
+            SELECT
+                id                         AS "Id",
+                project_id                 AS "ProjectId",
+                deleted_entity_record_id   AS "DeletedEntityRecordId",
+                previous_fields::text      AS "PreviousFieldsJson",
+                previous_cluster_id        AS "PreviousClusterId",
+                ingest_batch_id            AS "IngestBatchId",
+                created_at                 AS "CreatedAt"
+            FROM record_deleted_events
+            WHERE project_id = @ProjectId
+            """,
+            new { ProjectId = projectId }, cancellationToken: ct));
+        return rows.Select(MapRecordDeletedEvent).ToList();
+    }
 
     // ──────────────────────────────── T12 helpers ───────────────────────────────
 
@@ -1049,6 +1126,17 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public DateTime CreatedAt { get; set; }
     }
 
+    private sealed class RecordDeletedEventRow
+    {
+        public Guid Id { get; set; }
+        public Guid ProjectId { get; set; }
+        public Guid DeletedEntityRecordId { get; set; }
+        public string PreviousFieldsJson { get; set; } = "{}";
+        public Guid? PreviousClusterId { get; set; }
+        public Guid IngestBatchId { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+
     // ──────────────────────────────── Mapping ───────────────────────────────────
 
     private static Project MapProject(ProjectRow row) => new()
@@ -1192,6 +1280,18 @@ public sealed class PostgresMetadataStore : IMetadataStore
                           ?? new Dictionary<string, string>(),
         NewFields = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NewFieldsJson, JsonOpts)
                     ?? new Dictionary<string, string>(),
+        PreviousClusterId = row.PreviousClusterId,
+        IngestBatchId = row.IngestBatchId,
+        CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
+    };
+
+    private static RecordDeletedEvent MapRecordDeletedEvent(RecordDeletedEventRow row) => new()
+    {
+        Id = row.Id,
+        ProjectId = row.ProjectId,
+        DeletedEntityRecordId = row.DeletedEntityRecordId,
+        PreviousFields = JsonSerializer.Deserialize<Dictionary<string, string>>(row.PreviousFieldsJson, JsonOpts)
+                          ?? new Dictionary<string, string>(),
         PreviousClusterId = row.PreviousClusterId,
         IngestBatchId = row.IngestBatchId,
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)

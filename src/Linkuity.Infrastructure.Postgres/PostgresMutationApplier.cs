@@ -31,6 +31,9 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
         if (m.CorrectionEventsToInsert.Count > 0)
             await InsertCorrectionEventsAsync(m.CorrectionEventsToInsert, ct);
 
+        if (m.DeletionEventsToInsert.Count > 0)
+            await InsertDeletionEventsAsync(m.DeletionEventsToInsert, ct);
+
         // Build record→clusterId map from ClustersToUpsert membership.
         var recordToCluster = new Dictionary<Guid, Guid>();
         foreach (var cluster in m.ClustersToUpsert)
@@ -124,6 +127,39 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
                 cmd.Parameters.AddWithValue($"ce{i}", evt.CorrectedEntityRecordId);
                 cmd.Parameters.AddWithValue($"pf{i}", JsonSerializer.Serialize(evt.PreviousFields, JsonOpts));
                 cmd.Parameters.AddWithValue($"nf{i}", JsonSerializer.Serialize(evt.NewFields, JsonOpts));
+                cmd.Parameters.Add(new NpgsqlParameter($"pc{i}", NpgsqlDbType.Uuid)
+                    { Value = evt.PreviousClusterId.HasValue ? (object)evt.PreviousClusterId.Value : DBNull.Value });
+                cmd.Parameters.AddWithValue($"ib{i}", evt.IngestBatchId);
+                cmd.Parameters.AddWithValue($"ca{i}", evt.CreatedAt.UtcDateTime);
+            }
+            cmd.CommandText = sql.ToString();
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Inserts all record_deleted_events via chunked multi-row INSERTs (≤<see cref="MaxRowsPerInsert"/>
+    /// rows/statement), same pattern as InsertCorrectionEventsAsync. No-op when empty.
+    /// </summary>
+    private async Task InsertDeletionEventsAsync(IReadOnlyList<RecordDeletedEvent> events, CancellationToken ct)
+    {
+        for (int offset = 0; offset < events.Count; offset += MaxRowsPerInsert)
+        {
+            int count = Math.Min(MaxRowsPerInsert, events.Count - offset);
+            var sql = new StringBuilder(
+                "INSERT INTO record_deleted_events " +
+                "(id, project_id, deleted_entity_record_id, previous_fields, previous_cluster_id, ingest_batch_id, created_at) VALUES ");
+            await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
+            for (int i = 0; i < count; i++)
+            {
+                var evt = events[offset + i];
+                if (i > 0)
+                    sql.Append(',');
+                sql.Append($"(@id{i}, @pr{i}, @de{i}, @pf{i}::jsonb, @pc{i}, @ib{i}, @ca{i})");
+                cmd.Parameters.AddWithValue($"id{i}", evt.Id);
+                cmd.Parameters.AddWithValue($"pr{i}", evt.ProjectId);
+                cmd.Parameters.AddWithValue($"de{i}", evt.DeletedEntityRecordId);
+                cmd.Parameters.AddWithValue($"pf{i}", JsonSerializer.Serialize(evt.PreviousFields, JsonOpts));
                 cmd.Parameters.Add(new NpgsqlParameter($"pc{i}", NpgsqlDbType.Uuid)
                     { Value = evt.PreviousClusterId.HasValue ? (object)evt.PreviousClusterId.Value : DBNull.Value });
                 cmd.Parameters.AddWithValue($"ib{i}", evt.IngestBatchId);
