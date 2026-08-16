@@ -372,26 +372,51 @@ public sealed class PostgresMetadataStore : IMetadataStore
             .Select(record => _engine.PrepareForStorage(record, profile))
             .ToList();
 
-        // 8. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
-        var (result, mutations) = _resolver.Resolve(
-            request, project, profile, incomingRecords, new PostgresResolutionContext(conn, tx), DateTimeOffset.UtcNow);
+        // 8. Classify corrections/no-ops out of the incoming batch, detaching corrected records
+        //    from their clusters before matching runs — mirrors FileMetadataStore.
+        //    SaveIncrementalIngestAsync's identical two-phase shape.
+        var context = new PostgresResolutionContext(conn, tx);
+        var now = DateTimeOffset.UtcNow;
+        var (recordsToResolve, correctionMutations) = _resolver.ClassifyAndDetachCorrections(
+            project, profile, incomingRecords, context, now);
 
-        // 9. Apply the targeted mutation set within the same transaction.
+        if (correctionMutations.CorrectionEventsToInsert.Count > 0 && _index is not null)
+            throw new NotSupportedException(
+                "Record correction is not yet supported on an index-backed Postgres store: a " +
+                "Lucene-indexed candidate for the superseded record would remain searchable after " +
+                "this call, which could produce wrong matches. Supported only for stores without an " +
+                "attached index until Lucene reindexing on correction is built.");
+
+        await new PostgresMutationApplier(conn, tx).ApplyAsync(correctionMutations, ct);
+
+        // 9. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
+        var (result, mutations) = _resolver.Resolve(
+            request, project, profile, recordsToResolve, context, now);
+
+        // 10. Apply the targeted mutation set within the same transaction.
         await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        // 9b. Reconcile the batch's stored record_count with the rows ingested in this call.
+        // 10b. Reconcile the batch's stored record_count with the rows actually ingested in this
+        //      call — recordsToResolve.Count (new + corrected; no-ops already excluded by
+        //      ClassifyAndDetachCorrections), not the raw request.Records.Count, matching the file
+        //      store's #70 fix (a corrected record must not be double-counted, and a dropped no-op
+        //      resend must not inflate the stored count).
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE ingest_batches SET record_count = @n WHERE id = @batchId",
-            new { n = request.Records.Count, batchId = request.IngestBatchId },
+            new { n = recordsToResolve.Count, batchId = request.IngestBatchId },
             transaction: tx, cancellationToken: ct));
 
-        // 10. Index the incoming records (Lucene commit is separate from the SQL txn).
+        // 11. Index the incoming records (Lucene commit is separate from the SQL txn).
         if (_index is not null)
-            IndexRecords(incomingRecords);
+            IndexRecords(recordsToResolve);
 
-        // 11. Commit and return.
+        // 12. Commit and return — RecordsAdded/RecordsCorrected split matches the file store: result.
+        //     RecordsAdded comes from Resolve's incomingRecords parameter, which IS recordsToResolve
+        //     here (new AND corrected records; no-ops already excluded), so the corrected count must
+        //     be subtracted or it would be double-counted as both "added" and "corrected".
+        var correctedCount = correctionMutations.CorrectionEventsToInsert.Count;
         await tx.CommitAsync(ct);
-        return result;
+        return result with { RecordsAdded = result.RecordsAdded - correctedCount, RecordsCorrected = correctedCount };
     }
 
     // Untransacted, single-row lookup used only to resolve the project's matching profile (and
@@ -470,32 +495,6 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 record.IngestBatchId != request.IngestBatchId)
                 throw new InvalidOperationException("Incremental record provenance does not match the ingest request.");
         }
-
-        // No existing entity_record with the same (project_id, lower(source_record_id)) — bounded by the incoming set.
-        var lowerById = request.Records
-            .GroupBy(r => r.SourceRecordId.ToLowerInvariant())
-            .ToDictionary(g => g.Key, g => g.First().SourceRecordId);
-        if (lowerById.Count > 0)
-        {
-            await using var cmd = new NpgsqlCommand(
-                """
-                SELECT lower(source_record_id)
-                FROM entity_records
-                WHERE project_id = @pid AND lower(source_record_id) = ANY(@ids)
-                LIMIT 1
-                """, conn, tx);
-            cmd.Parameters.AddWithValue("pid", request.ProjectId);
-            cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text)
-                { Value = lowerById.Keys.ToArray() });
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (await reader.ReadAsync(ct))
-            {
-                var matchedLower = reader.GetString(0);
-                var original = lowerById.TryGetValue(matchedLower, out var src) ? src : matchedLower;
-                throw new InvalidOperationException(
-                    $"Entity record already exists for project {request.ProjectId}: {original}");
-            }
-        }
     }
 
     // ──────────────────────────────── Entity Records ────────────────────────────
@@ -515,7 +514,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 array_to_json(blocking_keys)::text          AS "BlockingKeysJson",
                 created_at                                  AS "CreatedAt"
             FROM entity_records
-            WHERE project_id = @ProjectId
+            WHERE project_id = @ProjectId AND superseded_at IS NULL AND deleted_at IS NULL
             """,
             new { ProjectId = projectId }, cancellationToken: ct));
         return rows.Select(MapEntityRecord).ToList();
@@ -691,10 +690,27 @@ public sealed class PostgresMetadataStore : IMetadataStore
         return rows.Select(MapClusterMergeEvent).ToList();
     }
 
-    public Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            "Record-correction events are not yet persisted on the PostgreSQL backend " +
-            "(F6 milestone 3). Corrections themselves are also not yet supported on this backend.");
+    public async Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
+    {
+        await using var conn = await OpenConnectionAsync(ct);
+        var rows = await conn.QueryAsync<RecordCorrectedEventRow>(new CommandDefinition(
+            """
+            SELECT
+                id                            AS "Id",
+                project_id                    AS "ProjectId",
+                superseded_entity_record_id   AS "SupersededEntityRecordId",
+                corrected_entity_record_id    AS "CorrectedEntityRecordId",
+                previous_fields::text         AS "PreviousFieldsJson",
+                new_fields::text              AS "NewFieldsJson",
+                previous_cluster_id           AS "PreviousClusterId",
+                ingest_batch_id               AS "IngestBatchId",
+                created_at                    AS "CreatedAt"
+            FROM record_corrected_events
+            WHERE project_id = @ProjectId
+            """,
+            new { ProjectId = projectId }, cancellationToken: ct));
+        return rows.Select(MapRecordCorrectedEvent).ToList();
+    }
 
     public Task<RecordDeletionResult> DeleteRecordsAsync(Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default)
         => throw new NotSupportedException(
@@ -1020,6 +1036,19 @@ public sealed class PostgresMetadataStore : IMetadataStore
         public DateTime CreatedAt { get; set; }
     }
 
+    private sealed class RecordCorrectedEventRow
+    {
+        public Guid Id { get; set; }
+        public Guid ProjectId { get; set; }
+        public Guid SupersededEntityRecordId { get; set; }
+        public Guid CorrectedEntityRecordId { get; set; }
+        public string PreviousFieldsJson { get; set; } = "{}";
+        public string NewFieldsJson { get; set; } = "{}";
+        public Guid? PreviousClusterId { get; set; }
+        public Guid IngestBatchId { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+
     // ──────────────────────────────── Mapping ───────────────────────────────────
 
     private static Project MapProject(ProjectRow row) => new()
@@ -1149,6 +1178,21 @@ public sealed class PostgresMetadataStore : IMetadataStore
             : (JsonSerializer.Deserialize<Guid[]>(row.TriggerRecordIdsJson, JsonOpts) ?? []),
         Score = row.Score,
         Breakdown = JsonSerializer.Deserialize<MatchScoreFactor[]>(row.BreakdownJson, JsonOpts) ?? [],
+        IngestBatchId = row.IngestBatchId,
+        CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
+    };
+
+    private static RecordCorrectedEvent MapRecordCorrectedEvent(RecordCorrectedEventRow row) => new()
+    {
+        Id = row.Id,
+        ProjectId = row.ProjectId,
+        SupersededEntityRecordId = row.SupersededEntityRecordId,
+        CorrectedEntityRecordId = row.CorrectedEntityRecordId,
+        PreviousFields = JsonSerializer.Deserialize<Dictionary<string, string>>(row.PreviousFieldsJson, JsonOpts)
+                          ?? new Dictionary<string, string>(),
+        NewFields = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NewFieldsJson, JsonOpts)
+                    ?? new Dictionary<string, string>(),
+        PreviousClusterId = row.PreviousClusterId,
         IngestBatchId = row.IngestBatchId,
         CreatedAt = new DateTimeOffset(row.CreatedAt, TimeSpan.Zero)
     };

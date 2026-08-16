@@ -13,18 +13,23 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
 
     public async Task ApplyAsync(MutationSet m, CancellationToken ct)
     {
-        // Record corrections (F6 milestone 3) are not wired into the PostgreSQL backend yet —
-        // PostgresResolutionContext.FindCurrentRecordBySourceRecordId throws NotSupportedException,
-        // so today this set is always empty. Guard it explicitly anyway, matching every other
-        // not-yet-supported-on-Postgres case in this codebase (see PostgresResolutionContext.
-        // GetLinearCorpus/FindCurrentRecordBySourceRecordId, PostgresMetadataStore.
-        // ListRecordCorrectedEventsAsync): fail loudly now, rather than silently dropping
-        // superseded-record updates and audit events the moment a future milestone starts
-        // producing them.
-        if (m.RecordsToUpdate.Count > 0 || m.CorrectionEventsToInsert.Count > 0)
-            throw new NotSupportedException(
-                "Record corrections are not yet supported on the PostgreSQL backend (F6 milestone 3): " +
-                "RecordsToUpdate/CorrectionEventsToInsert would be silently dropped.");
+        // Cluster membership on Postgres is derived from entity_records.cluster_id (the record
+        // points to its cluster) — the opposite of the file store's Cluster.MemberEntityRecordIds
+        // (the cluster lists its members). DetachFromCluster produces a REDUCED member list for the
+        // cluster the departing record left; on the file store that's automatically correct (the old
+        // list is replaced). On Postgres, nothing before this milestone ever needed to CLEAR
+        // cluster_id for a record that leaves a cluster and joins nothing else — every prior mutation
+        // path (merge, dissolution) always moves a departing record onto some new cluster.
+        // RecordsToUpdate IS exactly "the record that just became superseded or deleted" (no other
+        // code path writes to it), so clearing cluster_id here — in the same statement that writes
+        // the tombstone timestamp — is necessary and sufficient: a corrected/deleted record can never
+        // appear in a future cluster-membership read, because appearing there requires a non-null
+        // cluster_id, and this is the only place cluster_id is ever cleared.
+        if (m.RecordsToUpdate.Count > 0)
+            await UpdateRecordsAsync(m.RecordsToUpdate, ct);
+
+        if (m.CorrectionEventsToInsert.Count > 0)
+            await InsertCorrectionEventsAsync(m.CorrectionEventsToInsert, ct);
 
         // Build record→clusterId map from ClustersToUpsert membership.
         var recordToCluster = new Dictionary<Guid, Guid>();
@@ -58,6 +63,76 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
     /// <summary>Max VALUES tuples per multi-row INSERT. Keeps total bound parameters well under
     /// Postgres's 65535-parameter limit (worst case here is 10 params/row → ≤10,000).</summary>
     private const int MaxRowsPerInsert = 1000;
+
+    /// <summary>
+    /// Bulk-writes each record's own SupersededAt/DeletedAt (exactly one of the two is set per
+    /// record, by the resolver's `with` expression) and clears cluster_id in the same statement —
+    /// see the comment in ApplyAsync for why clearing cluster_id here is required on Postgres.
+    /// Chunked (≤<see cref="MaxRowsPerInsert"/> rows/statement) via UPDATE ... FROM (VALUES ...),
+    /// same pattern as RepointActiveClusterMembersAsync. No-op when empty.
+    /// </summary>
+    private async Task UpdateRecordsAsync(IReadOnlyList<EntityRecord> records, CancellationToken ct)
+    {
+        for (int offset = 0; offset < records.Count; offset += MaxRowsPerInsert)
+        {
+            int count = Math.Min(MaxRowsPerInsert, records.Count - offset);
+            var sql = new StringBuilder(
+                "UPDATE entity_records AS er SET superseded_at = v.sa, deleted_at = v.da, cluster_id = NULL " +
+                "FROM (VALUES ");
+            await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
+            for (int i = 0; i < count; i++)
+            {
+                var record = records[offset + i];
+                if (i > 0)
+                    sql.Append(',');
+                sql.Append($"(@id{i}::uuid, @sa{i}::timestamptz, @da{i}::timestamptz)");
+                cmd.Parameters.AddWithValue($"id{i}", record.Id);
+                cmd.Parameters.Add(new NpgsqlParameter($"sa{i}", NpgsqlDbType.TimestampTz)
+                    { Value = record.SupersededAt.HasValue ? (object)record.SupersededAt.Value.UtcDateTime : DBNull.Value });
+                cmd.Parameters.Add(new NpgsqlParameter($"da{i}", NpgsqlDbType.TimestampTz)
+                    { Value = record.DeletedAt.HasValue ? (object)record.DeletedAt.Value.UtcDateTime : DBNull.Value });
+            }
+            sql.Append(") AS v(id, sa, da) WHERE er.id = v.id");
+            cmd.CommandText = sql.ToString();
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Inserts all record_corrected_events via chunked multi-row INSERTs (≤<see cref="MaxRowsPerInsert"/>
+    /// rows/statement), following InsertClusterDissolutionEventAsync's exact pattern. No-op when empty.
+    /// </summary>
+    private async Task InsertCorrectionEventsAsync(IReadOnlyList<RecordCorrectedEvent> events, CancellationToken ct)
+    {
+        for (int offset = 0; offset < events.Count; offset += MaxRowsPerInsert)
+        {
+            int count = Math.Min(MaxRowsPerInsert, events.Count - offset);
+            var sql = new StringBuilder(
+                "INSERT INTO record_corrected_events " +
+                "(id, project_id, superseded_entity_record_id, corrected_entity_record_id, " +
+                "previous_fields, new_fields, previous_cluster_id, ingest_batch_id, created_at) VALUES ");
+            await using var cmd = new NpgsqlCommand { Connection = conn, Transaction = tx };
+            for (int i = 0; i < count; i++)
+            {
+                var evt = events[offset + i];
+                if (i > 0)
+                    sql.Append(',');
+                sql.Append($"(@id{i}, @pr{i}, @se{i}, @ce{i}, @pf{i}::jsonb, @nf{i}::jsonb, @pc{i}, @ib{i}, @ca{i})");
+                cmd.Parameters.AddWithValue($"id{i}", evt.Id);
+                cmd.Parameters.AddWithValue($"pr{i}", evt.ProjectId);
+                cmd.Parameters.AddWithValue($"se{i}", evt.SupersededEntityRecordId);
+                cmd.Parameters.AddWithValue($"ce{i}", evt.CorrectedEntityRecordId);
+                cmd.Parameters.AddWithValue($"pf{i}", JsonSerializer.Serialize(evt.PreviousFields, JsonOpts));
+                cmd.Parameters.AddWithValue($"nf{i}", JsonSerializer.Serialize(evt.NewFields, JsonOpts));
+                cmd.Parameters.Add(new NpgsqlParameter($"pc{i}", NpgsqlDbType.Uuid)
+                    { Value = evt.PreviousClusterId.HasValue ? (object)evt.PreviousClusterId.Value : DBNull.Value });
+                cmd.Parameters.AddWithValue($"ib{i}", evt.IngestBatchId);
+                cmd.Parameters.AddWithValue($"ca{i}", evt.CreatedAt.UtcDateTime);
+            }
+            cmd.CommandText = sql.ToString();
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
 
     /// <summary>
     /// Bulk-inserts all new entity_records via a single binary COPY on the open conn/tx.

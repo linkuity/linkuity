@@ -8,25 +8,64 @@ namespace Linkuity.Infrastructure.Postgres;
 
 /// <summary>
 /// Bounded <see cref="IResolutionContext"/> over a single <see cref="NpgsqlConnection"/> +
-/// <see cref="NpgsqlTransaction"/>. Every read is bounded by candidate/cluster fan-out
-/// (<c>id = ANY(...)</c> / <c>cluster_id = ANY(...)</c>); there is NO unbounded scan of
-/// <c>entity_records</c> on this path. Postgres always supplies a Lucene index, so the
-/// resolver never requests the linear corpus — <see cref="GetLinearCorpus"/> throws as a
-/// guard that the bounded contract is preserved.
+/// <see cref="NpgsqlTransaction"/>. Every read except <see cref="GetLinearCorpus"/> is bounded by
+/// candidate/cluster fan-out (<c>id = ANY(...)</c> / <c>cluster_id = ANY(...)</c>). Every
+/// production Postgres deployment attaches a Lucene index (see
+/// <c>PostgresInfrastructureServiceCollectionExtensions</c>), so the resolver never requests the
+/// linear corpus on that path. <see cref="GetLinearCorpus"/> is still a project-scoped scan (not
+/// unbounded across all projects) for the one case that legitimately needs it without an index:
+/// F6 milestone 3 corrections/deletion are guarded off on an indexed store (Lucene staleness,
+/// deferred to #66), so a store built without one — used directly in that milestone's own
+/// integration tests, never by the DI-wired production path above — falls back to this scan,
+/// mirroring <c>FileMetadataStore.FileResolutionContext.GetLinearCorpus</c>'s identical filter.
 /// </summary>
 internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTransaction tx) : IResolutionContext
 {
     private static readonly JsonSerializerOptions JsonOpts = new();
 
-    // Guard: Postgres always provides a Lucene index. If the resolver ever asks for the
-    // linear corpus it would mean an unbounded full-table read — forbidden on this path.
     public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-        => throw new NotSupportedException(
-            "GetLinearCorpus is not supported on the Postgres backend: candidates are supplied by the Lucene index, never by a full entity_records scan.");
+    {
+        var rows = conn.Query<EntityRecordRow>(new CommandDefinition(
+            """
+            SELECT
+                id                                 AS "Id",
+                project_id                         AS "ProjectId",
+                source_id                          AS "SourceId",
+                ingest_batch_id                    AS "IngestBatchId",
+                source_record_id                   AS "SourceRecordId",
+                fields::text                       AS "FieldsJson",
+                array_to_json(blocking_keys)::text AS "BlockingKeysJson",
+                created_at                         AS "CreatedAt"
+            FROM entity_records
+            WHERE project_id = @p AND superseded_at IS NULL AND deleted_at IS NULL
+            """,
+            new { p = projectId }, transaction: tx));
+
+        return rows.Select(MapEntityRecord).ToList();
+    }
 
     public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
-        => throw new NotSupportedException(
-            "Record correction is not yet supported on the PostgreSQL backend (F6 milestone 3).");
+    {
+        var rows = conn.Query<EntityRecordRow>(new CommandDefinition(
+            """
+            SELECT
+                id                                 AS "Id",
+                project_id                         AS "ProjectId",
+                source_id                          AS "SourceId",
+                ingest_batch_id                    AS "IngestBatchId",
+                source_record_id                   AS "SourceRecordId",
+                fields::text                       AS "FieldsJson",
+                array_to_json(blocking_keys)::text AS "BlockingKeysJson",
+                created_at                         AS "CreatedAt"
+            FROM entity_records
+            WHERE project_id = @p AND superseded_at IS NULL AND deleted_at IS NULL
+              AND lower(source_record_id) = lower(@srid)
+            LIMIT 1
+            """,
+            new { p = projectId, srid = sourceRecordId }, transaction: tx));
+
+        return rows.Select(MapEntityRecord).FirstOrDefault();
+    }
 
     public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
     {
@@ -97,7 +136,7 @@ internal sealed class PostgresResolutionContext(NpgsqlConnection conn, NpgsqlTra
                 array_to_json(blocking_keys)::text AS "BlockingKeysJson",
                 created_at                         AS "CreatedAt"
             FROM entity_records
-            WHERE project_id = @p AND id = ANY(@ids)
+            WHERE project_id = @p AND id = ANY(@ids) AND superseded_at IS NULL AND deleted_at IS NULL
             """,
             new { p = projectId, ids = recordIds.ToArray() }, transaction: tx));
 
