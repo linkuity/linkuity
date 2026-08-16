@@ -138,6 +138,59 @@ public sealed class IncrementalResolver
         return (toResolve, mutations);
     }
 
+    /// <summary>
+    /// Thin caller on <see cref="DetachFromCluster"/> for records the source system withdrew
+    /// entirely (F6 milestone 2). Unlike a correction, a deleted record never re-enters
+    /// resolution — there is no new incoming record to match, so this returns the deleted
+    /// records' own Ids for the caller's bookkeeping, not a "to resolve" list.
+    /// <para>
+    /// This method does NOT guard against duplicate sourceRecordIds in <paramref name="sourceRecordIds"/>:
+    /// <paramref name="context"/> does not see this call's own in-flight mutations, so the same id
+    /// passed twice detaches twice and produces two events for one record. The only real caller,
+    /// FileMetadataStore.DeleteRecordsAsync's ValidateDeletionRequest, already rejects duplicates
+    /// before calling this method — so duplicate-freedom is a caller responsibility, not something
+    /// enforced here.
+    /// </para>
+    /// </summary>
+    public (IReadOnlyList<Guid> DeletedRecordIds, MutationSet Mutations) ClassifyAndDetachDeletions(
+        Project project,
+        MatchingProfile profile,
+        IReadOnlyList<string> sourceRecordIds,
+        Guid ingestBatchId,
+        IResolutionContext context,
+        DateTimeOffset now)
+    {
+        var mutations = new MutationSet();
+        var deletedIds = new List<Guid>();
+        var pendingMemberIdsByClusterId = new Dictionary<Guid, IReadOnlyList<Guid>>();
+        var pendingVersionCountByGoldenRecordId = new Dictionary<Guid, int>();
+
+        foreach (var sourceRecordId in sourceRecordIds)
+        {
+            var current = context.FindCurrentRecordBySourceRecordId(project.Id, sourceRecordId)
+                ?? throw new InvalidOperationException($"No current record found for source record id: {sourceRecordId}");
+
+            Guid? previousClusterId = DetachFromCluster(
+                project, profile, current, ingestBatchId, context, mutations, now,
+                pendingMemberIdsByClusterId, pendingVersionCountByGoldenRecordId);
+
+            mutations.RecordsToUpdate.Add(current with { DeletedAt = now });
+            mutations.DeletionEventsToInsert.Add(new RecordDeletedEvent
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = project.Id,
+                DeletedEntityRecordId = current.Id,
+                PreviousFields = current.Fields,
+                PreviousClusterId = previousClusterId,
+                IngestBatchId = ingestBatchId,
+                CreatedAt = now
+            });
+            deletedIds.Add(current.Id);
+        }
+
+        return (deletedIds, mutations);
+    }
+
     // Returns the cluster the record was detached from, or null if it had none (already a
     // singleton). Populates `mutations` with whatever the detach requires — reduced/tombstoned
     // cluster, recomputed golden record — for the CALLER'S old cluster; the record ITSELF re-enters

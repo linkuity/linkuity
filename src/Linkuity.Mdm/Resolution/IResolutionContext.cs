@@ -12,7 +12,7 @@ public interface IResolutionContext
     IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds);
     IReadOnlyList<GoldenRecordVersion> GetVersionsForGoldenRecords(IReadOnlyCollection<Guid> goldenRecordIds);
 
-    // The current (non-superseded) record for this natural key, or null if none exists yet.
-    // Case-insensitive on sourceRecordId, matching the existing duplicate-key check it replaces.
+    // The current (non-superseded, non-deleted) record for this natural key, or null if none
+    // exists. Case-insensitive on sourceRecordId, matching the existing duplicate-key check it replaces.
     EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId);
 }

@@ -127,13 +127,38 @@ number and sit in whichever section they belong to, so existing numbers never sh
   identical resend (no field changed) is a safe no-op. This is supported on the
   file metadata store's non-Lucene-indexed path only: attach an index and the same
   call throws `NotSupportedException` rather than silently leaving a stale,
-  still-searchable candidate behind. Three things remain unimplemented: deletion
-  (the "customer closed their account" half of this requirement — there is still
-  no tombstone concept for a record withdrawn at the source), the PostgreSQL
-  backend (corrections throw there too — the pre-existing duplicate-source-record-id
-  check in `PostgresMetadataStore.ValidateIncrementalRequestAsync` rejects any
-  resend before it would reach the resolver), and excluding a superseded record
-  from a Lucene-indexed store's retrieval.
+  still-searchable candidate behind.
+
+  Deletion (the "customer closed their account" half of this requirement) now
+  works the same way: a new `record delete` CLI command marks the targeted
+  record(s) `DeletedAt` and detaches them from their cluster via the same
+  `DetachFromCluster` primitive corrections use — an unclustered record is
+  simply tombstoned, a clustered record's cluster recomputes its golden record
+  from the remaining survivors (dissolving the cluster if it was the only
+  member). Every `RecordDeletedEvent` is queryable via
+  `IMetadataStore.ListRecordDeletedEventsAsync`.
+
+  Both now also work on the PostgreSQL backend, on the same terms as the file
+  store: an index-attached Postgres store throws `NotSupportedException` for
+  either, so `record delete`/a correcting resend run through the CLI (which
+  always attaches a Lucene index) still fails gracefully rather than
+  succeeding — real correction/deletion is reachable only against a
+  non-indexed store, for both backends, until Lucene reindexing lands.
+  Porting corrections to Postgres required removing the mechanism that
+  actually blocked every correction there: not `PostgresMutationApplier`'s
+  guard (the earlier, inaccurate attribution), but a duplicate-source-record-id
+  check in `PostgresMetadataStore.ValidateIncrementalRequestAsync` that
+  rejected any resend before it reached the resolver. It also required fixing
+  a genuine Postgres-specific gap: Postgres tracks cluster membership as a
+  foreign key on the record (`entity_records.cluster_id`), the opposite of the
+  file store's list-on-the-cluster model, and nothing before this needed to
+  *clear* that key when a record left a cluster without joining another —
+  every prior mutation path (merge, dissolution) always moved a departing
+  record onto some new cluster. `PostgresMutationApplier` now clears it
+  explicitly as part of writing the correction/deletion tombstone.
+
+  One thing remains unimplemented: excluding a superseded or deleted record
+  from a Lucene-indexed store's retrieval, for either backend.
 
 ### Data arriving late or out of order
 

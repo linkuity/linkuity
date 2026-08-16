@@ -17,4 +17,5 @@ public sealed class ResolutionWorkingSet
     public List<ClusterMergeEvent> ClusterMergeEvents { get; init; } = [];
     public List<ClusterDissolutionEvent> ClusterDissolutionEvents { get; init; } = [];
     public List<RecordCorrectedEvent> RecordCorrectedEvents { get; init; } = [];
+    public List<RecordDeletedEvent> RecordDeletedEvents { get; init; } = [];
 }

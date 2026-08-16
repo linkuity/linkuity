@@ -22,6 +22,34 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   stale candidate searchable); the PostgreSQL backend does not yet apply
   corrections either, and throws rather than dropping them silently. Deletion is
   not addressed by this milestone.
+- Record deletion (F6 milestone 2): a new `record delete` CLI command marks a
+  `(project, source record id)` record `DeletedAt` and detaches it from its
+  cluster — an unclustered record is simply tombstoned, a clustered record's
+  cluster recomputes its golden record from the remaining survivors
+  (dissolving the cluster if it was the only member) — reusing the same
+  `DetachFromCluster` primitive corrections use. `IMetadataStore.ListRecordDeletedEventsAsync`
+  exposes the audit trail. Same scope as corrections: the file metadata
+  store's non-Lucene-indexed path only (an indexed store throws
+  `NotSupportedException`, including via the CLI, which always attaches an
+  index for durable commands); the PostgreSQL backend does not yet support
+  deletion either. `--source-record-id` accepts a comma-separated list to
+  delete multiple records in one call.
+- PostgreSQL backend for record corrections and deletion (F6 milestone 3): both
+  now work on Postgres on the same terms as the file store — an index-attached
+  store throws `NotSupportedException` for either, so the CLI (which always
+  attaches an index) still can't reach either through it yet; real usage is
+  against a non-indexed store until Lucene reindexing lands. Getting there
+  required removing a duplicate-source-record-id check in
+  `PostgresMetadataStore.ValidateIncrementalRequestAsync` that was the actual
+  mechanism blocking every correction (not `PostgresMutationApplier`'s guard,
+  as previously documented), and fixing a genuine Postgres-specific gap: since
+  Postgres tracks cluster membership as a foreign key on the record rather
+  than a list on the cluster, a corrected-away or deleted record's stale
+  `cluster_id` had to be explicitly cleared — nothing before this milestone
+  ever needed to, since every prior mutation path always moved a departing
+  record onto some new cluster. `record_corrected_events` and
+  `record_deleted_events` tables back `ListRecordCorrectedEventsAsync`/
+  `ListRecordDeletedEventsAsync` on Postgres.
 - `match corpus fields` CLI command: measures how much each of your columns is
   actually worth for matching, on your own data, so a matching profile is built
   from measurement rather than guesswork. Per matchable field it reports fill

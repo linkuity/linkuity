@@ -274,6 +274,66 @@ public sealed class FileMetadataStore : IMetadataStore
         }
     }
 
+    public async Task<RecordDeletionResult> DeleteRecordsAsync(
+        Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(sourceRecordIds);
+        if (sourceRecordIds.Count == 0)
+            throw new ArgumentException("At least one source record id is required.", nameof(sourceRecordIds));
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var db = await LoadAsync(ct);
+            ValidateDeletionRequest(db, projectId, sourceId, ingestBatchId, sourceRecordIds);
+
+            // Checked BEFORE any resolver work, unlike the correction guard in
+            // SaveIncrementalIngestAsync: every deletion request produces a mutation for every
+            // input row (there is no "identical resend, safe no-op" escape hatch the way a
+            // correction has), so there's nothing to gain by classifying first.
+            if (_index is not null)
+                throw new NotSupportedException(
+                    "Record deletion is not yet supported on an index-backed store: a Lucene-indexed " +
+                    "candidate for the deleted record would remain searchable after this call, which " +
+                    "could produce wrong matches. Supported only for stores without an attached index " +
+                    "until Lucene reindexing on deletion is built.");
+
+            var project = db.Projects.First(p => p.Id == projectId);
+            var profile = ProfileFor(project.ContentType);
+            var context = new FileResolutionContext(db);
+            var now = DateTimeOffset.UtcNow;
+
+            var (deletedIds, mutations) = _resolver.ClassifyAndDetachDeletions(
+                project, profile, sourceRecordIds, ingestBatchId, context, now);
+
+            ApplyMutations(db, mutations);
+            await SaveAsync(db, ct);
+
+            return new RecordDeletionResult(deletedIds.Count);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static void ValidateDeletionRequest(
+        ResolutionWorkingSet db, Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds)
+    {
+        if (!db.Projects.Any(p => p.Id == projectId))
+            throw new InvalidOperationException($"Project not found: {projectId}");
+        if (!db.Sources.Any(s => s.Id == sourceId && s.ProjectId == projectId))
+            throw new InvalidOperationException($"Source not found for project {projectId}: {sourceId}");
+        if (!db.IngestBatches.Any(b => b.Id == ingestBatchId && b.ProjectId == projectId && b.SourceId == sourceId))
+            throw new InvalidOperationException($"Ingest batch not found for project {projectId}: {ingestBatchId}");
+
+        var duplicateSourceRecordId = sourceRecordIds
+            .GroupBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (duplicateSourceRecordId is not null)
+            throw new InvalidOperationException($"Duplicate source record id in deletion request: {duplicateSourceRecordId.Key}");
+    }
+
     // Reconcile the batch's stored RecordCount with the rows actually ingested in this call.
     // Callers pass recordsToResolve.Count (new + corrected records), not the raw incoming
     // request.Records.Count: ClassifyAndDetachCorrections silently drops identical no-op
@@ -334,10 +394,11 @@ public sealed class FileMetadataStore : IMetadataStore
         db.ClusterMergeEvents.AddRange(m.MergeEventsToInsert);
         db.ClusterDissolutionEvents.AddRange(m.DissolutionEventsToInsert);
         db.RecordCorrectedEvents.AddRange(m.CorrectionEventsToInsert);
+        db.RecordDeletedEvents.AddRange(m.DeletionEventsToInsert);
     }
 
     public async Task<IReadOnlyList<EntityRecord>> ListEntityRecordsAsync(Guid projectId, CancellationToken ct = default)
-        => (await LoadAsync(ct)).EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
+        => (await LoadAsync(ct)).EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null && r.DeletedAt is null).ToList();
 
     public async Task<IReadOnlyList<MatchEdge>> ListMatchEdgesAsync(Guid projectId, CancellationToken ct = default)
         => (await LoadAsync(ct)).MatchEdges.Where(e => e.ProjectId == projectId).ToList();
@@ -366,6 +427,9 @@ public sealed class FileMetadataStore : IMetadataStore
 
     public async Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default)
         => (await LoadAsync(ct)).RecordCorrectedEvents.Where(e => e.ProjectId == projectId).ToList();
+
+    public async Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default)
+        => (await LoadAsync(ct)).RecordDeletedEvents.Where(e => e.ProjectId == projectId).ToList();
 
     private async Task<ResolutionWorkingSet> LoadAsync(CancellationToken ct)
     {
@@ -558,7 +622,7 @@ public sealed class FileMetadataStore : IMetadataStore
     private sealed class FileResolutionContext(ResolutionWorkingSet db) : IResolutionContext
     {
         public IReadOnlyList<EntityRecord> GetLinearCorpus(Guid projectId)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && r.SupersededAt is null && r.DeletedAt is null).ToList();
 
         public IReadOnlyList<Cluster> GetActiveClustersContaining(Guid projectId, IReadOnlyCollection<Guid> recordIds)
             => db.Clusters
@@ -567,7 +631,7 @@ public sealed class FileMetadataStore : IMetadataStore
                 .ToList();
 
         public IReadOnlyList<EntityRecord> GetRecordsByIds(Guid projectId, IReadOnlyCollection<Guid> recordIds)
-            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null).ToList();
+            => db.EntityRecords.Where(r => r.ProjectId == projectId && recordIds.Contains(r.Id) && r.SupersededAt is null && r.DeletedAt is null).ToList();
 
         public IReadOnlyList<GoldenRecord> GetGoldenRecordsForClusters(Guid projectId, IReadOnlyCollection<Guid> clusterIds)
             => db.GoldenRecords.Where(g => g.ProjectId == projectId && clusterIds.Contains(g.ClusterId)).ToList();
@@ -577,7 +641,7 @@ public sealed class FileMetadataStore : IMetadataStore
 
         public EntityRecord? FindCurrentRecordBySourceRecordId(Guid projectId, string sourceRecordId)
             => db.EntityRecords.FirstOrDefault(r =>
-                r.ProjectId == projectId && r.SupersededAt is null &&
+                r.ProjectId == projectId && r.SupersededAt is null && r.DeletedAt is null &&
                 string.Equals(r.SourceRecordId, sourceRecordId, StringComparison.OrdinalIgnoreCase));
     }
 

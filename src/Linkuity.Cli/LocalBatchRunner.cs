@@ -245,6 +245,8 @@ public sealed class LocalBatchRunner
                     return await ListReviewTasksCommandAsync(store, options, ct);
                 case ["match", "explain", ..]:
                     return await ExplainMatchesCommandAsync(store, options, ct);
+                case ["record", "delete", ..]:
+                    return await DeleteRecordsCommandAsync(store, options, ct);
                 default:
                     await Console.Error.WriteLineAsync("Unknown command.");
                     return 2;
@@ -406,6 +408,21 @@ public sealed class LocalBatchRunner
         Console.WriteLine($"Singleton clusters: {singletons}");
         Console.WriteLine($"Golden versions created: {versions}");
         Console.WriteLine($"Records corrected: {corrected}");
+    }
+
+    private static async Task<int> DeleteRecordsCommandAsync(IMetadataStore store, IReadOnlyDictionary<string, string> options, CancellationToken ct)
+    {
+        var projectId = Guid.Parse(Required(options, "project-id"));
+        var sourceId = Guid.Parse(Required(options, "source-id"));
+        var batchId = Guid.Parse(Required(options, "batch-id"));
+        var sourceRecordIds = Required(options, "source-record-id")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (sourceRecordIds.Length == 0)
+            throw new ArgumentException("--source-record-id must name at least one id.");
+
+        var result = await store.DeleteRecordsAsync(projectId, sourceId, batchId, sourceRecordIds, ct);
+        Console.WriteLine($"Records deleted: {result.RecordsDeleted}");
+        return 0;
     }
 
     private static async Task<int> ExportReviewTasksCommandAsync(IMetadataStore store, IReadOnlyDictionary<string, string> options, CancellationToken ct)

@@ -23,4 +23,11 @@ public interface IMetadataStore
     Task<IReadOnlyList<ReviewTask>> ListReviewTasksAsync(Guid projectId, CancellationToken ct = default);
     Task<IReadOnlyList<ClusterMergeEvent>> ListClusterMergeEventsAsync(Guid projectId, CancellationToken ct = default);
     Task<IReadOnlyList<RecordCorrectedEvent>> ListRecordCorrectedEventsAsync(Guid projectId, CancellationToken ct = default);
+    /// <summary>
+    /// sourceId identifies the batch's owning source for provenance only — it does not scope which
+    /// records can be targeted. sourceRecordIds are resolved project-wide via the
+    /// (project, source_record_id) natural key, matching how corrections already work.
+    /// </summary>
+    Task<RecordDeletionResult> DeleteRecordsAsync(Guid projectId, Guid sourceId, Guid ingestBatchId, IReadOnlyList<string> sourceRecordIds, CancellationToken ct = default);
+    Task<IReadOnlyList<RecordDeletedEvent>> ListRecordDeletedEventsAsync(Guid projectId, CancellationToken ct = default);
 }
