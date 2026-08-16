@@ -1,3 +1,4 @@
+using Dapper;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.TestSupport;
@@ -233,5 +234,48 @@ public sealed class PostgresDeletionTests(SharedPostgresContainer shared) : IAsy
             if (Directory.Exists(indexDir))
                 Directory.Delete(indexDir, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Regression for #67, reintroduced on Postgres by this milestone until Finding 1's fix — the
+    /// deletion equivalent of PostgresCorrectionTests.CorrectingBothMembersOfTwoMemberClusterInOneBatch_LeavesNoOrphanedGoldenRecord.
+    /// See that test's doc comment for the full mechanism.
+    /// </summary>
+    [SkippableFact]
+    public async Task DeleteRecordsAsync_DeletingBothMembersOfTwoMemberClusterInOneBatch_LeavesNoOrphanedGoldenRecord()
+    {
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
+        var store = _store!;
+        var now = DateTimeOffset.UtcNow;
+
+        var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+        var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now);
+
+        var memberA = Record(project.Id, source.Id, seedBatch.Id, "crm-a", new() { ["name"] = "Alice" }, now);
+        var memberB = Record(project.Id, source.Id, seedBatch.Id, "crm-b", new() { ["name"] = "Alice" }, now);
+        var clusterId = Guid.NewGuid();
+        var goldenId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+
+        await store.SaveCompletedBatchAsync(new CompletedBatchMetadata(
+            [memberA, memberB], [],
+            [new Cluster { Id = clusterId, ProjectId = project.Id, MemberEntityRecordIds = [memberA.Id, memberB.Id], CreatedAt = now }],
+            [new GoldenRecord { Id = goldenId, ProjectId = project.Id, ClusterId = clusterId, CurrentVersionId = versionId, Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = now }],
+            [new GoldenRecordVersion { Id = versionId, GoldenRecordId = goldenId, ProjectId = project.Id, ClusterId = clusterId, IngestBatchId = seedBatch.Id, VersionNumber = 1, Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = now }]));
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1));
+        var result = await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-a", "crm-b"]);
+        Assert.Equal(2, result.RecordsDeleted);
+
+        await using var conn = new Npgsql.NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        var clusterStatus = await conn.ExecuteScalarAsync<string>(
+            "SELECT status FROM clusters WHERE id = @Id", new { Id = clusterId });
+        Assert.Equal("merged", clusterStatus);
+
+        var orphanCount = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM golden_records WHERE cluster_id = @Id", new { Id = clusterId });
+        Assert.Equal(0, orphanCount);
     }
 }

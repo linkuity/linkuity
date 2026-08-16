@@ -44,10 +44,19 @@ internal sealed class PostgresMutationApplier(NpgsqlConnection conn, NpgsqlTrans
 
         await UpsertClustersAsync(m.ClustersToUpsert, ct);
 
+        // Upsert runs BEFORE the clear, deliberately: within one MutationSet, a cluster can both
+        // receive a (now-stale) golden record upsert AND get tombstoned by a LATER correction or
+        // deletion detaching the rest of its membership in the SAME batch (e.g. correcting or
+        // deleting both members of a 2-member cluster — see #67). GoldenRecordsToUpsert entries
+        // only exist in-memory in `m` at this point, not yet persisted to golden_records, so
+        // running the DELETE before the INSERT/upsert could only remove a row already persisted
+        // from a PRIOR call — never one this same call just queued for the very cluster it is also
+        // clearing. Running the clear after the upsert makes a same-batch tombstone always win over
+        // an earlier same-batch upsert for that cluster id.
+        await UpsertGoldenRecordsAsync(m.GoldenRecordsToUpsert, ct);
+
         if (m.GoldenRecordClusterIdsToClear.Count > 0)
             await ClearGoldenRecordsAsync(m.GoldenRecordClusterIdsToClear, ct);
-
-        await UpsertGoldenRecordsAsync(m.GoldenRecordsToUpsert, ct);
 
         await InsertGoldenRecordVersionsAsync(m.VersionsToInsert, ct);
 

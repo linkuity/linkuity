@@ -1,3 +1,4 @@
+using Dapper;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.TestSupport;
@@ -218,5 +219,60 @@ public sealed class PostgresCorrectionTests(SharedPostgresContainer shared) : IA
             if (Directory.Exists(indexDir))
                 Directory.Delete(indexDir, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Regression for #67, reintroduced on Postgres by this milestone until Finding 1's fix: a
+    /// 2-member cluster {A,B} with a golden record, where ONE batch corrects BOTH members.
+    /// Iteration 1 (correcting A) reduces the cluster to survivor {B} and, because a golden record
+    /// already exists, recomputes+queues a new golden record row (still keyed to this same cluster
+    /// id) alongside it. Iteration 2 (correcting B) sees the cluster's pending-reduced membership
+    /// as already empty, tombstones the cluster, and queues it for golden-record clearing.
+    /// ApplyAsync used to run that clear BEFORE the golden-record upsert, so it could only remove
+    /// an already-persisted row — never one THIS SAME call just queued for the very cluster it's
+    /// also clearing — leaving an orphaned golden_records row pointing at a tombstoned cluster.
+    /// ListGoldenRecordsAsync filters by active cluster and would mask this, so this test queries
+    /// golden_records directly instead.
+    /// </summary>
+    [SkippableFact]
+    public async Task CorrectingBothMembersOfTwoMemberClusterInOneBatch_LeavesNoOrphanedGoldenRecord()
+    {
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
+        var store = _store!;
+        var now = DateTimeOffset.UtcNow;
+
+        var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+        var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now);
+
+        var memberA = Record(project.Id, source.Id, seedBatch.Id, "crm-a", new() { ["name"] = "Alice" }, now);
+        var memberB = Record(project.Id, source.Id, seedBatch.Id, "crm-b", new() { ["name"] = "Alice" }, now);
+        var clusterId = Guid.NewGuid();
+        var goldenId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+
+        await store.SaveCompletedBatchAsync(new CompletedBatchMetadata(
+            [memberA, memberB], [],
+            [new Cluster { Id = clusterId, ProjectId = project.Id, MemberEntityRecordIds = [memberA.Id, memberB.Id], CreatedAt = now }],
+            [new GoldenRecord { Id = goldenId, ProjectId = project.Id, ClusterId = clusterId, CurrentVersionId = versionId, Fields = new Dictionary<string, string> { ["name"] = "Alice" }, UpdatedAt = now }],
+            [new GoldenRecordVersion { Id = versionId, GoldenRecordId = goldenId, ProjectId = project.Id, ClusterId = clusterId, IngestBatchId = seedBatch.Id, VersionNumber = 1, Fields = new Dictionary<string, string> { ["name"] = "Alice" }, CreatedAt = now }]));
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 2, now.AddMinutes(1));
+        var correctedA = Record(project.Id, source.Id, correctionBatch.Id, "crm-a", new() { ["name"] = "Alice-corrected" }, now.AddMinutes(1));
+        var correctedB = Record(project.Id, source.Id, correctionBatch.Id, "crm-b", new() { ["name"] = "Alice-corrected-too" }, now.AddMinutes(1));
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [correctedA, correctedB], 0.90, 0.75));
+        Assert.Equal(2, result.RecordsCorrected);
+
+        await using var conn = new Npgsql.NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        var clusterStatus = await conn.ExecuteScalarAsync<string>(
+            "SELECT status FROM clusters WHERE id = @Id", new { Id = clusterId });
+        Assert.Equal("merged", clusterStatus);
+
+        var orphanCount = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM golden_records WHERE cluster_id = @Id", new { Id = clusterId });
+        Assert.Equal(0, orphanCount);
     }
 }
