@@ -22,4 +22,14 @@
     <PackageReference Include="Npgsql" Version="9.0.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      For DurableWriteOrderingSpyIndex, which implements the IIndexedCandidateRetrievalStrategy
+      contract so both the local and PostgreSQL test assemblies can prove the same index-ordering
+      invariant with one mechanism. Contracts only — no Lucene adapter reference, and still no test
+      framework, so this stays a helper library per the note above.
+    -->
+    <ProjectReference Include="..\Linkuity.Matching\Linkuity.Matching.csproj" />
+  </ItemGroup>
+
 </Project>

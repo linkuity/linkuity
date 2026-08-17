@@ -23,6 +23,8 @@
     <ProjectReference Include="..\Linkuity.Core\Linkuity.Core.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Local\Linkuity.Infrastructure.Local.csproj" />
     <ProjectReference Include="..\Linkuity.Infrastructure.Lucene\Linkuity.Infrastructure.Lucene.csproj" />
+    <!-- For DurableWriteOrderingSpyIndex, shared with the PostgreSQL test assembly. -->
+    <ProjectReference Include="..\Linkuity.TestSupport\Linkuity.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>
