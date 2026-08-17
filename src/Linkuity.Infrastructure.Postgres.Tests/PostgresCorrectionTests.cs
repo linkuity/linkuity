@@ -1,6 +1,8 @@
 using Dapper;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
+using Linkuity.Matching;
+using Linkuity.Matching.Profiles;
 using Linkuity.TestSupport;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
@@ -182,7 +184,7 @@ public sealed class PostgresCorrectionTests(SharedPostgresContainer shared) : IA
     }
 
     [SkippableFact]
-    public async Task ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
+    public async Task ResendWithDifferentValues_OnIndexedStore_RemovesSupersededFromIndex()
     {
         Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
@@ -191,11 +193,13 @@ public sealed class PostgresCorrectionTests(SharedPostgresContainer shared) : IA
         try
         {
             using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
-            var connectionString = await shared.CreateDatabaseAsync(nameof(ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported));
+            var connectionString = await shared.CreateDatabaseAsync(nameof(ResendWithDifferentValues_OnIndexedStore_RemovesSupersededFromIndex));
             DbUpMigrator.EnsureSchema(connectionString);
             var store = new PostgresMetadataStore(
                 new PostgresMetadataStoreOptions { ConnectionString = connectionString },
                 engine: null, profileProvider: null, indexedRetrieval: index);
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
             var now = DateTimeOffset.UtcNow;
 
             var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
@@ -206,13 +210,33 @@ public sealed class PostgresCorrectionTests(SharedPostgresContainer shared) : IA
             await store.SaveIncrementalIngestAsync(
                 new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75));
 
+            // Blocking keys must be generated the same way the store generates them for real
+            // incoming records (engine.PrepareForStorage), or the query never builds a search term.
+            var queryOldEmail = engine.PrepareForStorage(
+                Record(project.Id, source.Id, batch.Id, "probe",
+                    new() { ["source"] = "CRM", ["email"] = "alice@old.example.com" }, now.AddMinutes(1)),
+                profile);
+            // Prove the probe is capable of finding the record before correction, so the later
+            // DoesNotContain means "removed", not "this query never matches anything."
+            Assert.Contains(index.Retrieve(queryOldEmail, [], profile), c => c.Id == original.Id);
+
             var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1));
             var corrected = Record(project.Id, source.Id, correctionBatch.Id, "crm-001",
                 new() { ["source"] = "CRM", ["email"] = "alice@new.example.com" }, now.AddMinutes(1));
 
-            await Assert.ThrowsAsync<NotSupportedException>(() =>
-                store.SaveIncrementalIngestAsync(
-                    new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75)));
+            var result = await store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75));
+            Assert.Equal(1, result.RecordsCorrected);
+
+            // The superseded record's Lucene doc must be gone.
+            Assert.DoesNotContain(index.Retrieve(queryOldEmail, [], profile), c => c.Id == original.Id);
+
+            // The correcting record IS indexed and retrievable under its new value.
+            var queryNewEmail = engine.PrepareForStorage(
+                Record(project.Id, source.Id, correctionBatch.Id, "probe2",
+                    new() { ["source"] = "CRM", ["email"] = "alice@new.example.com" }, now.AddMinutes(1)),
+                profile);
+            Assert.Contains(index.Retrieve(queryNewEmail, [], profile), c => c.Id == corrected.Id);
         }
         finally
         {

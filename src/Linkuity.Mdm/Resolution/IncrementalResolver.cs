@@ -1037,8 +1037,21 @@ public sealed class IncrementalResolver
                 ? (edge.LeftId, edge.RightId)
                 : (edge.RightId, edge.LeftId);
 
-            clusterByRecord.TryGetValue(newId, out var newCluster);
-            clusterByRecord.TryGetValue(candidateId, out var candidateCluster);
+            var newFound = clusterByRecord.TryGetValue(newId, out var newCluster);
+            var candidateFound = clusterByRecord.TryGetValue(candidateId, out var candidateCluster);
+
+            // A non-incoming endpoint absent from clusterByRecord was detached from its cluster
+            // earlier in THIS SAME CALL (a correction/deletion target — see DetachFromCluster) and
+            // is no longer a live record, even though a not-yet-removed Lucene document can still
+            // surface it as a retrieval candidate (the index mutation runs after this resolve — see
+            // FileMetadataStore/PostgresMetadataStore's ordering comments). Every genuinely live
+            // record is guaranteed a clusterByRecord entry (materialized for every component before
+            // this runs — see Resolve above), and an incoming endpoint always gets one too, so this
+            // only ever filters out a stale reference, never a legitimate pair. Mirrors the
+            // equivalent check the auto-match loop above already makes for the same reason.
+            if ((!newFound && !incomingIds.Contains(newId)) || (!candidateFound && !incomingIds.Contains(candidateId)))
+                continue;
+
             // "cluster_merge_suggestion" when both sides are in pre-existing, distinct clusters
             // (weak-bridge: X auto-joined C1 but only review-matched C2).
             var bridges = existingClusterIds.Contains(newCluster) && existingClusterIds.Contains(candidateCluster)

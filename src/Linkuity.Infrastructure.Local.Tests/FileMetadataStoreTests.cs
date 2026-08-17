@@ -970,11 +970,12 @@ public class FileMetadataStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_ThrowsNotSupported()
+    public async Task SaveIncrementalIngestAsync_ResendWithDifferentValues_OnIndexedStore_RemovesSupersededFromIndex()
     {
         var indexDir = Path.Combine(_root, "lucene-correction-guard");
         var engine = MatchingDefaults.CreateEngine();
-        var provider = new DefaultMatchingProfileProvider([DefaultMatchingProfileProvider.CreatePersonProfile()]);
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
         using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
         var store = new FileMetadataStore(
             new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-indexed-guard.json") },
@@ -988,13 +989,80 @@ public class FileMetadataStoreTests : IDisposable
         await store.SaveIncrementalIngestAsync(
             new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
 
+        // Blocking keys must be generated the same way the store generates them for real
+        // incoming records (engine.PrepareForStorage), or the query never builds a search term.
+        var queryOldEmail = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, batch.Id, "probe", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@old.example.com", ["name"] = "Alice" }),
+            profile);
+        // Prove the probe is capable of finding the record before correction, so the later
+        // Assert.Empty means "removed", not "this query never matches anything."
+        Assert.Contains(index.Retrieve(queryOldEmail, [], profile), c => c.Id == original.Id);
+
         var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
         var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
             new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@new.example.com", ["name"] = "Alice" });
 
-        await Assert.ThrowsAsync<NotSupportedException>(() =>
-            store.SaveIncrementalIngestAsync(
-                new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None));
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+        Assert.Equal(1, result.RecordsCorrected);
+
+        // The superseded record's Lucene doc must be gone. The corrected record can still
+        // legitimately appear in this same result set (it shares the "Alice" name blocking key
+        // with the probe), so the assertion targets the superseded record's own id specifically.
+        Assert.DoesNotContain(index.Retrieve(queryOldEmail, [], profile), c => c.Id == original.Id);
+
+        // The correcting record IS indexed and retrievable under its new value.
+        var queryNewEmail = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "probe2", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@new.example.com", ["name"] = "Alice" }),
+            profile);
+        Assert.Contains(index.Retrieve(queryNewEmail, [], profile), c => c.Id == corrected.Id);
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_CorrectionLandsInReviewBandAgainstOwnSupersededSelf_DoesNotCreateReviewTaskForDeadRecord()
+    {
+        // Lucene's Remove() for the superseded record runs AFTER Resolve() (see the ordering
+        // comment in SaveIncrementalIngestAsync), so Resolve's candidate search can still return
+        // the superseded record's stale doc. The correcting record's own detach already ran
+        // (ApplyMutations(correctionMutations) before Resolve), so the superseded record is no
+        // longer in any active cluster — but nothing stopped CreateBatchReviewTasks from creating
+        // a task referencing it anyway if the self-comparison lands in the review (not auto) band.
+        //
+        // Recipe from IncrementalResolverTests.ReviewBand_CreatesOpenReviewTask_WithBreakdown:
+        // last_name exact match (weight 2.0, blocking) + first_name "Robert"/"Bob" fuzzy ~0.67
+        // (weight 1.0, not blocking) = 0.89 weighted — inside [0.75, 0.90), review band, not auto.
+        // Correcting only first_name keeps last_name (the sole blocking field here) unchanged, so
+        // the corrected record's candidate search still finds its own superseded predecessor via
+        // the shared "last_name:smith" blocking key.
+        var indexDir = Path.Combine(_root, "lucene-correction-review-liveness");
+        var engine = MatchingDefaults.CreateEngine();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-correction-review-liveness.json") },
+            engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["first_name"] = "Robert", ["last_name"] = "Smith" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var correctionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var corrected = NewRecordWithFields(project.Id, source.Id, correctionBatch.Id, "crm-001", now.AddMinutes(1), [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["first_name"] = "Bob", ["last_name"] = "Smith" });
+
+        var result = await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, correctionBatch.Id, [corrected], 0.90, 0.75), CancellationToken.None);
+        Assert.Equal(1, result.RecordsCorrected);
+
+        var reviewTasks = await store.ListReviewTasksAsync(project.Id, CancellationToken.None);
+        Assert.DoesNotContain(reviewTasks, t => t.CandidateEntityRecordId == original.Id || t.NewEntityRecordId == original.Id);
     }
 
     [Fact]
@@ -1094,11 +1162,12 @@ public class FileMetadataStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteRecordsAsync_OnIndexedStore_ThrowsNotSupportedWithoutMutatingFile()
+    public async Task DeleteRecordsAsync_OnIndexedStore_RemovesFromIndex()
     {
         var indexDir = Path.Combine(_root, "lucene-deletion-guard");
         var engine = MatchingDefaults.CreateEngine();
-        var provider = new DefaultMatchingProfileProvider([DefaultMatchingProfileProvider.CreatePersonProfile()]);
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
         using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
         var databasePath = Path.Combine(_root, "metadata-deletion-indexed-guard.json");
         var store = new FileMetadataStore(new FileMetadataStoreOptions { DatabasePath = databasePath }, engine, provider, index);
@@ -1111,17 +1180,110 @@ public class FileMetadataStoreTests : IDisposable
         await store.SaveIncrementalIngestAsync(
             new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
 
-        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
-        // Captured AFTER the deletion batch exists — CreateIngestBatchAsync itself persists
-        // (adding the new batch row), so capturing beforeContent any earlier would make this
-        // comparison trip on that unrelated, expected write rather than isolating what
-        // DeleteRecordsAsync's own guard does (or, here, correctly does not do).
-        var beforeContent = await File.ReadAllTextAsync(databasePath);
-        await Assert.ThrowsAsync<NotSupportedException>(() =>
-            store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None));
+        // Blocking keys must be generated the same way the store generates them for real
+        // incoming records (engine.PrepareForStorage), or the query never builds a search term.
+        var queryProbe = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, batch.Id, "probe", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "a@example.com" }),
+            profile);
+        // Prove the probe is capable of finding the record before deletion, so the later
+        // Assert.Empty means "removed", not "this query never matches anything."
+        Assert.Contains(index.Retrieve(queryProbe, [], profile), c => c.Id == original.Id);
 
-        var afterContent = await File.ReadAllTextAsync(databasePath);
-        Assert.Equal(beforeContent, afterContent); // guard fires before any mutation is applied
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        var result = await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None);
+        Assert.Equal(1, result.RecordsDeleted);
+
+        // The deleted record's Lucene doc must be gone.
+        Assert.Empty(index.Retrieve(queryProbe, [], profile));
+    }
+
+    [Fact]
+    public async Task DeleteRecordsAsync_IndexAlreadyDrifted_SelfHealsBeforeRemoving()
+    {
+        // SaveIncrementalIngestAsync calls EnsureIndexCurrent before mutating the index;
+        // DeleteRecordsAsync must too, or a pre-existing drift (e.g. from a prior crash) is never
+        // repaired on the deletion path — it just silently persists.
+        var indexDir = Path.Combine(_root, "lucene-deletion-selfheal");
+        var engine = MatchingDefaults.CreateEngine();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-selfheal.json") },
+            engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now, CancellationToken.None);
+        var keep = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-keep", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "keep@example.com" });
+        var toDelete = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-delete", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "delete@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [keep, toDelete], 0.90, 0.75), CancellationToken.None);
+
+        // Simulate drift external to this deletion call — e.g. an earlier crash between a Lucene
+        // commit and its durable write — by removing "keep"'s doc directly, without touching the
+        // durable store. The db still considers it live; the index no longer does.
+        index.Remove(keep.Id);
+        index.Commit();
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-delete"], CancellationToken.None);
+
+        // "keep" must be back in the index — EnsureIndexCurrent should have detected the drift
+        // and rebuilt from live durable records before the deletion-specific removal ran.
+        var queryKeep = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, batch.Id, "probe", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "keep@example.com" }),
+            profile);
+        Assert.Contains(index.Retrieve(queryKeep, [], profile), c => c.Id == keep.Id);
+    }
+
+    [Fact]
+    public async Task SaveIncrementalIngestAsync_AfterDeletionOnIndexedStore_SubsequentIngestDoesNotResurrectDeletedCandidate()
+    {
+        // EnsureIndexCurrent compares the LIVE Lucene doc count to the durable EntityRecords
+        // count and does a full Rebuild on any mismatch. Deletion keeps the tombstoned row in
+        // EntityRecords (SupersededAt/DeletedAt is never a hard delete) while removing its live
+        // Lucene doc, so that comparison must count only LIVE records on both sides — otherwise
+        // the very next SaveIncrementalIngestAsync call sees a mismatch and rebuilds the index
+        // from every EntityRecord including tombstoned ones, undoing the deletion.
+        var indexDir = Path.Combine(_root, "lucene-deletion-drift");
+        var engine = MatchingDefaults.CreateEngine();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-deletion-drift.json") },
+            engine, provider, index);
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var original = NewRecordWithFields(project.Id, source.Id, batch.Id, "crm-001", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "deleted@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75), CancellationToken.None);
+
+        var queryProbe = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, batch.Id, "probe", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "deleted@example.com" }),
+            profile);
+
+        var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1), CancellationToken.None);
+        await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"], CancellationToken.None);
+        Assert.Empty(index.Retrieve(queryProbe, [], profile));
+
+        // An unrelated ingest call exercises EnsureIndexCurrent's count check again.
+        var unrelatedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(2), CancellationToken.None);
+        var unrelated = NewRecordWithFields(project.Id, source.Id, unrelatedBatch.Id, "crm-002", now.AddMinutes(2), [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "unrelated@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, unrelatedBatch.Id, [unrelated], 0.90, 0.75), CancellationToken.None);
+
+        Assert.Empty(index.Retrieve(queryProbe, [], profile));
     }
 
     [Fact]

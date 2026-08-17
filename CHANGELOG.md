@@ -50,6 +50,47 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   record onto some new cluster. `record_corrected_events` and
   `record_deleted_events` tables back `ListRecordCorrectedEventsAsync`/
   `ListRecordDeletedEventsAsync` on Postgres.
+- Lucene exclusion for corrected/deleted records (F6 milestone 4, closing the F6
+  series): the `NotSupportedException` guards from milestones 1-3 are lifted on
+  both the file and PostgreSQL backends, so correction and deletion now work on
+  an index-attached store — the case the CLI always exercises, since it always
+  attaches a Lucene index for durable commands. A correction removes the
+  superseded record's Lucene document and indexes the correcting record; a
+  deletion removes the deleted record's document; neither leaves a stale
+  candidate searchable. Also fixes a drift-check bug this exposed: both
+  backends' "is the index current?" recovery check compared the live index's
+  document count against every stored record including tombstoned ones, which
+  would have made the very next ingest call rebuild the index from all records
+  — corrected/deleted ones included — silently undoing the exclusion. The
+  comparison (and the rebuild it triggers) now counts only live records
+  (`SupersededAt`/`DeletedAt` both null). Two crash-consistency gaps found in
+  review are also closed: the durable write (JSON save / SQL commit) now always
+  happens before the corresponding Lucene mutation, not after — for a
+  correction specifically, superseding one record while adding another is a
+  net-zero change in live document count, which the drift check cannot detect
+  either way, so committing Lucene first risked it durably serving a
+  "corrected" record that, had the durable write then failed, never actually
+  existed in the store, with no self-healing path back; committing the durable
+  write first means the worst case is a stale-but-real index entry the drift
+  check can still detect and repair. `DeleteRecordsAsync` on both backends now
+  also runs the drift check before mutating the index, matching
+  `SaveIncrementalIngestAsync` — previously only the ingest path could
+  self-heal a pre-existing drift. A second review round found and fixed two
+  more gaps unlocked by lifting the guard: `IncrementalResolver.
+  CreateBatchReviewTasks` had no liveness check on its candidate endpoint
+  (unlike the auto-match path, which already skips edges whose endpoints
+  aren't in `clusterByRecord`), so a correction whose changed field landed the
+  comparison against its own not-yet-removed Lucene predecessor in the
+  review band — not the auto band — created a permanent `ReviewTask`
+  referencing a dead record; this path was unreachable before an index-backed
+  store could apply corrections, and now gets the same liveness check the
+  auto-match path already had. And `PostgresMetadataStore` had no equivalent
+  of `FileMetadataStore`'s write-serializing gate around its shared,
+  singleton `LuceneCandidateRetrieval`, so the newly-reachable
+  `DeleteRecordsAsync`/correction calls could race concurrent Lucene
+  mutations against each other and against `Retrieve` — both against that
+  class's own documented "mutations must not run concurrently with Retrieve"
+  invariant; `PostgresMetadataStore` now has the equivalent gate.
 - `match corpus fields` CLI command: measures how much each of your columns is
   actually worth for matching, on your own data, so a matching profile is built
   from measurement rather than guesswork. Per matchable field it reports fill

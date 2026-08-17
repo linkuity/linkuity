@@ -24,6 +24,19 @@ public sealed class PostgresMetadataStore : IMetadataStore
     private readonly IIndexedCandidateRetrievalStrategy? _index;
     private readonly IncrementalResolver _resolver;
 
+    // Serializes every method that touches _index (a single shared LuceneCandidateRetrieval, per
+    // this class's DI registration as a singleton — see PostgresInfrastructureServiceCollectionExtensions).
+    // LuceneCandidateRetrieval's own class doc requires this: index mutations (Index/Update/
+    // Remove/Rebuild/Commit) "remain sequential and MUST NOT run concurrently with Retrieve" —
+    // and Retrieve happens mid-method, inside _resolver.Resolve, between this class's own
+    // EnsureIndexCurrentAsync call and its later index-mutation calls. So the gate has to span
+    // the whole method, not just the calls that touch _index directly, mirroring
+    // FileMetadataStore's identical whole-method _gate (there, protecting the JSON file instead).
+    // Unlike FileMetadataStore, Postgres's own transaction already gives the SQL work its own
+    // concurrency safety, so this serializes only what the shared Lucene writer requires — not a
+    // deliberate throughput tradeoff on the SQL side, just the narrowest correct scope.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public PostgresMetadataStore(
         PostgresMetadataStoreOptions options,
         IMatchingEngine? engine,
@@ -92,8 +105,11 @@ public sealed class PostgresMetadataStore : IMetadataStore
 
         return new Project
         {
-            Id = id, Name = name, ContentType = contentType,
-            MergeConfiguration = mergeConfiguration, CreatedAt = createdAt
+            Id = id,
+            Name = name,
+            ContentType = contentType,
+            MergeConfiguration = mergeConfiguration,
+            CreatedAt = createdAt
         };
     }
 
@@ -252,8 +268,12 @@ public sealed class PostgresMetadataStore : IMetadataStore
 
         return new IngestBatch
         {
-            Id = id, ProjectId = projectId, SourceId = sourceId,
-            JobId = jobId, RecordCount = recordCount, CreatedAt = createdAt
+            Id = id,
+            ProjectId = projectId,
+            SourceId = sourceId,
+            JobId = jobId,
+            RecordCount = recordCount,
+            CreatedAt = createdAt
         };
     }
 
@@ -283,140 +303,167 @@ public sealed class PostgresMetadataStore : IMetadataStore
     {
         ArgumentNullException.ThrowIfNull(completedBatch);
 
-        await using var conn = await OpenConnectionAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await using var conn = await OpenConnectionAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        // Load projects to get contentType (blocking keys) and MergeConfiguration (resolver).
-        var projectIds = completedBatch.EntityRecords
-            .Select(r => r.ProjectId)
-            .Distinct()
-            .ToArray();
-        var projects = await LoadProjectsAsync(conn, tx, projectIds, ct);
-        var projectMap = projects.ToDictionary(p => p.Id);
+            // Load projects to get contentType (blocking keys) and MergeConfiguration (resolver).
+            var projectIds = completedBatch.EntityRecords
+                .Select(r => r.ProjectId)
+                .Distinct()
+                .ToArray();
+            var projects = await LoadProjectsAsync(conn, tx, projectIds, ct);
+            var projectMap = projects.ToDictionary(p => p.Id);
 
-        // Blocking-key backfill — mirror WithGeneratedBlockingKeys.
-        var recordsWithKeys = completedBatch.EntityRecords
-            .Select(record =>
-            {
-                var contentType = projectMap.TryGetValue(record.ProjectId, out var proj)
-                    ? proj.ContentType : "person";
-                var profile = _profileProvider.GetProfile(contentType);
-                return _engine.PrepareForStorage(record, profile);
-            })
-            .ToList();
-        var completedBatchWithKeys = completedBatch with { EntityRecords = recordsWithKeys };
+            // Blocking-key backfill — mirror WithGeneratedBlockingKeys.
+            var recordsWithKeys = completedBatch.EntityRecords
+                .Select(record =>
+                {
+                    var contentType = projectMap.TryGetValue(record.ProjectId, out var proj)
+                        ? proj.ContentType : "person";
+                    var profile = _profileProvider.GetProfile(contentType);
+                    return _engine.PrepareForStorage(record, profile);
+                })
+                .ToList();
+            var completedBatchWithKeys = completedBatch with { EntityRecords = recordsWithKeys };
 
-        // Validate inside the transaction — throws roll back via await using.
-        await ValidateCompletedBatchAsync(conn, tx, completedBatchWithKeys, ct);
+            // Validate inside the transaction — throws roll back via await using.
+            await ValidateCompletedBatchAsync(conn, tx, completedBatchWithKeys, ct);
 
-        // Resolve using the shared CompletedBatchResolver.
-        var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, _profileProvider, DateTimeOffset.UtcNow);
+            // Resolve using the shared CompletedBatchResolver.
+            var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, _profileProvider, DateTimeOffset.UtcNow);
 
-        // Apply all mutations within the same transaction.
-        await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
+            // Apply all mutations within the same transaction.
+            await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        // Index records (Lucene commit is separate from the SQL txn).
-        if (_index is not null)
-            IndexRecords(completedBatchWithKeys.EntityRecords);
+            // Index records (Lucene commit is separate from the SQL txn).
+            if (_index is not null)
+                IndexRecords(completedBatchWithKeys.EntityRecords);
 
-        await tx.CommitAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<IncrementalIngestResult> SaveIncrementalIngestAsync(IncrementalIngestRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. Open the connection threshold validation (step 2) and the transaction (step 3)
-        //    both use — one connection either way, so opening it here costs nothing extra.
-        await using var conn = await OpenConnectionAsync(ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            // 1. Open the connection threshold validation (step 2) and the transaction (step 3)
+            //    both use — one connection either way, so opening it here costs nothing extra.
+            await using var conn = await OpenConnectionAsync(ct);
 
-        // 2. Threshold validation — before opening the txn, as it always was. Shared with
-        //    FileMetadataStore rather than copied into it, which is how the two previously stayed
-        //    in step by hand. This needs the profile's resolved scorer's scale (an evidence-scored
-        //    profile's thresholds are bits of log-odds evidence, invalid against the default
-        //    UnitInterval scale), which needs only the project's content type — a single
-        //    untransacted read, far cheaper than the ReadCommitted transaction plus step 4's
-        //    provenance round-trips this check must precede. A project that does not exist skips
-        //    this: there is no profile to resolve a scale from, and step 4's
-        //    ValidateIncrementalRequestAsync reports "Project not found", the more specific error
-        //    for that case. (A request invalid on BOTH grounds now surfaces the project error
-        //    instead of the threshold error — an unavoidable consequence of thresholds only being
-        //    meaningful relative to a scale the project's own profile supplies, not a regression
-        //    from before this scale threading existed: that version didn't validate evidence
-        //    profiles' thresholds correctly at all.)
-        var contentType = await LoadProjectContentTypeAsync(conn, request.ProjectId, ct);
-        if (contentType is not null)
-            _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(_profileProvider.GetProfile(contentType)));
+            // 2. Threshold validation — before opening the txn, as it always was. Shared with
+            //    FileMetadataStore rather than copied into it, which is how the two previously stayed
+            //    in step by hand. This needs the profile's resolved scorer's scale (an evidence-scored
+            //    profile's thresholds are bits of log-odds evidence, invalid against the default
+            //    UnitInterval scale), which needs only the project's content type — a single
+            //    untransacted read, far cheaper than the ReadCommitted transaction plus step 4's
+            //    provenance round-trips this check must precede. A project that does not exist skips
+            //    this: there is no profile to resolve a scale from, and step 4's
+            //    ValidateIncrementalRequestAsync reports "Project not found", the more specific error
+            //    for that case. (A request invalid on BOTH grounds now surfaces the project error
+            //    instead of the threshold error — an unavoidable consequence of thresholds only being
+            //    meaningful relative to a scale the project's own profile supplies, not a regression
+            //    from before this scale threading existed: that version didn't validate evidence
+            //    profiles' thresholds correctly at all.)
+            var contentType = await LoadProjectContentTypeAsync(conn, request.ProjectId, ct);
+            if (contentType is not null)
+                _ = IncrementalResolver.ThresholdsFor(request, _engine.ScaleOf(_profileProvider.GetProfile(contentType)));
 
-        // 3. One READ COMMITTED transaction for the whole bounded ingest.
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            // 3. One READ COMMITTED transaction for the whole bounded ingest.
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        // 4. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
-        await ValidateIncrementalRequestAsync(conn, tx, request, ct);
+            // 4. Targeted provenance + duplicate-source-record-id validation (throws roll back via await using).
+            await ValidateIncrementalRequestAsync(conn, tx, request, ct);
 
-        // 5. Load the project + its matching profile.
-        var projects = await LoadProjectsAsync(conn, tx, [request.ProjectId], ct);
-        var project = projects.Count > 0
-            ? projects[0]
-            : throw new InvalidOperationException($"Project not found: {request.ProjectId}");
-        var profile = _profileProvider.GetProfile(project.ContentType);
+            // 5. Load the project + its matching profile.
+            var projects = await LoadProjectsAsync(conn, tx, [request.ProjectId], ct);
+            var project = projects.Count > 0
+                ? projects[0]
+                : throw new InvalidOperationException($"Project not found: {request.ProjectId}");
+            var profile = _profileProvider.GetProfile(project.ContentType);
 
-        // 6. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
-        //    counts match (records are indexed as they are inserted) and nothing happens — no scan.
-        //    A mismatch is the explicit recovery path (full rebuild); it must not fire in the tests.
-        await EnsureIndexCurrentAsync(conn, tx, ct);
+            // 6. EnsureIndexCurrent: COUNT(*) of entity_records vs the index. On the normal path the
+            //    counts match (records are indexed as they are inserted) and nothing happens — no scan.
+            //    A mismatch is the explicit recovery path (full rebuild); it must not fire in the tests.
+            await EnsureIndexCurrentAsync(conn, tx, ct);
 
-        // 7. Build incoming records with blocking keys (generated only when absent). No full backfill —
-        //    blocking keys are stored at insert time on Postgres, so there is no scan over existing rows.
-        var incomingRecords = request.Records
-            .Select(record => _engine.PrepareForStorage(record, profile))
-            .ToList();
+            // 7. Build incoming records with blocking keys (generated only when absent). No full backfill —
+            //    blocking keys are stored at insert time on Postgres, so there is no scan over existing rows.
+            var incomingRecords = request.Records
+                .Select(record => _engine.PrepareForStorage(record, profile))
+                .ToList();
 
-        // 8. Classify corrections/no-ops out of the incoming batch, detaching corrected records
-        //    from their clusters before matching runs — mirrors FileMetadataStore.
-        //    SaveIncrementalIngestAsync's identical two-phase shape.
-        var context = new PostgresResolutionContext(conn, tx);
-        var now = DateTimeOffset.UtcNow;
-        var (recordsToResolve, correctionMutations) = _resolver.ClassifyAndDetachCorrections(
-            project, profile, incomingRecords, context, now);
+            // 8. Classify corrections/no-ops out of the incoming batch, detaching corrected records
+            //    from their clusters before matching runs — mirrors FileMetadataStore.
+            //    SaveIncrementalIngestAsync's identical two-phase shape.
+            var context = new PostgresResolutionContext(conn, tx);
+            var now = DateTimeOffset.UtcNow;
+            var (recordsToResolve, correctionMutations) = _resolver.ClassifyAndDetachCorrections(
+                project, profile, incomingRecords, context, now);
 
-        if (correctionMutations.CorrectionEventsToInsert.Count > 0 && _index is not null)
-            throw new NotSupportedException(
-                "Record correction is not yet supported on an index-backed Postgres store: a " +
-                "Lucene-indexed candidate for the superseded record would remain searchable after " +
-                "this call, which could produce wrong matches. Supported only for stores without an " +
-                "attached index until Lucene reindexing on correction is built.");
+            await new PostgresMutationApplier(conn, tx).ApplyAsync(correctionMutations, ct);
 
-        await new PostgresMutationApplier(conn, tx).ApplyAsync(correctionMutations, ct);
+            // 9. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
+            var (result, mutations) = _resolver.Resolve(
+                request, project, profile, recordsToResolve, context, now);
 
-        // 9. Resolve through the bounded PostgresResolutionContext (Lucene supplies candidates).
-        var (result, mutations) = _resolver.Resolve(
-            request, project, profile, recordsToResolve, context, now);
+            // 10. Apply the targeted mutation set within the same transaction.
+            await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        // 10. Apply the targeted mutation set within the same transaction.
-        await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
+            // 10b. Reconcile the batch's stored record_count with the rows actually ingested in this
+            //      call — recordsToResolve.Count (new + corrected; no-ops already excluded by
+            //      ClassifyAndDetachCorrections), not the raw request.Records.Count, matching the file
+            //      store's #70 fix (a corrected record must not be double-counted, and a dropped no-op
+            //      resend must not inflate the stored count).
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE ingest_batches SET record_count = @n WHERE id = @batchId",
+                new { n = recordsToResolve.Count, batchId = request.IngestBatchId },
+                transaction: tx, cancellationToken: ct));
 
-        // 10b. Reconcile the batch's stored record_count with the rows actually ingested in this
-        //      call — recordsToResolve.Count (new + corrected; no-ops already excluded by
-        //      ClassifyAndDetachCorrections), not the raw request.Records.Count, matching the file
-        //      store's #70 fix (a corrected record must not be double-counted, and a dropped no-op
-        //      resend must not inflate the stored count).
-        await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE ingest_batches SET record_count = @n WHERE id = @batchId",
-            new { n = recordsToResolve.Count, batchId = request.IngestBatchId },
-            transaction: tx, cancellationToken: ct));
+            // RecordsAdded/RecordsCorrected split matches the file store: result.RecordsAdded comes
+            // from Resolve's incomingRecords parameter, which IS recordsToResolve here (new AND
+            // corrected records; no-ops already excluded), so the corrected count must be subtracted
+            // or it would be double-counted as both "added" and "corrected".
+            var correctedCount = correctionMutations.CorrectionEventsToInsert.Count;
 
-        // 11. Index the incoming records (Lucene commit is separate from the SQL txn).
-        if (_index is not null)
-            IndexRecords(recordsToResolve);
+            // 11. Commit the SQL transaction.
+            await tx.CommitAsync(ct);
 
-        // 12. Commit and return — RecordsAdded/RecordsCorrected split matches the file store: result.
-        //     RecordsAdded comes from Resolve's incomingRecords parameter, which IS recordsToResolve
-        //     here (new AND corrected records; no-ops already excluded), so the corrected count must
-        //     be subtracted or it would be double-counted as both "added" and "corrected".
-        var correctedCount = correctionMutations.CorrectionEventsToInsert.Count;
-        await tx.CommitAsync(ct);
-        return result with { RecordsAdded = result.RecordsAdded - correctedCount, RecordsCorrected = correctedCount };
+            // 12. Index the incoming records AFTER the SQL commit succeeds (Lucene commit is
+            //     separate from the SQL txn; retrieval only ever observes committed Lucene state, so
+            //     this ordering changes nothing about what step 9's Resolve could see — it only
+            //     determines which store is at risk if the other write fails). Indexing before the
+            //     SQL commit would be worse for a DELETION: a live-count mismatch on the next call
+            //     could detect and repair a stale-but-real index entry left by that ordering. For a
+            //     CORRECTION specifically, superseded-doc removal plus new-doc addition is a net-zero
+            //     change in live document count either way, so EnsureIndexCurrentAsync's count
+            //     comparison cannot detect drift here regardless of ordering — but committing SQL
+            //     first at least avoids the worse failure mode of Lucene durably serving a "corrected"
+            //     record that, had the SQL commit then failed, never actually existed in the store.
+            if (_index is not null)
+            {
+                foreach (var evt in correctionMutations.CorrectionEventsToInsert)
+                    _index.Remove(evt.SupersededEntityRecordId);
+                IndexRecords(recordsToResolve);
+            }
+
+            // 13. Return.
+            return result with { RecordsAdded = result.RecordsAdded - correctedCount, RecordsCorrected = correctedCount };
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     // Untransacted, single-row lookup used only to resolve the project's matching profile (and
@@ -434,8 +481,14 @@ public sealed class PostgresMetadataStore : IMetadataStore
         if (_index is null)
             return;
 
+        // Superseded/deleted records are tombstoned in place (superseded_at/deleted_at), never
+        // removed from entity_records, but they ARE removed from the live Lucene index — so only
+        // live rows count on either side of this comparison. Comparing against the raw table
+        // count would see a permanent mismatch after any correction/deletion and rebuild from
+        // every row including tombstoned ones, undoing the exclusion.
         var count = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
-            "SELECT COUNT(*) FROM entity_records", transaction: tx, cancellationToken: ct));
+            "SELECT COUNT(*) FROM entity_records WHERE superseded_at IS NULL AND deleted_at IS NULL",
+            transaction: tx, cancellationToken: ct));
         if (_index.Count == count)
             return; // normal path — index spans the store and is current.
 
@@ -453,6 +506,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 array_to_json(blocking_keys)::text AS "BlockingKeysJson",
                 created_at                         AS "CreatedAt"
             FROM entity_records
+            WHERE superseded_at IS NULL AND deleted_at IS NULL
             """, transaction: tx, cancellationToken: ct))).Select(MapEntityRecord).ToList();
         _index.Rebuild(all);
         _index.Commit();
@@ -719,37 +773,46 @@ public sealed class PostgresMetadataStore : IMetadataStore
         if (sourceRecordIds.Count == 0)
             throw new ArgumentException("At least one source record id is required.", nameof(sourceRecordIds));
 
-        await using var conn = await OpenConnectionAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await using var conn = await OpenConnectionAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        await ValidateDeletionRequestAsync(conn, tx, projectId, sourceId, ingestBatchId, sourceRecordIds, ct);
+            await ValidateDeletionRequestAsync(conn, tx, projectId, sourceId, ingestBatchId, sourceRecordIds, ct);
+            await EnsureIndexCurrentAsync(conn, tx, ct);
 
-        // Checked BEFORE any resolver work, unlike the correction guard in SaveIncrementalIngestAsync:
-        // every deletion request produces a mutation for every input row (no "identical resend"
-        // no-op case), so there's nothing to gain by classifying first — matches
-        // FileMetadataStore.DeleteRecordsAsync's identical reasoning.
-        if (_index is not null)
-            throw new NotSupportedException(
-                "Record deletion is not yet supported on an index-backed Postgres store: a " +
-                "Lucene-indexed candidate for the deleted record would remain searchable after this " +
-                "call, which could produce wrong matches. Supported only for stores without an " +
-                "attached index until Lucene reindexing on deletion is built.");
+            var projects = await LoadProjectsAsync(conn, tx, [projectId], ct);
+            var project = projects.Count > 0
+                ? projects[0]
+                : throw new InvalidOperationException($"Project not found: {projectId}");
+            var profile = _profileProvider.GetProfile(project.ContentType);
+            var context = new PostgresResolutionContext(conn, tx);
+            var now = DateTimeOffset.UtcNow;
 
-        var projects = await LoadProjectsAsync(conn, tx, [projectId], ct);
-        var project = projects.Count > 0
-            ? projects[0]
-            : throw new InvalidOperationException($"Project not found: {projectId}");
-        var profile = _profileProvider.GetProfile(project.ContentType);
-        var context = new PostgresResolutionContext(conn, tx);
-        var now = DateTimeOffset.UtcNow;
+            var (deletedIds, mutations) = _resolver.ClassifyAndDetachDeletions(
+                project, profile, sourceRecordIds, ingestBatchId, context, now);
 
-        var (deletedIds, mutations) = _resolver.ClassifyAndDetachDeletions(
-            project, profile, sourceRecordIds, ingestBatchId, context, now);
+            await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-        await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
+            // The SQL commit happens BEFORE the index mutation — see the matching comment in
+            // SaveIncrementalIngestAsync (step 11/12) for why this ordering, not the reverse, is the
+            // one with a self-healing recovery path via EnsureIndexCurrentAsync.
+            await tx.CommitAsync(ct);
 
-        await tx.CommitAsync(ct);
-        return new RecordDeletionResult(deletedIds.Count);
+            if (_index is not null)
+            {
+                foreach (var id in deletedIds)
+                    _index.Remove(id);
+                _index.Commit();
+            }
+
+            return new RecordDeletionResult(deletedIds.Count);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private static async Task ValidateDeletionRequestAsync(
@@ -819,15 +882,15 @@ public sealed class PostgresMetadataStore : IMetadataStore
             WHERE id = ANY(@ids)
             """, conn, tx);
         cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Uuid)
-            { Value = projectIds });
+        { Value = projectIds });
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             var mcJson = reader.IsDBNull(3) ? null : reader.GetString(3);
             projects.Add(new Project
             {
-                Id          = reader.GetGuid(0),
-                Name        = reader.GetString(1),
+                Id = reader.GetGuid(0),
+                Name = reader.GetString(1),
                 ContentType = reader.GetString(2),
                 MergeConfiguration = mcJson is null
                     ? null
@@ -891,7 +954,7 @@ public sealed class PostgresMetadataStore : IMetadataStore
                 """, conn, tx);
             cmd.Parameters.AddWithValue("pid", group.Key);
             cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text)
-                { Value = lowerToIncoming.Keys.ToArray() });
+            { Value = lowerToIncoming.Keys.ToArray() });
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
             {

@@ -243,13 +243,6 @@ public sealed class FileMetadataStore : IMetadataStore
             var (recordsToResolve, correctionMutations) = _resolver.ClassifyAndDetachCorrections(
                 project, profile, incomingRecords, context, DateTimeOffset.UtcNow);
 
-            if (correctionMutations.CorrectionEventsToInsert.Count > 0 && _index is not null)
-                throw new NotSupportedException(
-                    "Record correction is not yet supported on an index-backed store: a Lucene-indexed " +
-                    "candidate for the superseded record would remain searchable after this call, which " +
-                    "could produce wrong matches. Supported only for stores without an attached index " +
-                    "until Lucene reindexing on correction is built.");
-
             ApplyMutations(db, correctionMutations);
 
             var (result, mutations) = _resolver.Resolve(
@@ -257,8 +250,27 @@ public sealed class FileMetadataStore : IMetadataStore
 
             ApplyMutations(db, mutations);
             UpdateBatchRecordCount(db, request.IngestBatchId, recordsToResolve.Count);
-            IndexRecords(recordsToResolve);
+
+            // The durable write commits BEFORE any index mutation. Retrieval only ever observes
+            // COMMITTED Lucene state (AcquireSearcher reopens on Commit, not on buffered
+            // Remove/Index calls), so moving these calls after SaveAsync changes nothing about
+            // what Resolve above could see — it only changes which store is at risk if the other
+            // write fails. The reverse order (index first) is worse: a correction's superseded-doc
+            // removal plus new-doc addition is a net-zero change in live document count, which
+            // EnsureIndexCurrent's count comparison cannot detect either way — so if SaveAsync then
+            // failed, Lucene would durably serve a "corrected" record that never actually existed
+            // in the durable store, with no self-healing path back. Indexing after the durable
+            // write instead leaves, at worst, a stale-but-real index entry that a live-count
+            // mismatch can still detect and repair for the DELETION case (this same reasoning is
+            // why DeleteRecordsAsync above indexes after its SaveAsync too).
             await SaveAsync(db, ct);
+
+            if (_index is not null)
+            {
+                foreach (var evt in correctionMutations.CorrectionEventsToInsert)
+                    _index.Remove(evt.SupersededEntityRecordId);
+                IndexRecords(recordsToResolve);
+            }
 
             // result.RecordsAdded comes from Resolve's incomingRecords parameter, which IS
             // recordsToResolve here — new records AND corrected records (no-ops are already
@@ -286,17 +298,8 @@ public sealed class FileMetadataStore : IMetadataStore
         {
             var db = await LoadAsync(ct);
             ValidateDeletionRequest(db, projectId, sourceId, ingestBatchId, sourceRecordIds);
-
-            // Checked BEFORE any resolver work, unlike the correction guard in
-            // SaveIncrementalIngestAsync: every deletion request produces a mutation for every
-            // input row (there is no "identical resend, safe no-op" escape hatch the way a
-            // correction has), so there's nothing to gain by classifying first.
             if (_index is not null)
-                throw new NotSupportedException(
-                    "Record deletion is not yet supported on an index-backed store: a Lucene-indexed " +
-                    "candidate for the deleted record would remain searchable after this call, which " +
-                    "could produce wrong matches. Supported only for stores without an attached index " +
-                    "until Lucene reindexing on deletion is built.");
+                EnsureIndexCurrent(db);
 
             var project = db.Projects.First(p => p.Id == projectId);
             var profile = ProfileFor(project.ContentType);
@@ -307,7 +310,20 @@ public sealed class FileMetadataStore : IMetadataStore
                 project, profile, sourceRecordIds, ingestBatchId, context, now);
 
             ApplyMutations(db, mutations);
+
+            // The durable write commits BEFORE the index mutation: if SaveAsync throws, the index
+            // is left momentarily stale (still shows the deleted record as a candidate) rather
+            // than the reverse (Lucene durably drops it while the durable store still shows it
+            // live). A stale index self-heals via EnsureIndexCurrent's live-count check on the
+            // next call; a durably-deleted-but-not-actually-deleted record would not.
             await SaveAsync(db, ct);
+
+            if (_index is not null)
+            {
+                foreach (var id in deletedIds)
+                    _index.Remove(id);
+                _index.Commit();
+            }
 
             return new RecordDeletionResult(deletedIds.Count);
         }
@@ -534,9 +550,20 @@ public sealed class FileMetadataStore : IMetadataStore
     {
         if (_index is null)
             return;
-        if (_index.Count != db.EntityRecords.Count)
+        // Superseded/deleted records are tombstoned in place (SupersededAt/DeletedAt), never
+        // removed from db.EntityRecords, but they ARE removed from the live Lucene index — so
+        // only live records count on either side of this comparison. Comparing against the raw
+        // EntityRecords count would see a permanent mismatch after any correction/deletion and
+        // rebuild from every record including tombstoned ones, undoing the exclusion.
+        //
+        // The count is computed without materializing the filtered list: this runs on every
+        // ingest/delete call, and the normal case is "counts match, nothing to do" — only the
+        // (rare, recovery-only) mismatch branch below needs the actual list.
+        var liveCount = db.EntityRecords.Count(r => r.SupersededAt is null && r.DeletedAt is null);
+        if (_index.Count != liveCount)
         {
-            _index.Rebuild(db.EntityRecords);
+            var liveRecords = db.EntityRecords.Where(r => r.SupersededAt is null && r.DeletedAt is null).ToList();
+            _index.Rebuild(liveRecords);
             _index.Commit();
         }
     }
