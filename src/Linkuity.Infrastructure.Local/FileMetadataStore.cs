@@ -195,10 +195,47 @@ public sealed class FileMetadataStore : IMetadataStore
             var db = await LoadAsync(ct);
             var completedBatchWithKeys = WithGeneratedBlockingKeys(db, completedBatch);
             ValidateCompletedBatch(db, completedBatchWithKeys);
+
+            // Repair any pre-existing drift before this call adds to the index, matching
+            // SaveIncrementalIngestAsync and DeleteRecordsAsync. Without it the bulk-import path
+            // could never self-heal: a batch-only workflow never calls either of those, so a drift
+            // left by an earlier crash (or by this method's own IndexRecords failing after
+            // SaveAsync succeeded — see below) would persist indefinitely. This must run BEFORE
+            // ApplyMutations: afterwards the working set already holds this batch's records, which
+            // are not yet indexed, so the counts would disagree on every call and trigger a
+            // needless full rebuild every time.
+            if (_index is not null)
+                EnsureIndexCurrent(db);
+
             var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, db.Projects, _profileProvider, DateTimeOffset.UtcNow);
             ApplyMutations(db, mutations);
-            IndexRecords(completedBatchWithKeys.EntityRecords);
+
+            // The durable write commits BEFORE the index mutation, matching
+            // SaveIncrementalIngestAsync and DeleteRecordsAsync below. Nothing between here and
+            // SaveAsync reads the index (CompletedBatchResolver.Resolve already ran, and it takes
+            // its edges and clusters from the batch itself rather than retrieving candidates), so
+            // this ordering costs nothing; it only decides which store is at risk if the other
+            // write fails.
+            //
+            // NOTE the discriminator here is NOT detectability, unlike the correction path. A
+            // completed batch is a pure insert, so either ordering leaves a live-count mismatch
+            // that EnsureIndexCurrent could see (a correction's supersede-plus-add is net-zero and
+            // cannot be seen either way — that argument belongs to SaveIncrementalIngestAsync, not
+            // here). What differs is what the index serves in the meantime.
+            // LuceneCandidateRetrieval.Retrieve reconstructs candidates FROM INDEX DOCUMENTS rather
+            // than looking them up in the store, so indexing first and then failing SaveAsync makes
+            // retrieval hand out records that do not exist in the store at all, which then get
+            // scored into edges and clusters referencing ids nothing can resolve. Committing the
+            // durable write first inverts that into the conservative failure: the records exist but
+            // are temporarily unsearchable, costing missed matches rather than phantom ones.
+            //
+            // Caveat worth knowing before relying on self-healing: unlike the two paths above, this
+            // method does not itself call EnsureIndexCurrent, so a drift left by a failed
+            // IndexRecords below is only repaired once some later ingest or deletion call runs
+            // against the same store — a batch-only workflow never repairs it on its own.
             await SaveAsync(db, ct);
+
+            IndexRecords(completedBatchWithKeys.EntityRecords);
         }
         finally
         {

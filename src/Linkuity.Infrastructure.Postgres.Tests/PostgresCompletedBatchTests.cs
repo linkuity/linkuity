@@ -1,5 +1,10 @@
+using Dapper;
 using Linkuity.Core.Models;
+using Linkuity.Infrastructure.Lucene;
+using Linkuity.Matching;
+using Linkuity.Matching.Profiles;
 using Linkuity.TestSupport;
+using Npgsql;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
 
@@ -12,17 +17,18 @@ namespace Linkuity.Infrastructure.Postgres.Tests;
 public sealed class PostgresCompletedBatchTests(SharedPostgresContainer shared) : IAsyncLifetime
 {
     private PostgresMetadataStore? _store;
+    private string? _connectionString;
 
     public async Task InitializeAsync()
     {
         if (!shared.IsAvailable)
             return;
 
-        var connectionString = await shared.CreateDatabaseAsync(nameof(PostgresCompletedBatchTests));
-        DbUpMigrator.EnsureSchema(connectionString);
+        _connectionString = await shared.CreateDatabaseAsync(nameof(PostgresCompletedBatchTests));
+        DbUpMigrator.EnsureSchema(_connectionString);
 
         _store = new PostgresMetadataStore(
-            new PostgresMetadataStoreOptions { ConnectionString = connectionString },
+            new PostgresMetadataStoreOptions { ConnectionString = _connectionString },
             engine: null,
             profileProvider: null,
             indexedRetrieval: null);
@@ -207,5 +213,208 @@ public sealed class PostgresCompletedBatchTests(SharedPostgresContainer shared) 
         // Must report the incoming value ("crm-001"), not the DB-stored "CRM-001".
         Assert.Contains($"Entity record already exists for project {project.Id}: crm-001", ex.Message);
         Assert.DoesNotContain("CRM-001", ex.Message);
+    }
+
+    // ── Test 4 ─────────────────────────────────────────────────────────────────
+    // The break this catches: moving IndexRecords(...) back ABOVE `await tx.CommitAsync(ct)` in
+    // SaveCompletedBatchAsync (the ordering it shipped with before #85). That ordering lets Lucene
+    // durably serve documents for rows that never committed if the SQL commit then fails, with no
+    // self-healing path back — the same defect class #66 fixed on the correction/deletion paths.
+    // Asserting index contents after the call returns cannot catch it: both orderings end with
+    // identical DB and index state on the success path. Only probing over a SEPARATE connection
+    // from INSIDE the index mutation distinguishes them — under READ COMMITTED that connection
+    // cannot see the store's still-uncommitted INSERT, so it reports false iff the index was
+    // mutated too early. This is the PostgreSQL half of the file store's
+    // SaveCompletedBatchAsync_OnIndexedStore_CommitsDurableWriteBeforeMutatingIndex.
+    [SkippableFact]
+    public async Task SaveCompletedBatch_OnIndexedStore_CommitsSqlTransactionBeforeMutatingIndex()
+    {
+        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+
+        // Its own database, not the class's shared one: SaveCompletedBatchAsync's drift check
+        // counts entity_records GLOBALLY, not per project, so rows left by the other tests in this
+        // class would make a fresh index look drifted and fire a rebuild — an index mutation that
+        // legitimately runs BEFORE the durable write and would fail the ordering assertion below
+        // for a reason that has nothing to do with the invariant under test. An empty database
+        // starts the store on the normal path (counts agree, no rebuild).
+        var connectionString = await shared.CreateDatabaseAsync(nameof(SaveCompletedBatch_OnIndexedStore_CommitsSqlTransactionBeforeMutatingIndex));
+        DbUpMigrator.EnsureSchema(connectionString);
+        var indexDir = Path.Combine(Path.GetTempPath(), $"linkuity-pg-completed-batch-ordering-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(indexDir);
+        try
+        {
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+            var provider = new DefaultMatchingProfileProvider([profile]);
+            using var lucene = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+
+            // The id is fixed up front so the probe can close over it before the row exists.
+            var recordId = Guid.NewGuid();
+            var spy = new DurableWriteOrderingSpyIndex(lucene, () => RowIsCommitted(connectionString, recordId));
+            var store = new PostgresMetadataStore(
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
+                engine, provider, spy);
+
+            var now = DateTimeOffset.UtcNow;
+            var project = await store.CreateProjectAsync("OrderingTest", "person", null, now);
+            var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+            var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now);
+            var record = new EntityRecord
+            {
+                Id = recordId,
+                ProjectId = project.Id,
+                SourceId = source.Id,
+                IngestBatchId = batch.Id,
+                SourceRecordId = "ordering-001",
+                Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "alice@example.com" },
+                BlockingKeys = [],
+                CreatedAt = now
+            };
+
+            await store.SaveCompletedBatchAsync(new CompletedBatchMetadata(
+                [record], [],
+                [new Cluster { Id = Guid.NewGuid(), ProjectId = project.Id, MemberEntityRecordIds = [recordId], CreatedAt = now }],
+                [], []));
+
+            // Guards against a vacuous pass: if the store stopped mutating the index at all, the
+            // Assert.All below would be trivially satisfied.
+            Assert.NotEmpty(spy.Mutations);
+            Assert.All(spy.DurableWriteVisibleAtMutation, Assert.True);
+
+            // ...and the row really is retrievable from the index afterwards, so "index nothing" is
+            // not a way to satisfy the ordering assertion.
+            var queryProbe = engine.PrepareForStorage(
+                new EntityRecord
+                {
+                    Id = Guid.NewGuid(),
+                    ProjectId = project.Id,
+                    SourceId = source.Id,
+                    IngestBatchId = batch.Id,
+                    SourceRecordId = "probe",
+                    Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "alice@example.com" },
+                    BlockingKeys = [],
+                    CreatedAt = now
+                },
+                profile);
+            Assert.Contains(lucene.Retrieve(queryProbe, [], profile), c => c.Id == recordId);
+        }
+        finally
+        {
+            if (Directory.Exists(indexDir))
+                Directory.Delete(indexDir, recursive: true);
+        }
+    }
+
+    // ── Test 5 ─────────────────────────────────────────────────────────────────
+    // SaveIncrementalIngestAsync (step 6) and DeleteRecordsAsync both call EnsureIndexCurrentAsync
+    // before mutating the index; SaveCompletedBatchAsync must too, or a pre-existing drift (e.g. an
+    // earlier crash between a commit and its index mutation) is never repaired on the bulk-import
+    // path — a batch-only workflow would carry it forever. The break this catches: removing the
+    // EnsureIndexCurrentAsync call from SaveCompletedBatchAsync. This is the PostgreSQL half of the
+    // file store's SaveCompletedBatchAsync_IndexAlreadyDrifted_SelfHealsBeforeIndexingBatch.
+    [SkippableFact]
+    public async Task SaveCompletedBatch_IndexAlreadyDrifted_SelfHealsBeforeIndexingBatch()
+    {
+        Skip.IfNot(DockerProbe.IsAvailable(), "Docker not available — skipping Testcontainers test");
+
+        // Its own database, for the same reason as Test 4: the drift check counts entity_records
+        // globally, so rows from the other tests in this class would make the mismatch (and the
+        // rebuilt document set) depend on which of them happened to run first.
+        var connectionString = await shared.CreateDatabaseAsync(nameof(SaveCompletedBatch_IndexAlreadyDrifted_SelfHealsBeforeIndexingBatch));
+        DbUpMigrator.EnsureSchema(connectionString);
+        var indexDir = Path.Combine(Path.GetTempPath(), $"linkuity-pg-completed-batch-selfheal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(indexDir);
+        try
+        {
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+            var provider = new DefaultMatchingProfileProvider([profile]);
+            using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+            var store = new PostgresMetadataStore(
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
+                engine, provider, index);
+
+            var now = DateTimeOffset.UtcNow;
+            var project = await store.CreateProjectAsync("SelfHealTest", "person", null, now);
+            var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+            var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now);
+            var keep = new EntityRecord
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = project.Id,
+                SourceId = source.Id,
+                IngestBatchId = seedBatch.Id,
+                SourceRecordId = "crm-keep",
+                Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "keep@example.com" },
+                BlockingKeys = [],
+                CreatedAt = now
+            };
+            await store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, seedBatch.Id, [keep], 0.90, 0.75));
+
+            // Simulate drift external to this call — a crash between a commit and its index
+            // mutation — by dropping "keep"'s doc without touching the database.
+            index.Remove(keep.Id);
+            index.Commit();
+
+            var importBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1));
+            var imported = new EntityRecord
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = project.Id,
+                SourceId = source.Id,
+                IngestBatchId = importBatch.Id,
+                SourceRecordId = "crm-imported",
+                Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "imported@example.com" },
+                BlockingKeys = [],
+                CreatedAt = now.AddMinutes(1)
+            };
+            await store.SaveCompletedBatchAsync(new CompletedBatchMetadata(
+                [imported], [],
+                [new Cluster { Id = Guid.NewGuid(), ProjectId = project.Id, MemberEntityRecordIds = [imported.Id], CreatedAt = now.AddMinutes(1) }],
+                [], []));
+
+            // "keep" must be back — the drift check should have rebuilt from live rows before the
+            // batch's own records were indexed.
+            Assert.Contains(index.Retrieve(Probe(project, source, seedBatch, "keep@example.com", now), [], profile),
+                c => c.Id == keep.Id);
+
+            // ...and the imported record is indexed too, so a rebuild that clobbered the batch
+            // would not pass either.
+            Assert.Contains(index.Retrieve(Probe(project, source, importBatch, "imported@example.com", now), [], profile),
+                c => c.Id == imported.Id);
+
+            EntityRecord Probe(Project p, Source s, IngestBatch b, string email, DateTimeOffset at)
+                => engine.PrepareForStorage(
+                    new EntityRecord
+                    {
+                        Id = Guid.NewGuid(),
+                        ProjectId = p.Id,
+                        SourceId = s.Id,
+                        IngestBatchId = b.Id,
+                        SourceRecordId = "probe",
+                        Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = email },
+                        BlockingKeys = [],
+                        CreatedAt = at
+                    },
+                    profile);
+        }
+        finally
+        {
+            if (Directory.Exists(indexDir))
+                Directory.Delete(indexDir, recursive: true);
+        }
+    }
+
+    // Synchronous by necessity — it runs inside the index mutation callback, which the
+    // IIndexedCandidateRetrievalStrategy contract defines as synchronous. A plain SELECT never
+    // blocks on the store's uncommitted INSERT under MVCC, so this cannot deadlock against the
+    // transaction it is probing; it simply does not see uncommitted rows.
+    private static bool RowIsCommitted(string connectionString, Guid recordId)
+    {
+        using var probe = new NpgsqlConnection(connectionString);
+        probe.Open();
+        return probe.ExecuteScalar<bool>(
+            "SELECT EXISTS(SELECT 1 FROM entity_records WHERE id = @Id)", new { Id = recordId });
     }
 }

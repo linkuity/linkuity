@@ -197,6 +197,37 @@ While Linkuity is pre-1.0 (beta), minor versions may include breaking changes.
   sharing the CLI's batch engine.
 
 ### Fixed
+- `SaveCompletedBatchAsync` indexed Lucene before its durable write committed, on
+  both the file and PostgreSQL backends (#85). This is the same crash-consistency
+  defect class F6 milestone 4 fixed on the correction and deletion paths, but on
+  the bulk "completed batch" import path, which that milestone never touched — so
+  it predates it rather than being introduced by it. The discriminator on this
+  path is not detectability — a completed batch is a pure insert, so either
+  ordering leaves a live-count mismatch the drift check could see, unlike a
+  correction's net-zero supersede-plus-add — but what the index serves in the
+  meantime. Retrieval reconstructs candidates from index documents rather than
+  looking them up in the store, so indexing first and then failing the durable
+  write (JSON save / SQL commit) makes Lucene hand out records that never reached
+  the store at all, which then get scored into edges and clusters referencing ids
+  nothing can resolve. Committing the durable write first inverts that into the
+  conservative failure: the records exist but are temporarily unsearchable,
+  costing missed matches rather than phantom ones. Both backends now commit first
+  and index after, matching `SaveIncrementalIngestAsync`/`DeleteRecordsAsync`.
+  `SaveCompletedBatchAsync` also now runs the drift check (`EnsureIndexCurrent`/
+  `EnsureIndexCurrentAsync`) before mutating the index, which it previously never
+  did on either backend — so the bulk-import path could not self-heal at all, and
+  a batch-only workflow (which never calls the ingest or deletion paths) would
+  carry a drift left by an earlier crash indefinitely. It runs before the batch's
+  own mutations are applied, so the batch's not-yet-indexed records don't
+  themselves read as drift and trigger a rebuild on every call. A codebase-wide scan for the
+  same pattern found no other occurrences: the only remaining index mutations are
+  those two already-fixed paths and the drift check's own recovery rebuild, which
+  has no paired durable write. Both fixed call sites are now pinned by a
+  regression test that observes the durable store from inside the index mutation
+  itself (reading the committed JSON file on the file backend, querying over a
+  separate connection outside the still-open transaction on Postgres) — asserting
+  index contents after the call returns cannot distinguish the two orderings,
+  since both end in identical state on the success path.
 - Record correction bugs found in post-merge review of F6 milestone 1 (#63): (1)
   `FileMetadataStore.ApplyMutations` could orphan a golden record against a
   tombstoned cluster when one ingest batch corrected both members of a

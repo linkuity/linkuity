@@ -3,6 +3,7 @@ using Linkuity.Infrastructure.Local;
 using Linkuity.Infrastructure.Lucene;
 using Linkuity.Matching;
 using Linkuity.Matching.Profiles;
+using Linkuity.TestSupport;
 
 namespace Linkuity.Infrastructure.Local.Tests;
 
@@ -1349,6 +1350,142 @@ public class FileMetadataStoreTests : IDisposable
         Assert.Single(merges);
         Assert.Equal(leftCluster, merges[0].SurvivorClusterId);
         Assert.Empty(await store.ListReviewTasksAsync(project.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveCompletedBatchAsync_OnIndexedStore_CommitsDurableWriteBeforeMutatingIndex()
+    {
+        // The break this catches: moving IndexRecords(...) back ABOVE `await SaveAsync(db, ct)` in
+        // SaveCompletedBatchAsync (the ordering it shipped with before #85). That ordering lets
+        // Lucene durably serve documents for records that never existed in the store if SaveAsync
+        // then fails, with no self-healing path back — the same defect class #66 fixed on the
+        // correction/deletion paths. Asserting index contents after the call returns cannot catch
+        // it: both orderings end with identical store and index state on the success path. Only
+        // observing the durable JSON file from INSIDE the index mutation distinguishes them.
+        var databasePath = Path.Combine(_root, "metadata-completed-batch-ordering.json");
+        var indexDir = Path.Combine(_root, "lucene-completed-batch-ordering");
+        var engine = MatchingDefaults.CreateEngine();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
+        using var lucene = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+
+        // The id is fixed up front so the probe can close over it before the record exists. A
+        // freshly generated Guid appears nowhere else in the file, so a substring hit means the
+        // committed JSON really carries this record — and the probe stays independent of the
+        // serializer's property naming.
+        var recordId = Guid.NewGuid();
+        var spy = new DurableWriteOrderingSpyIndex(
+            lucene,
+            () => File.Exists(databasePath)
+                  && File.ReadAllText(databasePath).Contains(recordId.ToString(), StringComparison.OrdinalIgnoreCase));
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = databasePath }, engine, provider, spy);
+
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var record = new EntityRecord
+        {
+            Id = recordId,
+            ProjectId = project.Id,
+            SourceId = source.Id,
+            IngestBatchId = batch.Id,
+            SourceRecordId = "crm-001",
+            Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "alice@example.com" },
+            CreatedAt = now
+        };
+
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [record],
+                [],
+                [new Cluster { Id = Guid.NewGuid(), ProjectId = project.Id, MemberEntityRecordIds = [recordId], CreatedAt = now }],
+                [],
+                []),
+            CancellationToken.None);
+
+        // Guards against a vacuous pass: if the store stopped mutating the index at all, the
+        // Assert.All below would be trivially satisfied.
+        Assert.NotEmpty(spy.Mutations);
+        Assert.All(spy.DurableWriteVisibleAtMutation, Assert.True);
+
+        // ...and the record really is retrievable afterwards, so "index nothing" is not a way to
+        // satisfy the ordering assertion.
+        var queryProbe = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, batch.Id, "probe", now, [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "alice@example.com" }),
+            profile);
+        Assert.Contains(lucene.Retrieve(queryProbe, [], profile), c => c.Id == recordId);
+    }
+
+    [Fact]
+    public async Task SaveCompletedBatchAsync_IndexAlreadyDrifted_SelfHealsBeforeIndexingBatch()
+    {
+        // SaveIncrementalIngestAsync and DeleteRecordsAsync both call EnsureIndexCurrent before
+        // mutating the index; SaveCompletedBatchAsync must too, or a pre-existing drift (e.g. an
+        // earlier crash between a durable write and its index mutation) is never repaired on the
+        // bulk-import path — a batch-only workflow would carry it forever. The break this catches:
+        // removing the EnsureIndexCurrent call from SaveCompletedBatchAsync.
+        var indexDir = Path.Combine(_root, "lucene-completed-batch-selfheal");
+        var engine = MatchingDefaults.CreateEngine();
+        var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+        var provider = new DefaultMatchingProfileProvider([profile]);
+        using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+        var store = new FileMetadataStore(
+            new FileMetadataStoreOptions { DatabasePath = Path.Combine(_root, "metadata-completed-batch-selfheal.json") },
+            engine, provider, index);
+
+        var now = DateTimeOffset.UtcNow;
+        var project = await store.CreateProjectAsync("Customer MDM", "person", now, CancellationToken.None);
+        var source = await store.CreateSourceAsync(project.Id, "CRM", now, CancellationToken.None);
+        var seedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now, CancellationToken.None);
+        var keep = NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "crm-keep", now, [],
+            new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "keep@example.com" });
+        await store.SaveIncrementalIngestAsync(
+            new IncrementalIngestRequest(project.Id, source.Id, seedBatch.Id, [keep], 0.90, 0.75), CancellationToken.None);
+
+        // Simulate drift external to this call — a crash between a durable write and its index
+        // mutation — by dropping "keep"'s doc without touching the durable store. The JSON still
+        // considers it live; the index no longer does.
+        index.Remove(keep.Id);
+        index.Commit();
+
+        var importBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(1), CancellationToken.None);
+        var imported = new EntityRecord
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = project.Id,
+            SourceId = source.Id,
+            IngestBatchId = importBatch.Id,
+            SourceRecordId = "crm-imported",
+            Fields = new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "imported@example.com" },
+            CreatedAt = now.AddMinutes(1)
+        };
+        await store.SaveCompletedBatchAsync(
+            new CompletedBatchMetadata(
+                [imported],
+                [],
+                [new Cluster { Id = Guid.NewGuid(), ProjectId = project.Id, MemberEntityRecordIds = [imported.Id], CreatedAt = now.AddMinutes(1) }],
+                [],
+                []),
+            CancellationToken.None);
+
+        // "keep" must be back — the drift check should have rebuilt from live durable records
+        // before the batch's own records were indexed.
+        var queryKeep = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, seedBatch.Id, "probe", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "keep@example.com" }),
+            profile);
+        Assert.Contains(index.Retrieve(queryKeep, [], profile), c => c.Id == keep.Id);
+
+        // ...and the imported record is indexed too, so a rebuild that clobbered the batch would
+        // not pass either.
+        var queryImported = engine.PrepareForStorage(
+            NewRecordWithFields(project.Id, source.Id, importBatch.Id, "probe2", now.AddMinutes(1), [],
+                new Dictionary<string, string> { ["source"] = "CRM", ["email"] = "imported@example.com" }),
+            profile);
+        Assert.Contains(index.Retrieve(queryImported, [], profile), c => c.Id == imported.Id);
     }
 
     [Fact]

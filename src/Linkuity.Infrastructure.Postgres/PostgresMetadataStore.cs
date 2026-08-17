@@ -332,17 +332,50 @@ public sealed class PostgresMetadataStore : IMetadataStore
             // Validate inside the transaction — throws roll back via await using.
             await ValidateCompletedBatchAsync(conn, tx, completedBatchWithKeys, ct);
 
+            // Repair any pre-existing drift before this call adds to the index, matching
+            // SaveIncrementalIngestAsync (step 6) and DeleteRecordsAsync. Without it the
+            // bulk-import path could never self-heal: a batch-only workflow never calls either of
+            // those, so a drift left by an earlier crash (or by this method's own IndexRecords
+            // failing after the commit succeeded — see below) would persist indefinitely. This must
+            // run BEFORE the mutation applier: afterwards the transaction already holds this
+            // batch's rows, which are not yet indexed, so the counts would disagree on every call
+            // and trigger a needless full rebuild every time.
+            await EnsureIndexCurrentAsync(conn, tx, ct);
+
             // Resolve using the shared CompletedBatchResolver.
             var mutations = CompletedBatchResolver.Resolve(completedBatchWithKeys, projects, _profileProvider, DateTimeOffset.UtcNow);
 
             // Apply all mutations within the same transaction.
             await new PostgresMutationApplier(conn, tx).ApplyAsync(mutations, ct);
 
-            // Index records (Lucene commit is separate from the SQL txn).
+            // The SQL transaction commits BEFORE the index mutation, matching
+            // SaveIncrementalIngestAsync (steps 11/12) and DeleteRecordsAsync. Nothing between here
+            // and the commit reads the index (CompletedBatchResolver.Resolve already ran, and it
+            // takes its edges and clusters from the batch itself rather than retrieving
+            // candidates), so this ordering costs nothing; it only decides which store is at risk
+            // if the other write fails.
+            //
+            // NOTE the discriminator here is NOT detectability, unlike the correction path. A
+            // completed batch is a pure insert, so either ordering leaves a live-count mismatch
+            // that EnsureIndexCurrentAsync could see (a correction's supersede-plus-add is net-zero
+            // and cannot be seen either way — that argument belongs to SaveIncrementalIngestAsync,
+            // not here). What differs is what the index serves in the meantime.
+            // LuceneCandidateRetrieval.Retrieve reconstructs candidates FROM INDEX DOCUMENTS rather
+            // than looking them up in the store, so indexing first and then failing the commit
+            // makes retrieval hand out records that never committed at all, which then get scored
+            // into edges and clusters referencing ids nothing can resolve. Committing first inverts
+            // that into the conservative failure: the rows exist but are temporarily unsearchable,
+            // costing missed matches rather than phantom ones.
+            //
+            // Caveat worth knowing before relying on self-healing: unlike the two paths above, this
+            // method does not itself call EnsureIndexCurrentAsync, so a drift left by a failed
+            // IndexRecords below is only repaired once some later ingest or deletion call runs
+            // against the same store — a batch-only workflow never repairs it on its own.
+            await tx.CommitAsync(ct);
+
+            // Lucene commit is separate from the SQL txn.
             if (_index is not null)
                 IndexRecords(completedBatchWithKeys.EntityRecords);
-
-            await tx.CommitAsync(ct);
         }
         finally
         {
