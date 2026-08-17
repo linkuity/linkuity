@@ -19,7 +19,8 @@
 
   <ItemGroup>
     <!-- For PostgresDatabaseFactory. No test-framework or container packages: see above. -->
-    <PackageReference Include="Npgsql" Version="9.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+    <PackageReference Include="Npgsql" Version="9.0.5" />
   </ItemGroup>
 
   <ItemGroup>
