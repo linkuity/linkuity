@@ -1,10 +1,28 @@
 # Linkuity — Product Requirements
 
 > **Status: expanded.** Every requirement below carries an implementation status and an
-> elaboration, current as of 2026-08-14, based on a direct read of the codebase (not the
-> roadmap's self-reporting, though the two mostly agree). Status is a snapshot, not a
-> commitment — it will drift out of date as work continues and should be re-checked
-> against the code before being relied on for a release decision.
+> elaboration, re-verified against the codebase on 2026-08-17 (first written 2026-08-14).
+> Statuses are read from the source, not from the roadmap — which is stale, and should not
+> be used to corroborate anything here. Status is a snapshot, not a commitment: it will
+> drift as work continues and should be re-checked against the code before being relied on
+> for a release decision.
+>
+> **What the 2026-08-17 pass could and could not confirm.** Every status was checked
+> against the code that implements it, and four were corrected where the F6 series had
+> overtaken them (`S1`, `S12`, `S17`, `S24` — see each for what changed). Three classes of
+> claim are *not* re-verified by that pass and are flagged here so nobody mistakes them for
+> source-verified fact:
+>
+> - **Claims resting on measurement** (`S8`, `S9`, `S10`, and the throughput half of `S13`)
+>   cite figures — 100,000 records, a 1.03× per-batch ratio, 5.4× time and 6.4× memory
+>   growth on the file store. Those figures were confirmed to exist in
+>   `docs/roadmap/measurements/`, but the runs were not re-executed, and the surrounding
+>   roadmap is stale. Treat them as historical measurements, not current guarantees.
+> - **Claims about past process** — `F18`'s baseline diff, `S3`'s "has genuinely been run on
+>   Windows" — describe work done at the time, which a present-day read of the code cannot
+>   confirm or refute. The substantive current-state halves of both were verified.
+> - **`F47`** is an explicit judgement about who can operate the product, not a fact about
+>   the code, and is left as the judgement it is.
 
 **Scope:** this describes the product as it must eventually be, not version 1. Some
 items will not be built for a long time. Deciding what comes first is a separate
@@ -117,7 +135,7 @@ number and sit in whichever section they belong to, so existing numbers never sh
   closed their account ("deleted"). Both need to flow through to Linkuity's picture
   of the entity, ideally without the customer having to manually intervene.
 
-  **Status: Implemented.** Corrections work: resending a record through
+  **Status: Fully implemented.** Corrections work: resending a record through
   `ingest-incremental` with the same `(project, source record id)`
   but different field values updates the stored record (superseding, not
   overwriting, the prior one) and flows through matching, clustering, and the
@@ -156,6 +174,70 @@ number and sit in whichever section they belong to, so existing numbers never sh
   record onto some new cluster. `PostgresMutationApplier` now clears it
   explicitly as part of writing the correction/deletion tombstone.
 
+### Blank and missing values
+
+- **F55** — Must read a blank value as "not known" everywhere, and must never infer from
+  the data alone that a blank was meant as an instruction to erase.
+
+  A blank arrives in several shapes: a cell present in the file but empty, a cell holding
+  only spaces, a column the source feed does not carry at all, and a value that is
+  non-blank but declared meaningless for that field under F11 ("UNKNOWN", "N/A", a
+  legal-form code meaning "not provided"). This requirement settles what all of them mean.
+
+  There are only two possible readings of a blank, and they are opposites: "we hold no
+  value for this" and "erase the value you hold." Nothing in the data distinguishes them.
+  A source system that emits every column on every row, leaving unpopulated ones empty, is
+  byte-for-byte indistinguishable from one that blanks a cell deliberately to signal a
+  deletion. Choosing between those readings by inspecting the value is therefore guessing,
+  and guessing wrong in the erase direction destroys data the customer still holds. So
+  Linkuity does not choose: a blank is always "not known," and an instruction to erase must
+  come through a path that says so explicitly — the record deletion of F6, or a correction
+  that supplies a different value.
+
+  **Status: Fully implemented.** The rule holds at every point a value is read, and the
+  same predicate decides it everywhere (this is the mechanism described under F11):
+
+  - **Ingestion** distinguishes the shapes even though nothing downstream acts on the
+    difference. A column present in the file with an empty cell is stored as a field
+    holding an empty value; a column the feed does not carry is not stored at all. The two
+    remain distinguishable in the stored record.
+  - **The "does this record carry a value here?" test** is a single predicate answering no
+    for blank, whitespace-only, and any value the profile declared meaningless for that
+    field. Every caller routes through it, deliberately, so a placeholder cannot be
+    discounted by one part of the engine while another still reads it as real.
+  - **Matching** counts a blank neither for nor against. Each field comparison reports one
+    of four outcomes — both sides present and compared, one side missing, neither side
+    present, or both present but unjudgeable — and only the first contributes to a score. A
+    blank is never scored as disagreement. Where two records share no field that both
+    populate, the pair is recorded as having nothing to compare rather than as a non-match,
+    so the distinction between "we checked and they differ" and "we had nothing to check"
+    survives into the stored decision.
+  - **Candidate retrieval** skips blank fields when generating blocking keys, so records
+    are never drawn together for comparison on the strength of both being empty.
+  - **Corrections** do detect blanking. A resent record is compared to its predecessor
+    field by field and exactly, so a field moving from a value to blank registers as a
+    change: the earlier record is superseded and the entity reprocessed.
+  - **Golden-record survivorship** discards blanks before selecting a surviving value, and
+    this is where the consequence lands. Where an entity is built from a single record,
+    blanking a field clears it. Where an entity is built from two or more, a blank cannot
+    win: another member's non-blank value survives, irrespective of which is more recent.
+    The same holds for source preference under F22 — if the highest-priority source's value
+    is blank, selection falls through to the next source rather than accepting it, so a
+    less-trusted source's older value is taken.
+  - **Derived fields** are the one deliberate exception. Where a profile computes a field
+    from another (organization legal form from the name, say) and the source value is
+    absent, the derived field is written as blank on purpose, overwriting any same-named
+    ingested value — because a derived field is authoritative over a column that merely
+    shares its name, and leaving a stale value would score a fact the profile said to
+    derive.
+
+  The consequence worth stating plainly: **a deliberate blank cannot clear a field on an
+  entity assembled from more than one record.** That is the accepted cost of refusing to
+  guess, not an oversight. Should a customer ever need blank-means-erase, it would have to
+  be declared per field the way F11's meaningless values already are — never inferred — and
+  it would depend on F52/F53 recency existing first, since an erase instruction can only
+  prevail by being demonstrably the newer assertion.
+
 ### Data arriving late or out of order
 
 - **F52** — Must not let an older version of a record overwrite a newer one in the
@@ -184,11 +266,31 @@ number and sit in whichever section they belong to, so existing numbers never sh
   record will carry that field, the behavior when it's missing needs to be a defined,
   documented rule — not an accident of whatever the code happens to do.
 
-  **Status: Not implemented.** The merge-policy model (`MergeField`) has only a field
-  name and a source-priority list — there is no concept of a customer-nominated
-  recency field anywhere in it. Because the feature doesn't exist, there is also no
-  defined behavior for the no-date case; this isn't a bug so much as ground that
-  hasn't been built on yet.
+  **The no-date rule (decided).** The nominated date is freshness metadata, not a
+  business fact — nobody meaningfully asserts "this record was last updated at
+  deliberately nothing" — so an absent or empty date is read as *no opinion*, never as
+  an assertion:
+
+  - A record whose nominated date is **absent or empty** stays eligible for
+    survivorship but loses to any record that does carry a date.
+  - If **no** record in the cluster carries a date, the recency rule does not apply and
+    the field falls back to the existing consensus rule.
+  - A date that is **present but unparseable** is not tolerated at merge time. It is
+    rejected loudly when the merge policy is loaded, naming the offending field, on the
+    same principle as an unknown strategy name under F15 — a mistyped column or an
+    unexpected date format must not be allowed to silently disable recency across a
+    project.
+
+  Two records carrying the *same* date and different values do not resolve by arrival
+  order; the tie breaks on field content exactly as every other tie does, per F54.
+
+  **Status: Not implemented — rule stated, not built.** The merge-policy model
+  (`MergeField`) has only a field name and a source-priority list, so there is still no
+  concept of a customer-nominated recency field anywhere in it. What has changed is that
+  part (2) of this requirement — the demand that the no-date behavior be a defined,
+  documented rule rather than an accident — is now satisfied by the rule recorded above;
+  it is the specification the implementation must meet, not a description of shipped
+  behavior.
 
 - **F54** — Must reach the same final state — both groupings and trusted-record
   values — regardless of the order in which records arrived.
@@ -904,11 +1006,21 @@ number and sit in whichever section they belong to, so existing numbers never sh
   a server Linkuity's makers control — this is the foundation the whole
   private-runtime direction is built on.
 
-  **Status: Fully implemented.** No telemetry, analytics, or "phone home" code
-  exists anywhere in the solution. The only outbound network calls in the codebase
-  are inert documentation links inside code comments, not anything executed. Azure
-  connectivity — the one path that does talk to an external service — is entirely
-  optional, isolated to its own adapter project, and off by default.
+  **Status: Fully implemented.** Nothing reports to a server Linkuity's makers
+  control. There is no analytics or "phone home" code, and no outbound call is made
+  on any default path — the only URLs in the codebase outside the two components
+  below are inert documentation links inside code comments.
+
+  Two components can talk to an external service, and neither weakens the guarantee:
+
+  - **Azure connectivity** is entirely optional, isolated to its own adapter
+    project, and off by default.
+  - **`Linkuity.ServiceDefaults`** wires OpenTelemetry instrumentation and an OTLP
+    exporter into the API host (the CLI does not reference it at all). It is inert
+    unless the operator sets `OTEL_EXPORTER_OTLP_ENDPOINT`, and that endpoint is
+    whatever collector the customer nominates inside their own environment — there
+    is no default, and no vendor-controlled destination is compiled in. Note that
+    this is operational telemetry about the running process, not customer records.
 
 - **S2** — Must run on one laptop and on a production server using the same
   product, not two different builds.
@@ -1049,12 +1161,26 @@ number and sit in whichever section they belong to, so existing numbers never sh
   if it had run once cleanly — no records counted twice, none dropped.
 
   **Status: Fully implemented.** Both storage backends key each record on its
-  project and source-record identifier and reject an attempt to insert the same
-  key twice, rather than silently duplicating it. Combined with the
-  transactional/atomic batch commit (S7), retrying an interrupted batch doesn't
-  produce duplicates. There isn't a distinct "resume this exact batch" operation —
-  retrying means resubmitting the batch, and the idempotency guarantee is what
-  makes that safe.
+  project and source-record identifier, and no path silently duplicates that key.
+  How a repeat is handled depends on which path receives it, and F6 changed one of
+  them:
+
+  - A source-record id repeated *within a single incoming set* is rejected outright,
+    on both backends and on both the batch and incremental paths. A batch that
+    contradicts itself is a malformed request, not a retry.
+  - On the **batch** path (`run`, `persist-batch`), re-inserting a source-record id
+    the project already holds is rejected.
+  - On the **incremental** path, a resend is no longer rejected — it is read as a
+    correction under F6. A byte-identical resend is an explicit no-op; a resend with
+    changed values supersedes the prior record rather than adding a second one.
+
+  All three outcomes preserve this requirement, and the third strengthens it: an
+  interrupted incremental batch can be resubmitted wholesale, and the records that
+  already landed cost nothing rather than failing the retry. Combined with the
+  transactional/atomic batch commit (S7), retrying an interrupted batch does not
+  produce duplicates. There is still no distinct "resume this exact batch"
+  operation — retrying means resubmitting the batch, and the idempotency guarantee
+  is what makes that safe.
 
 - **S13** — Must produce the same result every time from the same data and the same
   configuration.
@@ -1118,11 +1244,19 @@ number and sit in whichever section they belong to, so existing numbers never sh
   erasure). This requirement, per the decisions recorded later in this document,
   is meant to override F30's history-keeping when the two are in tension.
 
-  **Status: Not implemented.** No delete, erase, forget, or purge operation exists
-  anywhere in the storage interface, CLI, or API — every operation available today
-  adds or reads data, never removes it. There is consequently no path through
-  entity records, version history, the search index, or exports that would
-  actually satisfy an erasure request.
+  **Status: Not implemented.** A deletion operation does now exist — `IMetadataStore`
+  carries `DeleteRecordsAsync`, the CLI exposes `record delete`, and the deleted
+  record's document is removed from the search index (all delivered by F6) — but it
+  is a *tombstone*, not an erasure. The record is retained and stamped `DeletedAt`;
+  the row, its field values, its `RecordDeletedEvent`, and every
+  `GoldenRecordVersion` computed while it was a member all remain in the store
+  permanently. That is the correct design for the F6 case it was built for (a source
+  system says a record is no longer current) and the wrong one for this requirement,
+  which asks for the data to be *gone*. Nothing purges entity records, correction and
+  deletion event history, golden-record version history, or exported artifacts, so
+  there is still no path that would actually satisfy an erasure request. The
+  override of F30 recorded in the decisions below therefore remains untriggered:
+  history-keeping has not yet had to yield to anything.
 
 ### How people and systems use it
 
@@ -1204,14 +1338,16 @@ number and sit in whichever section they belong to, so existing numbers never sh
   that would restrict a customer's commercial use of the product built on them
   (e.g. a "copyleft" license requiring derivative works to also be open-sourced).
 
-  **Status: Fully implemented, based on a quick check rather than an exhaustive
-  audit.** The major, directly referenced dependencies (the PostgreSQL driver, the
-  micro-ORM used for data access, the schema-migration tool, the embedded search
-  library, the CSV parser, and the core .NET framework libraries) all carry
-  permissive licenses (MIT, Apache 2.0, or the PostgreSQL license) — none are
-  GPL/AGPL or otherwise commercially restrictive. This check covered the packages
-  referenced directly in project files, not a full audit of every indirect,
-  transitive dependency those packages themselves pull in.
+  **Status: Fully implemented, based on the direct dependency set rather than an
+  exhaustive audit.** Every package referenced directly by a project file was
+  enumerated: the PostgreSQL driver, the micro-ORM used for data access, the
+  schema-migration tool, the embedded search library and its analyzers, the CSV
+  parser, the fuzzy-string library, the phone-number library, the OpenTelemetry
+  packages, the Azure client libraries used by the optional adapter, the test
+  frameworks, and the core .NET framework libraries. All carry permissive licenses
+  (MIT, Apache 2.0, or the PostgreSQL license) — none are GPL/AGPL or otherwise
+  commercially restrictive. This check covered those direct references only, not a
+  full audit of every indirect, transitive dependency they themselves pull in.
 
 ### Running it day to day
 
@@ -1274,6 +1410,18 @@ also directly testable — load the same data twice in different orders and comp
 **Source preference versus recency is the customer's call, per field.** Some fields are
 authoritative by source, some by recency, and no single rule fits both. `F22` carries that
 choice and `F52` defers to it.
+
+**That choice has no default — it must be stated.** Where a field is configured with both
+a source priority and a recency rule, and the customer has not said which of the two wins,
+the merge policy is rejected rather than resolved by a built-in preference. Both available
+defaults were considered and rejected: defaulting to source preference would silently
+preserve today's behavior for a customer who thought they had switched recency on, and
+defaulting to recency would silently change the trusted records of every existing project
+the moment a date column was nominated. A wrong guess here is invisible — it produces
+plausible values that are quietly chosen by the wrong rule — so the choice is made
+explicit at configuration time on the same fail-loudly principle as `F15`. The cost
+accepted is that a customer who configures both without reading the documentation gets a
+hard error instead of a working default. `F22`, `F52`, `F53`.
 
 ---
 
