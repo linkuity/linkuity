@@ -1,6 +1,8 @@
 using Dapper;
 using Linkuity.Core.Models;
 using Linkuity.Infrastructure.Lucene;
+using Linkuity.Matching;
+using Linkuity.Matching.Profiles;
 using Linkuity.TestSupport;
 
 namespace Linkuity.Infrastructure.Postgres.Tests;
@@ -201,7 +203,7 @@ public sealed class PostgresDeletionTests(SharedPostgresContainer shared) : IAsy
     }
 
     [SkippableFact]
-    public async Task DeleteRecordsAsync_OnIndexedStore_ThrowsNotSupported()
+    public async Task DeleteRecordsAsync_OnIndexedStore_RemovesFromIndex()
     {
         Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
 
@@ -210,11 +212,13 @@ public sealed class PostgresDeletionTests(SharedPostgresContainer shared) : IAsy
         try
         {
             using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
-            var connectionString = await shared.CreateDatabaseAsync(nameof(DeleteRecordsAsync_OnIndexedStore_ThrowsNotSupported));
+            var connectionString = await shared.CreateDatabaseAsync(nameof(DeleteRecordsAsync_OnIndexedStore_RemovesFromIndex));
             DbUpMigrator.EnsureSchema(connectionString);
             var store = new PostgresMetadataStore(
                 new PostgresMetadataStoreOptions { ConnectionString = connectionString },
                 engine: null, profileProvider: null, indexedRetrieval: index);
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
             var now = DateTimeOffset.UtcNow;
 
             var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
@@ -225,9 +229,136 @@ public sealed class PostgresDeletionTests(SharedPostgresContainer shared) : IAsy
             await store.SaveIncrementalIngestAsync(
                 new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75));
 
+            // Blocking keys must be generated the same way the store generates them for real
+            // incoming records (engine.PrepareForStorage), or the query never builds a search term.
+            var queryProbe = engine.PrepareForStorage(
+                Record(project.Id, source.Id, batch.Id, "probe",
+                    new() { ["source"] = "CRM", ["email"] = "alice@example.com" }, now.AddMinutes(1)),
+                profile);
+            // Prove the probe is capable of finding the record before deletion, so the later
+            // Assert.Empty means "removed", not "this query never matches anything."
+            Assert.Contains(index.Retrieve(queryProbe, [], profile), c => c.Id == original.Id);
+
             var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1));
-            await Assert.ThrowsAsync<NotSupportedException>(() =>
-                store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"]));
+            var result = await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"]);
+            Assert.Equal(1, result.RecordsDeleted);
+
+            // The deleted record's Lucene doc must be gone.
+            Assert.Empty(index.Retrieve(queryProbe, [], profile));
+        }
+        finally
+        {
+            if (Directory.Exists(indexDir))
+                Directory.Delete(indexDir, recursive: true);
+        }
+    }
+
+    [SkippableFact]
+    public async Task DeleteRecordsAsync_IndexAlreadyDrifted_SelfHealsBeforeRemoving()
+    {
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
+
+        // SaveIncrementalIngestAsync calls EnsureIndexCurrentAsync before mutating the index;
+        // DeleteRecordsAsync must too, or a pre-existing drift (e.g. from a prior crash) is never
+        // repaired on the deletion path — it just silently persists.
+        var indexDir = Path.Combine(Path.GetTempPath(), "linkuity-pg-deletion-selfheal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(indexDir);
+        try
+        {
+            using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+            var connectionString = await shared.CreateDatabaseAsync(nameof(DeleteRecordsAsync_IndexAlreadyDrifted_SelfHealsBeforeRemoving));
+            DbUpMigrator.EnsureSchema(connectionString);
+            var store = new PostgresMetadataStore(
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
+                engine: null, profileProvider: null, indexedRetrieval: index);
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+            var now = DateTimeOffset.UtcNow;
+
+            var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
+            var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+            var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 2, now);
+            var keep = Record(project.Id, source.Id, batch.Id, "crm-keep",
+                new() { ["source"] = "CRM", ["email"] = "keep@example.com" }, now);
+            var toDelete = Record(project.Id, source.Id, batch.Id, "crm-delete",
+                new() { ["source"] = "CRM", ["email"] = "delete@example.com" }, now);
+            await store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [keep, toDelete], 0.90, 0.75));
+
+            // Simulate drift external to this deletion call — e.g. an earlier crash between a
+            // Lucene commit and its durable write — by removing "keep"'s doc directly, without
+            // touching the durable store. The db still considers it live; the index no longer does.
+            index.Remove(keep.Id);
+            index.Commit();
+
+            var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1));
+            await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-delete"]);
+
+            // "keep" must be back in the index — EnsureIndexCurrentAsync should have detected the
+            // drift and rebuilt from live durable records before the deletion-specific removal ran.
+            var queryKeep = engine.PrepareForStorage(
+                Record(project.Id, source.Id, batch.Id, "probe",
+                    new() { ["source"] = "CRM", ["email"] = "keep@example.com" }, now.AddMinutes(1)),
+                profile);
+            Assert.Contains(index.Retrieve(queryKeep, [], profile), c => c.Id == keep.Id);
+        }
+        finally
+        {
+            if (Directory.Exists(indexDir))
+                Directory.Delete(indexDir, recursive: true);
+        }
+    }
+
+    [SkippableFact]
+    public async Task DeleteRecordsAsync_AfterDeletionOnIndexedStore_SubsequentIngestDoesNotResurrectDeletedCandidate()
+    {
+        Skip.IfNot(shared.IsAvailable, "Docker not available — skipping Testcontainers test");
+
+        // EnsureIndexCurrentAsync compares the LIVE Lucene doc count to COUNT(*) FROM
+        // entity_records and does a full Rebuild on any mismatch. Deletion keeps the tombstoned
+        // row in entity_records (superseded_at/deleted_at is never a hard delete) while removing
+        // its live Lucene doc, so that comparison must count only LIVE records on both sides —
+        // otherwise the very next SaveIncrementalIngestAsync call sees a mismatch and rebuilds
+        // the index from every row including tombstoned ones, undoing the deletion.
+        var indexDir = Path.Combine(Path.GetTempPath(), "linkuity-pg-deletion-drift-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(indexDir);
+        try
+        {
+            using var index = new LuceneCandidateRetrieval(new LuceneCandidateRetrievalOptions { IndexDirectory = indexDir });
+            var connectionString = await shared.CreateDatabaseAsync(nameof(DeleteRecordsAsync_AfterDeletionOnIndexedStore_SubsequentIngestDoesNotResurrectDeletedCandidate));
+            DbUpMigrator.EnsureSchema(connectionString);
+            var store = new PostgresMetadataStore(
+                new PostgresMetadataStoreOptions { ConnectionString = connectionString },
+                engine: null, profileProvider: null, indexedRetrieval: index);
+            var engine = MatchingDefaults.CreateEngine();
+            var profile = DefaultMatchingProfileProvider.CreatePersonProfile();
+            var now = DateTimeOffset.UtcNow;
+
+            var project = await store.CreateProjectAsync("Customer MDM", "person", null, now);
+            var source = await store.CreateSourceAsync(project.Id, "CRM", now);
+            var batch = await store.CreateIngestBatchAsync(project.Id, source.Id, Guid.NewGuid(), 1, now);
+            var original = Record(project.Id, source.Id, batch.Id, "crm-001",
+                new() { ["source"] = "CRM", ["email"] = "deleted@example.com" }, now);
+            await store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, batch.Id, [original], 0.90, 0.75));
+
+            var queryProbe = engine.PrepareForStorage(
+                Record(project.Id, source.Id, batch.Id, "probe",
+                    new() { ["source"] = "CRM", ["email"] = "deleted@example.com" }, now.AddMinutes(1)),
+                profile);
+
+            var deletionBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 0, now.AddMinutes(1));
+            await store.DeleteRecordsAsync(project.Id, source.Id, deletionBatch.Id, ["crm-001"]);
+            Assert.Empty(index.Retrieve(queryProbe, [], profile));
+
+            // An unrelated ingest call exercises EnsureIndexCurrentAsync's count check again.
+            var unrelatedBatch = await store.CreateIngestBatchAsync(project.Id, source.Id, null, 1, now.AddMinutes(2));
+            var unrelated = Record(project.Id, source.Id, unrelatedBatch.Id, "crm-002",
+                new() { ["source"] = "CRM", ["email"] = "unrelated@example.com" }, now.AddMinutes(2));
+            await store.SaveIncrementalIngestAsync(
+                new IncrementalIngestRequest(project.Id, source.Id, unrelatedBatch.Id, [unrelated], 0.90, 0.75));
+
+            Assert.Empty(index.Retrieve(queryProbe, [], profile));
         }
         finally
         {

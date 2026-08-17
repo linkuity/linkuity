@@ -117,17 +117,14 @@ number and sit in whichever section they belong to, so existing numbers never sh
   closed their account ("deleted"). Both need to flow through to Linkuity's picture
   of the entity, ideally without the customer having to manually intervene.
 
-  **Status: Partially implemented.** Corrections now work on one path: resending a
-  record through `ingest-incremental` with the same `(project, source record id)`
+  **Status: Implemented.** Corrections work: resending a record through
+  `ingest-incremental` with the same `(project, source record id)`
   but different field values updates the stored record (superseding, not
   overwriting, the prior one) and flows through matching, clustering, and the
   golden record exactly as new evidence would — an unclustered record simply gets
   re-scored, while a clustered record detaches from its cluster (dissolving it if
   it was the only member) and the golden record recomputes from the survivors. An
-  identical resend (no field changed) is a safe no-op. This is supported on the
-  file metadata store's non-Lucene-indexed path only: attach an index and the same
-  call throws `NotSupportedException` rather than silently leaving a stale,
-  still-searchable candidate behind.
+  identical resend (no field changed) is a safe no-op.
 
   Deletion (the "customer closed their account" half of this requirement) now
   works the same way: a new `record delete` CLI command marks the targeted
@@ -138,12 +135,14 @@ number and sit in whichever section they belong to, so existing numbers never sh
   member). Every `RecordDeletedEvent` is queryable via
   `IMetadataStore.ListRecordDeletedEventsAsync`.
 
-  Both now also work on the PostgreSQL backend, on the same terms as the file
-  store: an index-attached Postgres store throws `NotSupportedException` for
-  either, so `record delete`/a correcting resend run through the CLI (which
-  always attaches a Lucene index) still fails gracefully rather than
-  succeeding — real correction/deletion is reachable only against a
-  non-indexed store, for both backends, until Lucene reindexing lands.
+  Both also work on the PostgreSQL backend, on the same terms as the file
+  store. Both now work through the CLI as well, which always attaches a
+  Lucene index for durable commands: a correction removes the superseded
+  record's Lucene document (the correcting record is indexed normally), and a
+  deletion removes the deleted record's document, so neither leaves a stale,
+  still-searchable candidate behind on either backend. This closes the F6
+  series (milestone 4).
+
   Porting corrections to Postgres required removing the mechanism that
   actually blocked every correction there: not `PostgresMutationApplier`'s
   guard (the earlier, inaccurate attribution), but a duplicate-source-record-id
@@ -156,9 +155,6 @@ number and sit in whichever section they belong to, so existing numbers never sh
   every prior mutation path (merge, dissolution) always moved a departing
   record onto some new cluster. `PostgresMutationApplier` now clears it
   explicitly as part of writing the correction/deletion tombstone.
-
-  One thing remains unimplemented: excluding a superseded or deleted record
-  from a Lucene-indexed store's retrieval, for either backend.
 
 ### Data arriving late or out of order
 

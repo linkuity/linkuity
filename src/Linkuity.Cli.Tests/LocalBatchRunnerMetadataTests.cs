@@ -31,21 +31,15 @@ public sealed class LocalBatchRunnerMetadataTests : IDisposable
 
     /// <summary>
     /// LocalBatchRunner.RunMetadataCommandAsync always attaches a Lucene index to the file store
-    /// for durable commands (see LocalBatchRunner.cs:196-204) — so `record delete` run via the
-    /// CLI always hits FileMetadataStore's index-backed NotSupportedException guard (unconditional
-    /// on "is an index attached", not on whether the record is actually indexed — see
-    /// FileMetadataStoreTests.DeleteRecordsAsync_OnIndexedStore_ThrowsNotSupportedWithoutMutatingFile),
-    /// exactly like a correcting resend does today (#78; see
-    /// LocalBatchRunnerPersistBatchTests.IngestIncremental_CorrectingResend_FailsGracefullyBecauseIndexBackedCorrectionIsUnsupported
-    /// and its doc comment for why "Records corrected: 1" — and, by the same mechanism, "Records
-    /// deleted: N" for N > 0 — is not reachable through the full CLI today). This asserts the
-    /// graceful "print message, exit 2" behavior; actual deletion is exercised directly against
-    /// FileMetadataStore (no index) in FileMetadataStoreTests
-    /// (DeleteRecordsAsync_ExistingRecord_MarksDeletedAndDetachesFromCluster,
-    /// DeleteRecordsAsync_MultipleIdsOneCall_AllTombstonedAndCounted).
+    /// for durable commands (see LocalBatchRunner.cs:196-204), so `record delete` run via the CLI
+    /// always exercises FileMetadataStore's index-backed deletion path (#66). This asserts the
+    /// full path end-to-end through the CLI: success exit code, the "Records deleted: N" message,
+    /// and that the record no longer lists as current — the index-removal behavior itself is
+    /// covered directly against FileMetadataStore in
+    /// FileMetadataStoreTests.DeleteRecordsAsync_OnIndexedStore_RemovesFromIndex.
     /// </summary>
     [Fact]
-    public async Task RecordDelete_ViaCliWithAttachedIndex_FailsGracefully()
+    public async Task RecordDelete_ViaCliWithAttachedIndex_Succeeds()
     {
         var metadataPath = Path.Combine(_root, "metadata-record-delete-guard.json");
         var inputPath = Path.Combine(_root, "record-delete-guard.csv");
@@ -84,9 +78,9 @@ public sealed class LocalBatchRunnerMetadataTests : IDisposable
         await runner.RunAsync(["batch", "create", "--metadata", metadataPath, "--project-id", project.Id.ToString(), "--source-id", source.Id.ToString(), "--record-count", "0"], CancellationToken.None);
         var deletionBatch = (await store.ListIngestBatchesAsync(project.Id, CancellationToken.None)).Last();
 
-        using var errorOutput = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(errorOutput);
+        using var standardOutput = new StringWriter();
+        var previousOutput = Console.Out;
+        Console.SetOut(standardOutput);
         int exitCode;
         try
         {
@@ -103,11 +97,12 @@ public sealed class LocalBatchRunnerMetadataTests : IDisposable
         }
         finally
         {
-            Console.SetError(previousError);
+            Console.SetOut(previousOutput);
         }
 
-        Assert.Equal(2, exitCode);
-        Assert.Contains("not yet supported on an index-backed store", errorOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Records deleted: 1", standardOutput.ToString());
+        Assert.Empty(await store.ListEntityRecordsAsync(project.Id, CancellationToken.None));
     }
 
     [Fact]
