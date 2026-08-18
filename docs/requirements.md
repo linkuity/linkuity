@@ -340,20 +340,60 @@ number and sit in whichever section they belong to, so existing numbers never sh
   "rarely" — the acceptance philosophy recorded elsewhere in the codebase is
   explicit that there is no tolerable rate of wrong merges, only zero.
 
-  **Status: Partially implemented — with an important nuance.** The scoring design
-  is built around this goal: an exact-identifier floor for auto-merges, a
-  review-floor gate that keeps weak, low-evidence pairs out of the auto-merge band
-  in the first place, and a "wrong-merge gate" tool that fails outright — no
-  tolerance, no configurable threshold — if it finds even one wrong merge against a
-  labeled dataset. What's *not* in place is a live, runtime enforcement of this
-  guarantee against a customer's actual, unlabeled data: the wrong-merge gate only
-  runs when someone explicitly points `match corpus audit` at a corpus with known-
-  correct answers, which in practice means a developer validating a profile before
-  it goes live, not something the system checks automatically while ingesting real
-  customer records it doesn't have ground truth for. In other words: the tools to
-  *verify* this guarantee holds exist and are taken seriously, but the guarantee
-  itself is not something the running system polices on its own — it's something a
-  human confirms in advance by testing.
+  **Status: Partially implemented — the protection is real, but it is a pre-flight
+  check rather than a live one.** Three things serve this requirement. Two of them
+  decide individual merges as they happen, and both live in
+  `IdentifierAwareWeightedScoringStrategy`, the scorer the built-in profiles use. The
+  third is a test run before any of it reaches live data.
+
+  **1. An exact identifier match can force a merge.** Where two records agree exactly
+  on a field the profile has declared an identifier — an email address, a web domain,
+  a product code — the pair is lifted to 0.98, clearing the 0.90 auto-merge threshold,
+  and merges. This exists so that two records genuinely sharing an email still come
+  together when their names and addresses were typed differently in each source system.
+
+  **2. But only if the rest of the record agrees as well.** This is the mechanism that
+  protects *this* requirement, and it is a restraint on the one above. The lift in (1)
+  does not happen on the strength of the identifier alone: the pair's ordinary
+  field-by-field similarity must independently reach a second bar
+  (`IdentifierFloorGate`, default 0.35) before the identifier is allowed to decide
+  anything.
+
+  The reason is that profiles routinely declare fields as "identifiers" that are not in
+  fact unique to one entity — a date of birth, a company switchboard number, a family
+  landline. Two different people can hold the same value in any of them. Without this
+  restraint, one such coincidence would fuse two records that agree on nothing else: a
+  father and son at the same address, sharing a phone number and a birthday, silently
+  becoming one customer. The rule, as the code states it, is that an identifier match
+  promotes a *plausible* pair to auto — it does not rescue an implausible one.
+
+  **3. A test that fails outright on a single wrong merge.** Point `match corpus audit`
+  at a dataset whose correct answers are already known, and it reports a hard failure
+  the moment it finds even one pair merged that should not have been. There is no
+  tolerance setting and no threshold to relax: one wrong merge fails the run.
+
+  **What is missing is any of this running against live data.** Check (3) only works
+  where the correct answers are already known, which is never true of a customer's own
+  records — not knowing them is the reason they need the product at all. So it runs
+  beforehand, as a developer validating a profile, and then stops. Checks (1) and (2)
+  do still apply to every pair during ingest, but they are rules about *plausibility*:
+  they can refuse a merge that looks unlikely, and they cannot detect that a
+  plausible-looking merge was in fact wrong.
+
+  So the guarantee is established by a human testing in advance, not policed by the
+  system while it runs. Two consequences worth stating rather than leaving to be
+  discovered. First, the quality of the protection depends on how closely the test data
+  resembles the customer's real data — a profile validated against company-registry
+  records has been told nothing about whether a father and son stay apart. Second, when
+  a wrong merge does happen there is currently no way to reverse it (F26, F50), so the
+  cost of one landing is permanent until that work is done.
+
+  One name worth disambiguating: the **review-floor gate** (`ReviewFloorGate`, default
+  0.75) sounds related but protects something else entirely. It decides whether a weak
+  pair is worth a human's attention or should simply be dropped as a non-match. The
+  floor it governs is 0.80, below the 0.90 auto threshold, so nothing on that path was
+  ever heading for an automatic merge. It guards the size of the review queue (F27),
+  not the correctness of merges.
 
 - **F9** — Must give one of three answers for any pair: same, not the same, or needs
   a person to decide.
