@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Linkuity.Core.Models;
 
 namespace Linkuity.Core.Normalization;
@@ -59,6 +60,10 @@ public static class FieldNormalizer
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
+        // Before anything type-specific, so every rule below and every value that reaches storage,
+        // blocking and comparison is in one Unicode form. See ToCanonicalForm.
+        value = ToCanonicalForm(value);
+
         return type switch
         {
             SemanticFieldType.Email => value.Trim().ToLowerInvariant(),
@@ -91,6 +96,43 @@ public static class FieldNormalizer
             _ => throw new ArgumentOutOfRangeException(
                 nameof(type), type, $"FieldNormalizer.Normalize has no case for {type}.")
         };
+    }
+
+    /// <summary>
+    /// Canonical composition (NFC). A character can be written as one code point or as a base
+    /// letter plus a combining mark; Unicode calls those canonically equivalent, but they are
+    /// different strings and nothing else in the pipeline reconciled them. Two sources that
+    /// disagree about which form they emit produced records that never matched, and because
+    /// <c>MatchKey.Normalize</c> keeps only letters and digits, the decomposed spelling quietly
+    /// lost its accent while the composed one kept it — so the loss was invisible and landed on
+    /// exactly the non-English data F12 is about.
+    ///
+    /// NFC, deliberately, and never NFKC. Canonical composition discards nothing: the two forms
+    /// are the same text by definition, so choosing one is a representation decision rather than
+    /// a judgement about meaning. Compatibility composition would additionally fold a ligature
+    /// into its letters and a circled digit into a plain one, deciding that two genuinely
+    /// different source values are one — which is what F62 forbids.
+    ///
+    /// This is not accent folding, and does not make an accented name match its unaccented
+    /// spelling. It previously did so by accident for decomposed input only; that inconsistency
+    /// is what is being removed. Whether matching *should* fold accents is a separate question,
+    /// open under F12.
+    /// </summary>
+    private static string ToCanonicalForm(string value)
+    {
+        try
+        {
+            return value.IsNormalized(NormalizationForm.FormC)
+                ? value
+                : value.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            // Invalid Unicode — an unpaired surrogate, say — cannot be normalized. Keep the raw
+            // value rather than let an ingest die on one malformed cell: the same choice this
+            // class already makes for an unparseable date or phone number.
+            return value;
+        }
     }
 
     private static string NormalizeDate(string value, DateFieldOrder order)

@@ -5,7 +5,7 @@
   },
   "clusters": [
     {
-      "name": "twin_james_stays_separate_because_phone_is_non_matching",
+      "name": "brother_james_stays_separate_because_phone_is_non_matching",
       "members": ["crm-001"],
       "expectedFields": {
         "email": "james@example.com",
@@ -14,7 +14,7 @@
       }
     },
     {
-      "name": "twin_marcus_stays_separate_because_phone_is_non_matching",
+      "name": "brother_marcus_stays_separate_because_phone_is_non_matching",
       "members": ["crm-002"],
       "expectedFields": {
         "email": "marcus@example.com",

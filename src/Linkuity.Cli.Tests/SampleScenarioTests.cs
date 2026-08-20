@@ -77,21 +77,21 @@ public sealed class SampleScenarioTests : IDisposable
     }
 
     [Fact]
-    public async Task PhoneNoise_TwinsStaySeparateWhenPhoneExcluded()
+    public async Task PhoneNoise_BrothersStaySeparateWhenPhoneExcluded()
     {
         // Production config for this sample excludes phone from matching.
         var clusters = await RunSampleAsync("people-phone-noise");
         Assert.True(SeparateClusters(clusters, "crm-001", "crm-002"),
-            "With phone excluded, the twins must stay as separate golden records.");
+            "With phone excluded, the brothers must stay as separate golden records.");
     }
 
     [Fact]
-    public async Task PhoneNoise_TwinsMergeWhenPhoneIncluded()
+    public async Task PhoneNoise_BrothersMergeWhenPhoneIncluded()
     {
-        // Contrast: give phone matching roles and the twins false-merge.
+        // Contrast: give phone matching roles and the brothers false-merge.
         var clusters = await RunSampleAsync("people-phone-noise", WritePhoneIncludedProfile());
         Assert.True(SameCluster(clusters, "crm-001", "crm-002"),
-            "With phone included, the twins should false-merge into one cluster.");
+            "With phone included, the brothers should false-merge into one cluster.");
     }
 
     [Fact]

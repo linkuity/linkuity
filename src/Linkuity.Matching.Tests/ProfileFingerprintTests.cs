@@ -1,3 +1,4 @@
+using Linkuity.Core.Normalization;
 using Linkuity.Matching.Profiles;
 
 namespace Linkuity.Matching.Tests;
@@ -70,6 +71,31 @@ public class ProfileFingerprintTests
         => Assert.NotEqual(
             ProfileFingerprint.Of(Base()),
             ProfileFingerprint.Of(Base() with { DefaultPhoneRegion = "GB" }));
+
+    /// <summary>
+    /// Date order is the other half of NormalizationSettings, and it was missing here while
+    /// phoneRegion was covered. It decides whether 01/02/1990 is January or February, so it
+    /// changes every parsed date and therefore every comparison that reads one — the exact class
+    /// of change this fingerprint exists to make visible.
+    /// </summary>
+    [Fact]
+    public void DateOrderChange_ChangesFingerprint()
+        => Assert.NotEqual(
+            ProfileFingerprint.Of(Base()),
+            ProfileFingerprint.Of(Base() with { DefaultDateOrder = DateFieldOrder.DayFirst }));
+
+    /// <summary>
+    /// The counterpart constraint, and the reason date order is appended conditionally while
+    /// phoneRegion is appended always: adding an unconditional key would rewrite the canonical
+    /// string for every profile, including the built-ins whose fingerprints are pinned below and
+    /// already stored on existing edges. Stating the default explicitly must therefore be
+    /// indistinguishable from not stating it at all.
+    /// </summary>
+    [Fact]
+    public void StatingTheDefaultDateOrder_DoesNotChangeFingerprint()
+        => Assert.Equal(
+            ProfileFingerprint.Of(Base()),
+            ProfileFingerprint.Of(Base() with { DefaultDateOrder = DateFieldOrder.MonthFirst }));
 
     // ── Changes that alter nothing must NOT change it ────────────────────────────
 

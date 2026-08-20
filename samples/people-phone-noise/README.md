@@ -4,14 +4,14 @@ A 10-row dataset demonstrating an empty `roles: []` field. Phone numbers are dec
 
 ## What this sample exercises
 
-- **Phone genuinely changes the cluster boundary.** The James/Marcus pair (`crm-001`, `crm-002`) are twins sharing last name, household phone, and address, but they differ on `date_of_birth` and every other field. With phone's `roles` empty (`[]`), no strong identifier is shared between the pair — the weighted field-similarity score stays below the auto-match cut (**0.90**) and they stay separate. Give `phone` `["Matchable", "Blocking", "Identifier"]` roles instead and the shared phone becomes a strong identifier that **floors the pair to a match**, false-merging the twins into one golden record. The `roles` declaration is doing real work on this row pair.
+- **Phone genuinely changes the cluster boundary.** The James/Marcus pair (`crm-001`, `crm-002`) are brothers sharing last name, household phone, and address, but they differ on `date_of_birth` and every other field. With phone's `roles` empty (`[]`), no strong identifier is shared between the pair — the weighted field-similarity score stays below the auto-match cut (**0.90**) and they stay separate. Give `phone` `["Matchable", "Blocking", "Identifier"]` roles instead and the shared phone becomes a strong identifier that **floors the pair to a match**, false-merging the brothers into one golden record. The `roles` declaration is doing real work on this row pair.
 - **Phone is still normalized.** Raw `(212) 555-9999` becomes `+12125559999` in the golden record output, even though it doesn't participate in matching.
 - **Phone is still exported to Neo4j.** `phones.csv` and `has-phone.csv` populate in the Neo4j ZIP — the per-entity phone relationship is preserved.
 - **Other clusters form on the remaining signal.** Name + email + address + DOB are sufficient to merge the three legitimate duplicate pairs (Emma, Frank, Iris) regardless of whether their phones agree.
 
 Note: in `matches.csv`, a pair sharing an exact strong-identifier field (e.g. `date_of_birth` for Emma/Frank/Iris) scores in the auto-match band at the identifier floor (~0.98), not a "perfect" 1.0.
 
-The contrast is pinned by `SampleScenarioTests.PhoneNoise_TwinsStaySeparateWhenPhoneExcluded` and `SampleScenarioTests.PhoneNoise_TwinsMergeWhenPhoneIncluded` in `src/Linkuity.Cli.Tests` — the tests load this sample (the second with `phone` given matching roles instead of `[]`) and assert both halves of the boundary flip.
+The contrast is pinned by `SampleScenarioTests.PhoneNoise_BrothersStaySeparateWhenPhoneExcluded` and `SampleScenarioTests.PhoneNoise_BrothersMergeWhenPhoneIncluded` in `src/Linkuity.Cli.Tests` — the tests load this sample (the second with `phone` given matching roles instead of `[]`) and assert both halves of the boundary flip.
 
 ## Files
 
@@ -26,8 +26,8 @@ The sample produces 7 golden records:
 
 | Cluster | Members | Phone scenario | What it proves |
 |---|---|---|---|
-| James Smith | `crm-001` | twins — same household phone (`+12125559999`) as Marcus, but different `date_of_birth` and no other shared identifier | flag prevents false-merge: with phone excluded, no shared identifier floors the pair and the weighted score stays below the 0.90 auto-match cut → separate; with phone included, the shared phone identifier floors the pair to a match → false-merge |
-| Marcus Smith | `crm-002` | twins — same household phone as James | same boundary flip, viewed from Marcus's side |
+| James Smith | `crm-001` | brothers — same household phone (`+12125559999`) as Marcus, but different `date_of_birth` and no other shared identifier | flag prevents false-merge: with phone excluded, no shared identifier floors the pair and the weighted score stays below the 0.90 auto-match cut → separate; with phone included, the shared phone identifier floors the pair to a match → false-merge |
+| Marcus Smith | `crm-002` | brothers — same household phone as James | same boundary flip, viewed from Marcus's side |
 | Emma Edwards | `crm-010`, `mkt-011` | phones disagree wildly (`0300` vs `9999`) | the pair shares an exact `date_of_birth` — that identifier alone floors the pair to a match, so phone disagreement is irrelevant |
 | Frank Foster | `crm-020`, `mkt-021` | phones agree (`0400`) but don't participate | the pair shares an exact `date_of_birth` identifier — clean cluster regardless of phone |
 | Iris Ito | `crm-030`, `mkt-031` | phones differ by 1 digit (`0700` vs `0701`) | shared `date_of_birth` identifier floors the match; the one-digit phone variation is moot since phone doesn't participate |

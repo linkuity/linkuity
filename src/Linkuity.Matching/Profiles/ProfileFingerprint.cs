@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Linkuity.Core.Normalization;
 
 namespace Linkuity.Matching.Profiles;
 
@@ -53,6 +54,20 @@ public static class ProfileFingerprint
         canonical.Append("maxBlockSize=")
             .Append(profile.MaxBlockSize?.ToString(inv) ?? "none").Append('\n');
         canonical.Append("phoneRegion=").Append(profile.DefaultPhoneRegion).Append('\n');
+
+        // The other half of NormalizationSettings, and it was missing while phoneRegion was
+        // covered. Date order decides whether 01/02/1990 is January or February, so it changes
+        // every parsed date and every comparison that reads one — precisely the kind of change
+        // this fingerprint exists to make visible.
+        //
+        // Conditional, unlike phoneRegion directly above, for the reason spelled out in the block
+        // below: an unconditional key would rewrite the canonical string for every profile that
+        // never set this, including the two built-ins whose fingerprints are pinned by
+        // ProfileFingerprintTests and already stored as provenance on existing edges. Month-first
+        // is the default, so stating it and omitting it must fingerprint alike; only a profile
+        // that genuinely reads dates the other way round earns a key.
+        if (profile.DefaultDateOrder != DateFieldOrder.MonthFirst)
+            canonical.Append("dateOrder=").Append(profile.DefaultDateOrder).Append('\n');
 
         // Every key below is appended ONLY when the value is non-null/non-empty. A profile that
         // declares none of these five stage-1a settings must produce the EXACT byte sequence it
