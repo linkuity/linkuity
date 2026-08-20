@@ -51,15 +51,13 @@ showcases/company-resolution/acquire/cache/
 .DS_Store
 Thumbs.db
 
-# Internal / non-public working files (kept local, excluded from the public repo)
+# Agent tooling caches and scratch state. Not documents -- the internal DOCUMENTS
+# (docs/superpowers, docs/roadmap, docs/marketing, docs/architecture-decisions,
+# knowledge/) are tracked here and excluded at export instead. See internal/export/.
 .claude/
 .superpowers/
 .agents/
 .github/copilot-instructions.md
-docs/superpowers/
-docs/roadmap/
-docs/marketing/
-docs/architecture-decisions/
 
 # Python (tools/corpus corpus builders)
 __pycache__/
